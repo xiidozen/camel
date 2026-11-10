@@ -171,6 +171,15 @@ tests and synchronous callers.
 `CamelError::with_subtype("<full Java class name>")`; test it with `is_subtype("SimpleName")`.
 Keep the Java message text.
 
+### Error types
+
+Java catches errors by class (`doCatch(IOException.class)`, `onException(...)`). Rust uses
+`camel_api::error::ErrorType`: `Any` (Java `Exception`/`Throwable`), `Kind(ErrorKind)` (with the
+kind hierarchy), or `Class(name)` for other Java classes (component subtypes, Rust I/O errors for
+`java.io.IOException`). `ErrorType::from_java_name` maps the Java names used by YAML/XML routes.
+The caught error is stored in the `CamelExceptionCaught` property as `Value::object_display`
+of the `CamelError` (`camel_core_processor::try_catch::exception_caught` reads it back).
+
 ### Async runtime
 
 `camel-api` has no runtime dependency (its `block_on` is a minimal executor for tests). The

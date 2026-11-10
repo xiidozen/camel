@@ -7,3 +7,4 @@ mod support;
 mod choice_no_otherwise_test;
 mod filter_test;
 mod pipeline_test;
+mod try_processor_test;

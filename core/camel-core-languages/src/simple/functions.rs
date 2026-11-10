@@ -330,6 +330,16 @@ fn do_create(function: &str, index: usize) -> ParseResult<SharedExpression> {
     ))
 }
 
+/// The exception of the exchange, or the caught one (Java
+/// `ExpressionBuilder.exchangeExceptionExpression`: the `CamelExceptionCaught` property).
+fn exchange_exception(e: &Exchange) -> Option<CamelError> {
+    e.exception().cloned().or_else(|| {
+        e.property(camel_api::exchange_constants::EXCEPTION_CAUGHT)
+            .and_then(|v| v.downcast_ref::<CamelError>())
+            .cloned()
+    })
+}
+
 /// The functions without arguments (Java `DirectFunctionFactory`).
 fn direct_function(function: &str) -> Option<SharedExpression> {
     let e: SharedExpression = match function {
@@ -344,17 +354,20 @@ fn direct_function(function: &str) -> Option<SharedExpression> {
         }),
         "exchangeId" => named_expression("exchangeId", |e| Ok(Value::from(e.exchange_id()))),
         "exception" => named_expression("exception", |e| {
-            Ok(e.exception()
+            Ok(exchange_exception(e)
+                .as_ref()
                 .map(|x| Value::from(format!("{}: {x}", camel_api::error::error_type_name(x))))
                 .unwrap_or_default())
         }),
         "exception.message" => named_expression("exception.message", |e| {
-            Ok(e.exception()
+            Ok(exchange_exception(e)
+                .as_ref()
                 .map(|x| Value::from(x.to_string()))
                 .unwrap_or_default())
         }),
         "exception.stacktrace" => named_expression("exception.stacktrace", |e| {
-            Ok(e.exception()
+            Ok(exchange_exception(e)
+                .as_ref()
                 .map(|x| {
                     let mut lines = vec![format!("{}: {x}", camel_api::error::error_type_name(x))];
                     let mut cause = std::error::Error::source(x);

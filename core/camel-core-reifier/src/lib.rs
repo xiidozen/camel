@@ -25,6 +25,7 @@ use camel_core_processor::transform::{
     RemoveHeaderProcessor, RemoveHeadersProcessor, SetBodyProcessor, SetHeaderProcessor,
     SetPropertyProcessor, SetVariableProcessor, StopProcessor, ThrowExceptionProcessor,
 };
+use camel_core_processor::try_catch::{CatchProcessor, FinallyProcessor, TryProcessor};
 use camel_util::value::Value;
 use std::sync::Arc;
 
@@ -124,6 +125,14 @@ impl<'a> RouteReifier<'a> {
         })
     }
 
+    fn step_list(&self, steps: &[ProcessorDefinition]) -> CamelResult<Vec<SharedProcessor>> {
+        let mut processors = Vec::new();
+        for s in steps.iter().filter(|s| !s.disabled) {
+            processors.push(self.step(s)?);
+        }
+        Ok(processors)
+    }
+
     fn expr(&self, def: &ExpressionDefinition) -> CamelResult<SharedExpression> {
         reify_expression(self.context, def)
     }
@@ -216,6 +225,34 @@ impl<'a> RouteReifier<'a> {
                     })?
             }
             Eip::ThrowException(e) => Arc::new(ThrowExceptionProcessor::new(e.clone())),
+            Eip::DoTry {
+                steps,
+                catches,
+                finally,
+            } => {
+                let try_processor: SharedProcessor =
+                    Arc::new(Pipeline::new(self.step_list(steps)?));
+                let mut clauses: Vec<SharedProcessor> = Vec::new();
+                for c in catches {
+                    let on_when = match &c.on_when {
+                        Some(p) => Some(reify_predicate(self.context, p)?),
+                        None => None,
+                    };
+                    let body: SharedProcessor = Arc::new(Pipeline::new(self.step_list(&c.steps)?));
+                    clauses.push(Arc::new(CatchProcessor::new(
+                        c.exceptions.clone(),
+                        body,
+                        on_when,
+                    )));
+                }
+                let finally = match finally {
+                    Some(f) => Some(Arc::new(FinallyProcessor::new(Arc::new(Pipeline::new(
+                        self.step_list(f)?,
+                    )))) as SharedProcessor),
+                    None => None,
+                };
+                Arc::new(TryProcessor::new(try_processor, clauses, finally))
+            }
         };
         Ok(p)
     }

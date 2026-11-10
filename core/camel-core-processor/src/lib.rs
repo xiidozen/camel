@@ -18,6 +18,7 @@ pub mod log_processor;
 pub mod pipeline;
 pub mod send;
 pub mod transform;
+pub mod try_catch;
 
 use camel_api::exchange::Exchange;
 use camel_api::processor::Processor;

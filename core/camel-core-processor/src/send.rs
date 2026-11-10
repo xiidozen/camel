@@ -77,6 +77,11 @@ impl Processor for SendProcessor {
     fn process<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>> {
         Box::pin(async move {
             let producer = self.producer().await?;
+            // Java SendProcessor: the last endpoint sent to
+            exchange.set_property(
+                camel_api::exchange_constants::TO_ENDPOINT,
+                self.endpoint.endpoint_uri().to_string(),
+            );
             let original = exchange.pattern();
             if let Some(p) = self.pattern {
                 exchange.set_pattern(p);

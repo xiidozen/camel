@@ -1048,3 +1048,94 @@ mod tests {
         assert_eq!(ErrorKind::RuntimeCamel, s.kind());
     }
 }
+
+/// The type of the errors to handle (by `doCatch`, `onException`, ...), the Rust counterpart of
+/// a Java exception class.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ErrorType {
+    /// Any error (Java `Exception` or `Throwable`).
+    Any,
+    /// A Camel error of the kind or a subkind (Java `instanceof`).
+    Kind(ErrorKind),
+    /// Another Java exception class, by name: matches a component error with the subtype
+    /// (simple or full class name), or a Rust I/O error for `java.io.IOException`.
+    Class(String),
+}
+
+impl ErrorType {
+    /// The error type of the Java class name, such as `java.lang.Exception` (any error),
+    /// `IllegalArgumentException` (a Camel kind) or `java.io.IOException`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use camel_api::error::{CamelError, ErrorKind, ErrorType};
+    /// let t = ErrorType::from_java_name("java.lang.IllegalArgumentException");
+    /// assert_eq!(ErrorType::Kind(ErrorKind::IllegalArgument), t);
+    /// assert!(t.matches(&CamelError::illegal_argument("x")));
+    /// assert!(ErrorType::from_java_name("Exception").matches(&CamelError::runtime("x")));
+    /// assert!(ErrorType::from_java_name("java.io.IOException").matches(&std::io::Error::other("x")));
+    /// ```
+    pub fn from_java_name(name: &str) -> ErrorType {
+        let simple = name.rsplit('.').next().unwrap_or(name);
+        match simple {
+            "Exception" | "Throwable" => ErrorType::Any,
+            _ => match ErrorKind::from_java_name(simple) {
+                Some(k) => ErrorType::Kind(k),
+                None => ErrorType::Class(name.to_string()),
+            },
+        }
+    }
+
+    /// Whether the error (itself, not its causes) is of this type.
+    pub fn matches(&self, error: &(dyn Error + 'static)) -> bool {
+        match self {
+            ErrorType::Any => true,
+            ErrorType::Kind(k) => error.downcast_ref::<CamelError>().is_some_and(|c| c.is(*k)),
+            ErrorType::Class(name) => {
+                let simple = name.rsplit('.').next().unwrap_or(name);
+                if let Some(c) = error.downcast_ref::<CamelError>() {
+                    return c.is_subtype(name)
+                        || c.is_subtype(simple)
+                        || c.detail() == Some(name.as_str())
+                        || (simple == "IOException" && c.is(ErrorKind::Io));
+                }
+                simple == "IOException" && error.downcast_ref::<std::io::Error>().is_some()
+            }
+        }
+    }
+
+    /// The error of the chain (the error and its causes, from the root cause up, as Java
+    /// `ObjectHelper.createExceptionIterable`) matching one of the types, if any.
+    pub fn find<'a>(
+        types: &[ErrorType],
+        error: &'a (dyn Error + 'static),
+    ) -> Option<&'a (dyn Error + 'static)> {
+        camel_util::object_helper::create_exception_iterable(error)
+            .into_iter()
+            .find(|e| types.iter().any(|t| t.matches(*e)))
+    }
+}
+
+impl fmt::Display for ErrorType {
+    /// The Java class name.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ErrorType::Any => f.write_str("java.lang.Exception"),
+            ErrorType::Kind(k) => write!(f, "org.apache.camel.{}", k.java_name()),
+            ErrorType::Class(c) => f.write_str(c),
+        }
+    }
+}
+
+impl From<ErrorKind> for ErrorType {
+    fn from(k: ErrorKind) -> Self {
+        ErrorType::Kind(k)
+    }
+}
+
+impl From<&str> for ErrorType {
+    fn from(name: &str) -> Self {
+        ErrorType::from_java_name(name)
+    }
+}

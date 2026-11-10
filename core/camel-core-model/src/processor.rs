@@ -3,7 +3,7 @@
 
 use crate::expression::ExpressionDefinition;
 use camel_api::enums::{ExchangePattern, LoggingLevel};
-use camel_api::error::CamelError;
+use camel_api::error::{CamelError, ErrorType};
 use camel_api::processor::SharedProcessor;
 use camel_util::uri_support::sanitize_uri;
 use std::fmt;
@@ -42,6 +42,18 @@ impl ProcessorDefinition {
     pub fn outputs(&self) -> Vec<&ProcessorDefinition> {
         match &self.eip {
             Eip::Filter { steps, .. } | Eip::Pipeline { steps } => steps.iter().collect(),
+            Eip::DoTry {
+                steps,
+                catches,
+                finally,
+            } => {
+                let mut v: Vec<&ProcessorDefinition> = steps.iter().collect();
+                v.extend(catches.iter().flat_map(|c| c.steps.iter()));
+                if let Some(f) = finally {
+                    v.extend(f.iter());
+                }
+                v
+            }
             Eip::Choice { whens, otherwise } => {
                 let mut v: Vec<&ProcessorDefinition> =
                     whens.iter().flat_map(|w| w.steps.iter()).collect();
@@ -80,6 +92,24 @@ pub struct WhenDefinition {
     pub predicate: ExpressionDefinition,
     /// The steps when the predicate matches.
     pub steps: Vec<ProcessorDefinition>,
+}
+
+/// A `doCatch` clause of a `doTry`.
+#[derive(Clone, Debug)]
+pub struct CatchDefinition {
+    /// The types of the errors to catch.
+    pub exceptions: Vec<ErrorType>,
+    /// An extra predicate the exchange must match.
+    pub on_when: Option<ExpressionDefinition>,
+    /// The steps handling the error.
+    pub steps: Vec<ProcessorDefinition>,
+}
+
+impl fmt::Display for CatchDefinition {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let names: Vec<String> = self.exceptions.iter().map(|e| e.to_string()).collect();
+        write!(f, "DoCatch[{} -> {}]", names.join(","), Steps(&self.steps))
+    }
 }
 
 /// What a step does: the Enterprise Integration Patterns of the model.
@@ -162,6 +192,15 @@ pub enum Eip {
     Process(ProcessRef),
     /// Fails the exchange with an error (`throwException`).
     ThrowException(CamelError),
+    /// `doTry` with its `doCatch` and `doFinally` clauses.
+    DoTry {
+        /// The steps of the try block.
+        steps: Vec<ProcessorDefinition>,
+        /// The catch clauses.
+        catches: Vec<CatchDefinition>,
+        /// The steps of the finally clause.
+        finally: Option<Vec<ProcessorDefinition>>,
+    },
 }
 
 impl Eip {
@@ -183,6 +222,7 @@ impl Eip {
             Eip::Stop => "stop",
             Eip::Process(_) => "process",
             Eip::ThrowException(_) => "throwException",
+            Eip::DoTry { .. } => "doTry",
         }
     }
 }
@@ -251,6 +291,19 @@ impl fmt::Display for ProcessorDefinition {
                 "ThrowException[{}]",
                 camel_api::error::error_type_name(e)
             ),
+            Eip::DoTry {
+                steps,
+                catches,
+                finally,
+            } => {
+                // Java: the clauses are outputs of the try definition
+                let mut parts: Vec<String> = steps.iter().map(|s| s.to_string()).collect();
+                parts.extend(catches.iter().map(|c| c.to_string()));
+                if let Some(fs) = finally {
+                    parts.push(format!("DoFinally[{}]", Steps(fs)));
+                }
+                write!(f, "DoTry[[{}]]", parts.join(", "))
+            }
         }
     }
 }

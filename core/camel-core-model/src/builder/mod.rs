@@ -37,10 +37,10 @@
 //! ```
 
 use crate::expression::ExpressionDefinition;
-use crate::processor::{Eip, ProcessRef, ProcessorDefinition, WhenDefinition};
+use crate::processor::{CatchDefinition, Eip, ProcessRef, ProcessorDefinition, WhenDefinition};
 use crate::route::RouteDefinition;
 use camel_api::enums::{ExchangePattern, LoggingLevel};
-use camel_api::error::{CamelError, CamelResult};
+use camel_api::error::{CamelError, CamelResult, ErrorType};
 use camel_api::exchange::Exchange;
 use camel_api::processor::{processor_fn, SharedProcessor};
 use std::sync::Arc;
@@ -152,6 +152,37 @@ pub trait Dsl: Sized {
     {
         let steps = steps(StepsDsl::default()).steps;
         self.eip(Eip::Pipeline { steps })
+    }
+
+    /// `doTry`: the steps of the try block, with the `do_catch` and `do_finally` clauses
+    /// added on the [`TryDsl`] (Java `.doTry()...doCatch(..)...doFinally()...end()`).
+    ///
+    /// ```
+    /// use camel_api::error::ErrorKind;
+    /// use camel_core_model::builder::*;
+    ///
+    /// let route = from("direct:start")
+    ///     .do_try(|t| {
+    ///         t.to("direct:risky")
+    ///             .do_catch(ErrorKind::IllegalArgument, |c| c.to("mock:catch"))
+    ///             .do_finally(|f| f.to("mock:finally"))
+    ///     })
+    ///     .build();
+    /// assert_eq!(
+    ///     "Route[From[direct:start] -> [DoTry[[to[direct:risky], DoCatch[org.apache.camel.IllegalArgumentException -> [to[mock:catch]]], DoFinally[[to[mock:finally]]]]]]]",
+    ///     route.to_string()
+    /// );
+    /// ```
+    fn do_try<F>(self, block: F) -> Self
+    where
+        F: FnOnce(TryDsl) -> TryDsl,
+    {
+        let t = block(TryDsl::default());
+        self.eip(Eip::DoTry {
+            steps: t.steps,
+            catches: t.catches,
+            finally: t.finally,
+        })
     }
 
     /// Sets the message body.
@@ -270,6 +301,106 @@ impl StepsDsl {
 }
 
 impl Dsl for StepsDsl {
+    fn push(mut self, step: ProcessorDefinition) -> Self {
+        self.steps.push(step);
+        self
+    }
+
+    fn last_mut(&mut self) -> Option<&mut ProcessorDefinition> {
+        self.steps.last_mut()
+    }
+}
+
+/// The error types of a `doCatch`: one or more [`ErrorType`]s.
+pub trait IntoErrorTypes {
+    /// The error types.
+    fn into_error_types(self) -> Vec<ErrorType>;
+}
+
+impl IntoErrorTypes for ErrorType {
+    fn into_error_types(self) -> Vec<ErrorType> {
+        vec![self]
+    }
+}
+
+impl IntoErrorTypes for camel_api::error::ErrorKind {
+    fn into_error_types(self) -> Vec<ErrorType> {
+        vec![ErrorType::Kind(self)]
+    }
+}
+
+impl IntoErrorTypes for &str {
+    fn into_error_types(self) -> Vec<ErrorType> {
+        vec![ErrorType::from_java_name(self)]
+    }
+}
+
+impl<T: Into<ErrorType> + Clone, const N: usize> IntoErrorTypes for [T; N] {
+    fn into_error_types(self) -> Vec<ErrorType> {
+        self.into_iter().map(Into::into).collect()
+    }
+}
+
+impl<T: Into<ErrorType>> IntoErrorTypes for Vec<T> {
+    fn into_error_types(self) -> Vec<ErrorType> {
+        self.into_iter().map(Into::into).collect()
+    }
+}
+
+/// The try block of a `doTry`: its steps, then the catch and finally clauses.
+#[derive(Default)]
+pub struct TryDsl {
+    steps: Vec<ProcessorDefinition>,
+    catches: Vec<CatchDefinition>,
+    finally: Option<Vec<ProcessorDefinition>>,
+}
+
+impl TryDsl {
+    /// Adds a `doCatch` clause for the error types.
+    pub fn do_catch<F>(mut self, exceptions: impl IntoErrorTypes, steps: F) -> Self
+    where
+        F: FnOnce(StepsDsl) -> StepsDsl,
+    {
+        let exceptions = exceptions.into_error_types();
+        self.catches.push(CatchDefinition {
+            exceptions,
+            on_when: None,
+            steps: steps(StepsDsl::default()).steps,
+        });
+        self
+    }
+
+    /// Adds a `doCatch` clause for the error types when the predicate also matches (Java
+    /// `.doCatch(..).onWhen(..)`).
+    pub fn do_catch_when<F>(
+        mut self,
+        exceptions: impl IntoErrorTypes,
+        on_when: impl Into<ExpressionDefinition>,
+        steps: F,
+    ) -> Self
+    where
+        F: FnOnce(StepsDsl) -> StepsDsl,
+    {
+        let exceptions = exceptions.into_error_types();
+        self.catches.push(CatchDefinition {
+            exceptions,
+            on_when: Some(on_when.into()),
+            steps: steps(StepsDsl::default()).steps,
+        });
+        self
+    }
+
+    /// Sets the `doFinally` clause.
+    pub fn do_finally<F>(mut self, steps: F) -> Self
+    where
+        F: FnOnce(StepsDsl) -> StepsDsl,
+    {
+        self.finally = Some(steps(StepsDsl::default()).steps);
+        self
+    }
+}
+
+impl Dsl for TryDsl {
     fn push(mut self, step: ProcessorDefinition) -> Self {
         self.steps.push(step);
         self
