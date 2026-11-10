@@ -52,6 +52,7 @@ macro_rules! kinds {
                     ErrorKind::Runtime => "java.lang.RuntimeException".to_string(),
                     ErrorKind::IllegalArgument => "java.lang.IllegalArgumentException".to_string(),
                     ErrorKind::IllegalState => "java.lang.IllegalStateException".to_string(),
+                    ErrorKind::NumberFormat => "java.lang.NumberFormatException".to_string(),
                     ErrorKind::UnsupportedOperation => "java.lang.UnsupportedOperationException".to_string(),
                     ErrorKind::Io => "java.io.IOException".to_string(),
                     ErrorKind::RejectedExecution => "java.util.concurrent.RejectedExecutionException".to_string(),
@@ -88,6 +89,8 @@ kinds! {
     IllegalArgument => Some(K::Runtime),
     /// `java.lang.IllegalStateException`.
     IllegalState => Some(K::Runtime),
+    /// `java.lang.NumberFormatException`: a text that is not a number.
+    NumberFormat => Some(K::IllegalArgument),
     /// `java.lang.UnsupportedOperationException`.
     UnsupportedOperation => Some(K::Runtime),
     /// `java.io.IOException`.

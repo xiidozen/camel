@@ -14,6 +14,7 @@
 
 pub mod aggregate;
 pub mod choice;
+pub mod dynamic;
 pub mod errorhandler;
 pub mod filter;
 pub mod log_processor;

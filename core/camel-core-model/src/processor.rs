@@ -237,6 +237,44 @@ pub enum Eip {
     },
     /// Delays the exchange by the millis of the expression (`delay`).
     Delay(ExpressionDefinition),
+    /// Sends to the endpoint of a uri in the simple language (`toD`).
+    ToD {
+        /// The uri (a simple expression).
+        uri: String,
+        /// The exchange pattern to send with.
+        pattern: Option<ExchangePattern>,
+        /// Whether an invalid endpoint uri is ignored.
+        ignore_invalid_endpoint: bool,
+    },
+    /// Sends a copy to each endpoint of the expression (`recipientList`).
+    RecipientList {
+        /// The endpoint uris.
+        expression: ExpressionDefinition,
+        /// The delimiter of the uris in a text (default `,`).
+        delimiter: Option<String>,
+        /// The aggregation of the replies (default: the last reply).
+        strategy: Option<AggregationRef>,
+        /// Whether to stop on the first failure.
+        stop_on_exception: bool,
+        /// Whether invalid endpoint uris are ignored.
+        ignore_invalid_endpoints: bool,
+    },
+    /// Sends a copy to the endpoint in the background (`wireTap`).
+    WireTap {
+        /// The uri (a simple expression).
+        uri: String,
+        /// Whether an invalid endpoint uri is ignored.
+        ignore_invalid_endpoint: bool,
+    },
+    /// Sets the exchange pattern (`setExchangePattern`).
+    SetExchangePattern(ExchangePattern),
+    /// Converts the body to the Java type (`convertBodyTo`).
+    ConvertBodyTo {
+        /// The Java type name, such as `String` or `java.lang.Integer`.
+        type_name: String,
+        /// Whether a body that cannot be converted fails (default `true`).
+        mandatory: bool,
+    },
     /// `doTry` with its `doCatch` and `doFinally` clauses.
     DoTry {
         /// The steps of the try block.
@@ -271,6 +309,11 @@ impl Eip {
             Eip::Split { .. } => "split",
             Eip::Multicast { .. } => "multicast",
             Eip::Delay(_) => "delay",
+            Eip::ToD { .. } => "toD",
+            Eip::RecipientList { .. } => "recipientList",
+            Eip::WireTap { .. } => "wireTap",
+            Eip::SetExchangePattern(_) => "setExchangePattern",
+            Eip::ConvertBodyTo { .. } => "convertBodyTo",
         }
     }
 }
@@ -344,6 +387,11 @@ impl fmt::Display for ProcessorDefinition {
             } => write!(f, "Split[{expression} -> {}]", Steps(steps)),
             Eip::Multicast { steps, .. } => write!(f, "Multicast[{}]", Steps(steps)),
             Eip::Delay(e) => write!(f, "Delay[{e} -> []]"),
+            Eip::ToD { uri, .. } => write!(f, "DynamicTo[toD[{uri}]]"),
+            Eip::RecipientList { expression, .. } => write!(f, "RecipientList[{expression}]"),
+            Eip::WireTap { uri, .. } => write!(f, "WireTap[{uri}]"),
+            Eip::SetExchangePattern(p) => write!(f, "setExchangePattern[pattern: {p}]"),
+            Eip::ConvertBodyTo { type_name, .. } => write!(f, "ConvertBodyTo[{type_name}]"),
             Eip::DoTry {
                 steps,
                 catches,

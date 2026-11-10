@@ -21,6 +21,10 @@ use camel_core_model::expression::ExpressionDefinition;
 use camel_core_model::processor::{AggregationRef, Eip, ProcessRef, ProcessorDefinition};
 use camel_core_model::route::RouteDefinition;
 use camel_core_processor::choice::ChoiceProcessor;
+use camel_core_processor::dynamic::{
+    ConvertBodyProcessor, RecipientListProcessor, SendDynamicProcessor,
+    SetExchangePatternProcessor, WireTapProcessor,
+};
 use camel_core_processor::errorhandler::exception_policy::ExceptionPolicy;
 use camel_core_processor::errorhandler::redelivery_policy::RedeliveryPolicyOverrides;
 use camel_core_processor::errorhandler::{ErrorHandlerConfig, RedeliveryErrorHandler};
@@ -297,6 +301,49 @@ impl<'a> RouteReifier<'a> {
                 ))
             }
             Eip::Delay(e) => Arc::new(DelayProcessor::new(self.expr(e)?)),
+            Eip::ToD {
+                uri,
+                pattern,
+                ignore_invalid_endpoint,
+            } => {
+                let e = self.expr(&ExpressionDefinition::language("simple", uri))?;
+                Arc::new(SendDynamicProcessor::new(
+                    e,
+                    *pattern,
+                    *ignore_invalid_endpoint,
+                ))
+            }
+            Eip::RecipientList {
+                expression,
+                delimiter,
+                strategy,
+                stop_on_exception,
+                ignore_invalid_endpoints,
+            } => {
+                let strategy = resolve_aggregation(self.context, strategy)?;
+                let mut p = RecipientListProcessor::new(
+                    self.expr(expression)?,
+                    strategy,
+                    *stop_on_exception,
+                    *ignore_invalid_endpoints,
+                );
+                if let Some(d) = delimiter {
+                    p = p.with_delimiter(d);
+                }
+                Arc::new(p)
+            }
+            Eip::WireTap {
+                uri,
+                ignore_invalid_endpoint,
+            } => Arc::new(WireTapProcessor::new(
+                self.expr(&ExpressionDefinition::language("simple", uri))?,
+                *ignore_invalid_endpoint,
+            )),
+            Eip::SetExchangePattern(p) => Arc::new(SetExchangePatternProcessor(*p)),
+            Eip::ConvertBodyTo {
+                type_name,
+                mandatory,
+            } => Arc::new(ConvertBodyProcessor::new(type_name, *mandatory)?),
             Eip::DoTry {
                 steps,
                 catches,

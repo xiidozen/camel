@@ -6,7 +6,7 @@
 //! conversions of Camel's core type converters for text, numbers, booleans and bytes; the type
 //! converter registry of the engine adds custom conversions on top of these.
 
-use crate::error::{CamelError, CamelResult};
+use crate::error::{CamelError, CamelResult, ErrorKind};
 use camel_util::value::{java_double_to_string, Value};
 
 /// A Rust type that can be converted from a [`Value`].
@@ -104,7 +104,11 @@ macro_rules! from_value_int {
                     Value::Float(f) if f.fract() == 0.0 && f.is_finite() => <$t>::try_from(*f as i64).map(Some).map_err(|_| err()),
                     Value::Bool(_) => Err(err()),
                     v => match text_of(v) {
-                        Some(s) => s.trim().parse::<$t>().map(Some).map_err(|_| err()),
+                        // Java: the converter exists, the parse fails (NumberFormatException)
+                        Some(s) => s.trim().parse::<$t>().map(Some).map_err(|_| {
+                            let cause = CamelError::new(ErrorKind::NumberFormat, format!("For input string: \"{s}\""));
+                            CamelError::type_conversion(Some(value.type_name()), $name, cause)
+                        }),
                         None => Err(err()),
                     },
                 }
@@ -234,6 +238,12 @@ mod tests {
         assert!(convert_to::<camel_util::value::ValueMap>(&Value::from(1)).is_err());
         assert_eq!(None, convert_to::<Value>(&Value::Null).unwrap());
         let e = convert_to::<i32>(&Value::from("abc")).unwrap_err();
-        assert_eq!("No type converter available to convert from type: String to the required type: Integer", e.to_string());
+        assert_eq!(
+            "Error during type conversion from type: String to the required type: Integer due to java.lang.NumberFormatException: For input string: \"abc\"",
+            e.to_string()
+        );
+        assert!(e.is(ErrorKind::TypeConversion));
+        let e = convert_to::<i32>(&Value::from(true)).unwrap_err();
+        assert!(e.is(ErrorKind::NoTypeConversionAvailable));
     }
 }

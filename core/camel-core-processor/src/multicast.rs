@@ -18,7 +18,7 @@ use camel_util::value::Value;
 
 /// How the results of the copies are aggregated.
 #[derive(Clone)]
-enum Aggregation {
+pub(crate) enum Aggregation {
     /// A strategy (Java multicast without strategy: use the latest result).
     Strategy(Option<SharedAggregationStrategy>),
     /// Keep the original exchange, propagating the errors of the copies (Java
@@ -28,7 +28,7 @@ enum Aggregation {
 
 /// Processes the copies in sequence (Java `MulticastProcessor` sequential processing and
 /// `doDone`).
-async fn process_sequential(
+pub(crate) async fn process_sequential(
     original: &mut Exchange,
     pairs: Vec<(SharedProcessor, Exchange)>,
     aggregation: &Aggregation,

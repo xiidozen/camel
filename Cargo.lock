@@ -110,6 +110,7 @@ name = "camel-core-processor"
 version = "4.23.0"
 dependencies = [
  "camel-api",
+ "camel-support",
  "camel-util",
  "log",
  "tokio",

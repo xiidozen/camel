@@ -62,3 +62,11 @@ pub fn exchange() -> Exchange {
     let context = camel_core::default_context();
     Exchange::new(context.as_shared())
 }
+
+/// The cause of the error as a Camel error (Java `e.getCause()`), panicking if there is none.
+#[allow(dead_code)]
+pub fn cause_of(e: &CamelError) -> &CamelError {
+    e.cause()
+        .and_then(|c| c.downcast_ref::<CamelError>())
+        .unwrap_or_else(|| panic!("no Camel error cause: {e:?}"))
+}

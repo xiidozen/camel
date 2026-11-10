@@ -222,6 +222,82 @@ pub trait Dsl: Sized {
         })
     }
 
+    /// Sends to the endpoint of the uri, a simple expression such as `mock:${header.name}`
+    /// (Java `.toD(..)`).
+    fn to_d(self, uri: &str) -> Self {
+        self.eip(Eip::ToD {
+            uri: uri.to_string(),
+            pattern: None,
+            ignore_invalid_endpoint: false,
+        })
+    }
+
+    /// Sends a copy to each endpoint of the expression (Java `.recipientList(..)`); see
+    /// [`aggregation_strategy`](Dsl::aggregation_strategy),
+    /// [`stop_on_exception`](Dsl::stop_on_exception), [`delimiter`](Dsl::delimiter) and
+    /// [`ignore_invalid_endpoints`](Dsl::ignore_invalid_endpoints).
+    fn recipient_list(self, expression: impl Into<ExpressionDefinition>) -> Self {
+        self.eip(Eip::RecipientList {
+            expression: expression.into(),
+            delimiter: None,
+            strategy: None,
+            stop_on_exception: false,
+            ignore_invalid_endpoints: false,
+        })
+    }
+
+    /// Sends a copy to the endpoint of the uri (a simple expression) in the background (Java
+    /// `.wireTap(..)`).
+    fn wire_tap(self, uri: &str) -> Self {
+        self.eip(Eip::WireTap {
+            uri: uri.to_string(),
+            ignore_invalid_endpoint: false,
+        })
+    }
+
+    /// Sets the exchange pattern (Java `.setExchangePattern(..)`).
+    fn set_exchange_pattern(self, pattern: ExchangePattern) -> Self {
+        self.eip(Eip::SetExchangePattern(pattern))
+    }
+
+    /// Converts the body to the Java type, such as `String` or `Integer` (Java
+    /// `.convertBodyTo(..)`).
+    fn convert_body_to(self, type_name: &str) -> Self {
+        self.eip(Eip::ConvertBodyTo {
+            type_name: type_name.to_string(),
+            mandatory: true,
+        })
+    }
+
+    /// Converts the body to the Java type, a body that cannot be converted becomes `Null`
+    /// (Java `.convertBodyTo(type, false)`).
+    fn convert_body_to_optional(self, type_name: &str) -> Self {
+        self.eip(Eip::ConvertBodyTo {
+            type_name: type_name.to_string(),
+            mandatory: false,
+        })
+    }
+
+    /// Invalid endpoint uris of the last step (toD, recipient list or wire tap) are ignored.
+    fn ignore_invalid_endpoints(mut self) -> Self {
+        match self.last_mut().map(|l| &mut l.eip) {
+            Some(Eip::ToD {
+                ignore_invalid_endpoint,
+                ..
+            }) => *ignore_invalid_endpoint = true,
+            Some(Eip::RecipientList {
+                ignore_invalid_endpoints,
+                ..
+            }) => *ignore_invalid_endpoints = true,
+            Some(Eip::WireTap {
+                ignore_invalid_endpoint,
+                ..
+            }) => *ignore_invalid_endpoint = true,
+            _ => {}
+        }
+        self
+    }
+
     /// Delays by the millis of the expression (Java `.delay(..)`).
     fn delay(self, millis: impl Into<ExpressionDefinition>) -> Self {
         self.eip(Eip::Delay(millis.into()))
@@ -229,8 +305,11 @@ pub trait Dsl: Sized {
 
     /// Sets the aggregation strategy of the last step (split or multicast).
     fn aggregation_strategy(mut self, strategy: SharedAggregationStrategy) -> Self {
-        if let Some(Eip::Split { strategy: s, .. } | Eip::Multicast { strategy: s, .. }) =
-            self.last_mut().map(|l| &mut l.eip)
+        if let Some(
+            Eip::Split { strategy: s, .. }
+            | Eip::Multicast { strategy: s, .. }
+            | Eip::RecipientList { strategy: s, .. },
+        ) = self.last_mut().map(|l| &mut l.eip)
         {
             *s = Some(AggregationRef::Strategy(strategy));
         }
@@ -239,8 +318,11 @@ pub trait Dsl: Sized {
 
     /// Sets the aggregation strategy bean (by name) of the last step (split or multicast).
     fn aggregation_strategy_ref(mut self, name: &str) -> Self {
-        if let Some(Eip::Split { strategy: s, .. } | Eip::Multicast { strategy: s, .. }) =
-            self.last_mut().map(|l| &mut l.eip)
+        if let Some(
+            Eip::Split { strategy: s, .. }
+            | Eip::Multicast { strategy: s, .. }
+            | Eip::RecipientList { strategy: s, .. },
+        ) = self.last_mut().map(|l| &mut l.eip)
         {
             *s = Some(AggregationRef::Ref(name.to_string()));
         }
@@ -255,6 +337,9 @@ pub trait Dsl: Sized {
             }
             | Eip::Multicast {
                 stop_on_exception, ..
+            }
+            | Eip::RecipientList {
+                stop_on_exception, ..
             },
         ) = self.last_mut().map(|l| &mut l.eip)
         {
@@ -265,7 +350,9 @@ pub trait Dsl: Sized {
 
     /// The delimiter of the texts split by the last step (a split).
     fn delimiter(mut self, delimiter: &str) -> Self {
-        if let Some(Eip::Split { delimiter: d, .. }) = self.last_mut().map(|l| &mut l.eip) {
+        if let Some(Eip::Split { delimiter: d, .. } | Eip::RecipientList { delimiter: d, .. }) =
+            self.last_mut().map(|l| &mut l.eip)
+        {
             *d = Some(delimiter.to_string());
         }
         self
