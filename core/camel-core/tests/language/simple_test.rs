@@ -1038,3 +1038,67 @@ fn test_range() {
         assert_expression(&e, exp, Value::Null);
     }
 }
+
+#[test]
+fn test_collection_functions_on_a_single_comma() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_body(",");
+    assert_expression(&e, "${isEmpty()}", true);
+}
+
+fn evaluate_err(e: &Exchange, text: &str) -> String {
+    let simple = e.context().resolve_language("simple").unwrap();
+    match simple.create_expression(text) {
+        Ok(x) => x.evaluate(e).unwrap_err().to_string(),
+        Err(err) => err.to_string(),
+    }
+}
+
+#[test]
+fn test_null_number_arguments() {
+    let (_t, e) = exchange();
+    let m = evaluate_err(&e, "${collate(${header.none})}");
+    assert!(
+        m.contains("collate number expression evaluated to null"),
+        "{m}"
+    );
+    let m = evaluate_err(&e, "${range(1,${header.none})}");
+    assert!(m.contains("range expression evaluated to null"), "{m}");
+    let m = evaluate_err(&e, "${random(5,5)}");
+    assert!(m.contains("requires max to be greater than min"), "{m}");
+}
+
+// the join case of testDistinct
+#[test]
+fn test_distinct_join() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_body("1,2,3,3,4,3,5");
+    assert_expression(&e, "${join(',','',${distinct()})}", "1,2,3,4,5");
+}
+
+// Rust tests of the join, collate, skip, random, sys and env functions (no SimpleTest cases)
+#[test]
+fn test_join_collate_skip_random_sys_env() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_body(text_list(&["A", "B", "C"]));
+    assert_expression(&e, "${join()}", "A,B,C");
+    assert_expression(&e, "${join(;)}", "A;B;C");
+    assert_expression(&e, "${join(&,id=)}", "id=A&id=B&id=C");
+    assert_eq!("[[A, B], [C]]", text(&e, "${collate(2)}"));
+    assert_eq!("[C]", text(&e, "${skip(2)}"));
+    for _ in 0..20 {
+        let v = <i64 as camel_core::api::convert::FromValue>::from_value(&evaluate(
+            &e,
+            "${random(1,3)}",
+        ))
+        .unwrap()
+        .unwrap();
+        assert!((1..3).contains(&v), "{v}");
+    }
+    camel_core::util::system_properties::set_property("simple.test.prop", "x1");
+    assert_expression(&e, "${sys.simple.test.prop}", "x1");
+    assert_expression(&e, "${sys.simple.test.missing}", Value::Null);
+    let path = std::env::var("PATH").unwrap_or_default();
+    assert_expression(&e, "${env.PATH}", path.clone());
+    assert_expression(&e, "${sysenv:PATH}", path);
+}
