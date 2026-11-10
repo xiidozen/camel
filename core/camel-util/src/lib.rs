@@ -9,6 +9,7 @@
 pub mod ant_path_matcher;
 pub mod camel_uri_parser;
 pub mod case_insensitive_map;
+pub mod charset;
 pub mod collection_helper;
 pub mod escape_helper;
 pub mod file_path_resolver;

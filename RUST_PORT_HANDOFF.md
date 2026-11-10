@@ -54,10 +54,9 @@ Crates live **in the directory of the Maven module they replace** (`core/camel-a
 - `core/camel-util`: **in progress**, ~340 unit tests + ~70 doctests passing. Ported modules:
   see `core/camel-util/src/lib.rs` and the notes in the backlog. Still Java (not yet ported) in
   `core/camel-util/src/main/java/org/apache/camel/util/`:
-  - to port: `IOHelper` (only env lookup done), `SecurityUtils`, `ArtifactUtils`,
-    `SkipLastByteInputStream`, `backoff/*`, `concurrent/*`, `function/*` (`ThrowingHelper`,
-    `Suppliers`, ...), and the tests `UtilEdgeCasesTest`, `IOHelperTest`, `SecurityUtilsTest`,
-    `ArtifactUtilsTest`, `SkipLastNewlineInputStreamTest`, `backoff/*Test`, `concurrent/*Test`.
+  - to port: `SecurityUtils`, `ArtifactUtils`, `backoff/*`, `concurrent/*`, `function/*` (`ThrowingHelper`,
+    `Suppliers`, ...), and the tests `UtilEdgeCasesTest`, `SecurityUtilsTest`,
+    `ArtifactUtilsTest`, `backoff/*Test`, `concurrent/*Test`.
   - not applicable (delete with a backlog note when you get to them): `AnnotationHelper`,
     `ReflectionHelper`, `CastUtils`, `BufferCaster`, `ClassLoadingAwareObjectInputStream`,
     `PackageHelper`, `java21/`/`java25/` multi-release variants, `ObjectHelperLoadClassTest`,
@@ -121,6 +120,7 @@ Javadoc must be converted so `cargo doc` produces equivalent documentation:
 | JVM system properties | `camel_util::system_properties` (registry + env fallback + built-in `java.io.tmpdir`, `user.dir`, ...) |
 | `java.net.URI`, `URLEncoder`, `URLDecoder` | `camel_util::net` (exact JDK semantics — endpoint URI normalization depends on it) |
 | `java.time.Duration` | `camel_util::time_utils::SignedDuration` |
+| `java.nio.charset.Charset` | `camel_util::charset::Charset` (Java names; ISO-8859-1 is real Latin-1, not windows-1252) |
 | `java.util.Properties` file format | `camel_util::properties::parse_properties` |
 | headers map | `camel_util::case_insensitive_map::CaseInsensitiveMap<Value>` |
 | reflection, class loading, Java serialization | not ported; explicit registration instead |
