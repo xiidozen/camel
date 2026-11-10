@@ -43,6 +43,7 @@ use std::sync::Arc;
 
 pub use camel_api as api;
 pub use camel_base_engine as engine;
+pub use camel_core_languages as languages;
 pub use camel_core_model as model;
 pub use camel_core_processor as processor;
 pub use camel_support as support;
@@ -76,10 +77,19 @@ pub fn register_core_components(context: &DefaultCamelContext) {
     );
 }
 
-/// A new CamelContext with the core components registered (what Java `new
+/// Registers the factories of the core languages (`simple`, `constant`, `header`,
+/// `exchangeProperty`, `variable`) on the context.
+pub fn register_core_languages(context: &DefaultCamelContext) {
+    camel_core_languages::register_core_languages(|name, f| {
+        context.register_language_factory(name, Arc::new(f))
+    });
+}
+
+/// A new CamelContext with the core components and languages registered (what Java `new
 /// DefaultCamelContext()` finds on the classpath).
 pub fn default_context() -> Arc<DefaultCamelContext> {
     let context = DefaultCamelContext::new();
     register_core_components(&context);
+    register_core_languages(&context);
     context
 }

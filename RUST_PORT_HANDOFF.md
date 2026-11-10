@@ -85,8 +85,11 @@ Crates live **in the directory of the Maven module they replace** (`core/camel-a
   the Rust route DSL (`camel_core_model::builder`), the reifier and `ModelCamelContext::add_routes`.
 - `core/camel-core`: **in progress** — facade crate (`default_context()`, `prelude`) and the home of
   the ported camel-core tests (`tests/<package>/main.rs`, `tests/support`).
-- **Next:** the simple language (`camel-core-languages`) so `.log(..)` and `simple(..)` work,
-  the `log` component, error handling (`DefaultErrorHandler`, `onException`, `doTry`), then more
+- `core/camel-core-languages`: **in progress** — the simple language parsers and core functions
+  (see the backlog row for what is pending), and the constant/header/exchangeProperty/variable
+  languages; registered by `camel_core::default_context()`.
+- **Next:** the rest of the simple functions (port `SimpleTest` and `SimpleOperatorTest`), the
+  `log` component, error handling (`DefaultErrorHandler`, `onException`, `doTry`), then more
   EIPs (split, aggregate, multicast, recipient list, wire tap, ...) with their camel-core tests.
 - Java files still present in `core/camel-api/src/main/java` are the ones not ported yet.
 - Everything else in the repository: **not started** (status `todo` in the backlog).

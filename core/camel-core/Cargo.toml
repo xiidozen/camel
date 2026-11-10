@@ -12,6 +12,7 @@ camel-api = { workspace = true }
 camel-util = { workspace = true }
 camel-support = { workspace = true }
 camel-core-processor = { workspace = true }
+camel-core-languages = { workspace = true }
 camel-base-engine = { workspace = true }
 camel-core-model = { workspace = true }
 camel-core-reifier = { workspace = true }

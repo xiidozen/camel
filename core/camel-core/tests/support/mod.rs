@@ -55,3 +55,10 @@ pub fn expects_message_count(count: i32, mocks: &[&MockEndpoint]) {
         m.expected_message_count(count);
     }
 }
+
+/// An exchange of a context with the core components and languages (Java
+/// `ExchangeTestSupport`).
+pub fn exchange() -> Exchange {
+    let context = camel_core::default_context();
+    Exchange::new(context.as_shared())
+}
