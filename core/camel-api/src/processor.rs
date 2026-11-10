@@ -202,6 +202,18 @@ pub trait Predicate: Send + Sync {
         Ok(())
     }
 
+    /// For a binary predicate (such as `header(foo) == 123`), the text of the evaluated
+    /// operands (such as `456 == 123`), shown when an assertion fails (Java
+    /// `BinaryPredicate.matchesReturningFailureMessage`). Other predicates return `None`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an operand cannot be evaluated.
+    fn failure_text(&self, exchange: &Exchange) -> CamelResult<Option<String>> {
+        let _ = exchange;
+        Ok(None)
+    }
+
     /// The text form of the predicate (Java `toString()`), used in log and error messages: the
     /// expression text for a language predicate (such as `${header.foo}`). The default is the
     /// short type name.

@@ -163,6 +163,27 @@ fn assert_value_equals(message: &str, expected: &Value, actual: &Value) -> TaskR
     Ok(())
 }
 
+/// The assertion message of a predicate that does not match (Java
+/// `PredicateAssertHelper.assertMatches`).
+fn assert_matches(
+    predicate: &SharedPredicate,
+    uri: &str,
+    index: usize,
+    e: &Exchange,
+) -> TaskResult {
+    if predicate.matches(e).map_err(|err| err.to_string())? {
+        return Ok(());
+    }
+    let evaluated = match predicate.failure_text(e).map_err(|err| err.to_string())? {
+        Some(t) => format!(" evaluated as: {t}"),
+        None => String::new(),
+    };
+    Err(format!(
+        "Assertion error at index {index} on mock {uri} with predicate: {}{evaluated} on {e}",
+        predicate.describe()
+    ))
+}
+
 /// Compares two values like Java `ObjectHelper.compare` (numbers numerically, otherwise by
 /// text).
 pub(crate) fn compare_values(a: &Value, b: &Value) -> CmpOrdering {
@@ -573,26 +594,20 @@ impl MockEndpoint {
     /// Expects that the message at the index (if received) matches the predicate (Java
     /// `message(index).predicate(...)`).
     pub fn message_matches(&self, index: usize, predicate: SharedPredicate) {
-        self.expects_task(Arc::new(move |s: &State| {
-            if let Some(e) = s.received.get(index) {
-                if !predicate.matches(e).map_err(|err| err.to_string())? {
-                    let desc = predicate.describe();
-                    return Err(format!("Assertion error at index {index} on mock {} with predicate: {desc} evaluated as: false on {e}", e.from_endpoint().unwrap_or_default()));
-                }
-            }
-            Ok(())
+        let uri = self.inner.uri.clone();
+        self.expects_task(Arc::new(move |s: &State| match s.received.get(index) {
+            Some(e) => assert_matches(&predicate, &uri, index, e),
+            None => Ok(()),
         }));
     }
 
     /// Expects that all the received messages match the predicate (Java
     /// `allMessages().predicate(...)`).
     pub fn all_messages_match(&self, predicate: SharedPredicate) {
+        let uri = self.inner.uri.clone();
         self.expects_task(Arc::new(move |s: &State| {
             for (index, e) in s.received.iter().enumerate() {
-                if !predicate.matches(e).map_err(|err| err.to_string())? {
-                    let desc = predicate.describe();
-                    return Err(format!("Assertion error at index {index} with predicate: {desc} evaluated as: false on {e}"));
-                }
+                assert_matches(&predicate, &uri, index, e)?;
             }
             Ok(())
         }));
@@ -979,8 +994,15 @@ impl MockEndpoint {
         timeout_for_empty: u64,
     ) -> Result<(), MockAssertionError> {
         log::info!("Asserting: {} is satisfied", self.inner.uri);
+        // as in Java, the messages of caught exceptions and failed predicates have no uri prefix
         let wrap = |m: String| MockAssertionError {
-            message: format!("{} {m}", self.inner.uri),
+            message: if m.starts_with("Caught exception on ")
+                || m.starts_with("Assertion error at index ")
+            {
+                m
+            } else {
+                format!("{} {m}", self.inner.uri)
+            },
         };
         self.do_assert_is_satisfied(timeout_for_empty)
             .await

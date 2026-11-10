@@ -179,6 +179,10 @@ engine and the components use tokio; tests of engine-level behaviour use `#[toki
 
 ## 10. Pitfalls found so far
 
+- **Scripted edits after `cargo fmt`:** a Python `str.replace` with text written before
+  formatting silently does nothing once rustfmt has reflowed the code. Use a replacement that
+  fails when the text is not found exactly once (or the Edit tool), and rerun the tests.
+
 - **Match Java exactly, then test it.** Several "bugs" were wrong expectations about Java:
   `"2 secs"` is not a valid time pattern; a `.properties` continuation line drops its leading
   whitespace; `String.split` drops trailing empty strings. When unsure, reproduce the Java

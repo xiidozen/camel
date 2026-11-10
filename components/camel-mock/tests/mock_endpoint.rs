@@ -1,8 +1,8 @@
 //! Tests of the mock endpoint, ported from the Java camel-core `MockEndpointTest`.
 //!
-//! Java expressions such as `header("counter")` are written as closures until the expression
-//! builder is ported; the tests using the `message(i).header(..).isEqualTo(..)` clause builder,
-//! the simple language or beans are still in the Java test (see the backlog).
+//! The Java clause builder `message(i).header("foo").isEqualTo(123)` is written
+//! `mock.message_matches(i, header("foo").is_equal_to(123))`; the simple language predicate of
+//! `testExpectedMessagesMatches` and the bean of `testBodyTransformed` are written as closures.
 
 use camel_api::enums::ExchangePattern;
 use camel_api::error::{CamelError, ErrorKind};
@@ -18,6 +18,7 @@ use camel_core_processor::send::SendProcessor;
 use camel_core_processor::transform::SetBodyProcessor;
 use camel_direct::DirectComponent;
 use camel_mock::{MockComponent, MockEndpoint};
+use camel_support::builder::{body as body_value, constant, exchange_pattern, header};
 use camel_util::value::Value;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
@@ -1021,5 +1022,150 @@ async fn test_expected_messages_matches() {
     t.mock.reset();
     t.mock.expected_messages_matches(vec![is_abc()]);
     t.template.send_body("direct:a", "def").await.unwrap();
+    t.mock.assert_is_not_satisfied().await;
+}
+
+async fn clause_error(t: &Test) -> String {
+    t.mock
+        .try_assert_is_satisfied()
+        .await
+        .unwrap_err()
+        .message()
+        .to_string()
+}
+
+#[tokio::test]
+async fn test_message_index_is_equal_to() {
+    let t = Test::new().await;
+    t.mock.expected_message_count(2);
+    t.mock.message_matches(0, header("foo").is_equal_to(123));
+    t.mock.message_matches(1, header("bar").is_equal_to(444));
+    t.template
+        .send_body_and_header("direct:a", "Hello World", "foo", 123)
+        .await
+        .unwrap();
+    t.template
+        .send_body_and_header("direct:a", "Hello World", "bar", 234)
+        .await
+        .unwrap();
+    let e = clause_error(&t).await;
+    let s = "Assertion error at index 1 on mock mock://result with predicate: header(bar) == 444 evaluated as: 234 == 444";
+    assert!(e.starts_with(s), "{e}");
+}
+
+#[tokio::test]
+async fn test_predicate_evaluation_is_null() {
+    let t = Test::new().await;
+    t.mock.expected_message_count(2);
+    t.mock.message_matches(0, header("foo").is_not_null());
+    t.mock.message_matches(1, header("bar").is_null());
+    t.template
+        .send_body_and_header("direct:a", "Hello World", "foo", 123)
+        .await
+        .unwrap();
+    t.template
+        .send_body_and_header("direct:a", "Hello World", "bar", 234)
+        .await
+        .unwrap();
+    let e = clause_error(&t).await;
+    let s = "Assertion error at index 1 on mock mock://result with predicate: header(bar) is null evaluated as: 234 is null";
+    assert!(e.starts_with(s), "{e}");
+}
+
+#[tokio::test]
+async fn test_predicate_evaluation_is_instance_of() {
+    let t = Test::new().await;
+    t.mock.expected_message_count(2);
+    t.mock.message_matches(0, header("foo").is_not_null());
+    t.mock
+        .message_matches(1, header("bar").is_instance_of("String"));
+    t.template
+        .send_body_and_header("direct:a", "Hello World", "foo", 123)
+        .await
+        .unwrap();
+    t.template
+        .send_body_and_header("direct:a", "Hello World", "bar", 234)
+        .await
+        .unwrap();
+    let e = clause_error(&t).await;
+    let s = "Assertion error at index 1 on mock mock://result with predicate: header(bar) instanceof java.lang.String";
+    assert!(e.starts_with(s), "{e}");
+}
+
+#[tokio::test]
+async fn test_exchange_pattern_clause() {
+    let t = Test::new().await;
+    t.mock.expected_message_count(2);
+    t.mock
+        .message_matches(0, exchange_pattern().is_equal_to("InOnly"));
+    t.mock
+        .message_matches(1, exchange_pattern().is_equal_to("InOut"));
+    t.template
+        .send_body("direct:a", "Hello World")
+        .await
+        .unwrap();
+    t.template
+        .request_body("direct:a", "Bye World")
+        .await
+        .unwrap();
+    MockEndpoint::assert_is_satisfied_all(t.context.endpoints()).await;
+}
+
+async fn two_messages(t: &Test) {
+    t.template
+        .send_body_and_header("direct:a", "Hello World", "foo", 123)
+        .await
+        .unwrap();
+    t.template
+        .send_body_and_header("direct:a", "Bye World", "bar", 234)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn test_body_predicate() {
+    let t = Test::new().await;
+    t.mock.expected_message_count(2);
+    t.mock
+        .message_matches(0, body_value().is_equal_to(constant("Hello World")));
+    t.mock
+        .message_matches(1, body_value().is_equal_to(constant("Bye World")));
+    two_messages(&t).await;
+    MockEndpoint::assert_is_satisfied_all(t.context.endpoints()).await;
+}
+
+#[tokio::test]
+async fn test_not_body_predicate() {
+    let t = Test::new().await;
+    t.mock.expected_message_count(2);
+    t.mock
+        .message_matches(0, body_value().is_equal_to(constant("Hello World")));
+    t.mock
+        .message_matches(1, body_value().is_equal_to(constant("Hi World")));
+    two_messages(&t).await;
+    t.mock.assert_is_not_satisfied().await;
+}
+
+#[tokio::test]
+async fn test_header_predicate() {
+    let t = Test::new().await;
+    t.mock.expected_message_count(2);
+    t.mock
+        .message_matches(0, header("foo").is_equal_to(constant(123)));
+    t.mock
+        .message_matches(1, header("bar").is_equal_to(constant(234)));
+    two_messages(&t).await;
+    MockEndpoint::assert_is_satisfied_all(t.context.endpoints()).await;
+}
+
+#[tokio::test]
+async fn test_not_header_predicate() {
+    let t = Test::new().await;
+    t.mock.expected_message_count(2);
+    t.mock
+        .message_matches(0, header("foo").is_equal_to(constant(123)));
+    t.mock
+        .message_matches(1, header("bar").is_equal_to(constant(666)));
+    two_messages(&t).await;
     t.mock.assert_is_not_satisfied().await;
 }
