@@ -54,8 +54,8 @@ Crates live **in the directory of the Maven module they replace** (`core/camel-a
 - `core/camel-util`: **in progress**, ~340 unit tests + ~70 doctests passing. Ported modules:
   see `core/camel-util/src/lib.rs` and the notes in the backlog. Still Java (not yet ported) in
   `core/camel-util/src/main/java/org/apache/camel/util/`:
-  - to port: `SecurityUtils`, `ArtifactUtils`, `backoff/*`, `concurrent/*`, `function/*` (`ThrowingHelper`,
-    `Suppliers`, ...), and the tests `UtilEdgeCasesTest`, `SecurityUtilsTest`,
+  - to port: `ArtifactUtils`, `backoff/*`, `concurrent/*`, `function/*` (`ThrowingHelper`,
+    `Suppliers`, ...), and the tests `UtilEdgeCasesTest`,
     `ArtifactUtilsTest`, `backoff/*Test`, `concurrent/*Test`.
   - not applicable (delete with a backlog note when you get to them): `AnnotationHelper`,
     `ReflectionHelper`, `CastUtils`, `BufferCaster`, `ClassLoadingAwareObjectInputStream`,

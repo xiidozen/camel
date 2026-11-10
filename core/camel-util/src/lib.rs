@@ -31,6 +31,7 @@ pub mod properties;
 pub mod reference_count;
 pub mod scanner;
 pub mod secure_random_helper;
+pub mod security_utils;
 pub mod security_violation;
 pub mod sensitive_utils;
 pub mod simple_utils;
