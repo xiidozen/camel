@@ -7,6 +7,7 @@
 #![deny(rustdoc::broken_intra_doc_links)]
 
 pub mod ant_path_matcher;
+pub mod artifact_utils;
 pub mod camel_uri_parser;
 pub mod case_insensitive_map;
 pub mod charset;
