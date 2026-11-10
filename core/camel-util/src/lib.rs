@@ -17,6 +17,7 @@ pub mod net;
 pub mod object_helper;
 pub mod ognl_helper;
 pub mod pair;
+pub mod properties;
 pub mod reference_count;
 pub mod sensitive_utils;
 pub mod stop_watch;
