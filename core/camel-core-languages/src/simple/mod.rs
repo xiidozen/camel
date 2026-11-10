@@ -6,6 +6,7 @@ pub mod ast;
 pub mod expression_parser;
 pub mod functions;
 pub mod language;
+pub mod math_functions;
 pub mod predicate_parser;
 pub mod string_functions;
 pub mod tokenizer;

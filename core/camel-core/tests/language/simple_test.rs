@@ -402,3 +402,164 @@ fn test_normalize_whitespace() {
         "Carlsberg is a beer",
     );
 }
+
+fn list(values: &[i64]) -> Value {
+    Value::List(values.iter().map(|v| Value::Int(*v)).collect())
+}
+
+fn text_list(values: &[&str]) -> Value {
+    Value::List(values.iter().map(|v| Value::from(*v)).collect())
+}
+
+/// Runs `(expression, expected)` cases on the body.
+fn cases(e: &mut Exchange, body: impl Into<Value>, cases: &[(&str, i64)]) {
+    e.message_mut().set_body(body);
+    for (exp, expected) in cases {
+        assert_expression(e, exp, *expected);
+    }
+}
+
+#[test]
+fn test_sum() {
+    let (_t, mut e) = exchange();
+    cases(
+        &mut e,
+        "4",
+        &[
+            ("${sum(1,2,3)}", 6),
+            ("${sum(${body},1)}", 5),
+            ("${sum(${body},-1)}", 3),
+            ("${sum(${body},0)}", 4),
+            ("${sum(${body},${body},-1)}", 7),
+            ("${sum(1,2,3,4,5,6,7,8,9)}", 45),
+        ],
+    );
+    cases(&mut e, list(&[4, 7, 9]), &[("${sum(${body})}", 20)]);
+    cases(&mut e, "4,7,8", &[("${sum(${body})}", 19)]);
+    cases(
+        &mut e,
+        text_list(&["4", "7", "7"]),
+        &[("${sum(${body},-8)}", 10)],
+    );
+}
+
+#[test]
+fn test_average() {
+    let (_t, mut e) = exchange();
+    cases(
+        &mut e,
+        "4",
+        &[
+            ("${average(1,2,3)}", 2),
+            ("${average(${body},1)}", 2),
+            ("${average(${body},-1)}", 1),
+            ("${average(${body},0)}", 2),
+            ("${average(${body},${body},-1)}", 2),
+            ("${average(1,2,3,4,5,6,7,8,9)}", 5),
+        ],
+    );
+    cases(&mut e, list(&[4, 7, 9]), &[("${average(${body})}", 6)]);
+    cases(&mut e, "4,7,8", &[("${average(${body})}", 6)]);
+    cases(
+        &mut e,
+        text_list(&["4", "7", "7"]),
+        &[("${average(${body},-8)}", 2)],
+    );
+}
+
+#[test]
+fn test_min() {
+    let (_t, mut e) = exchange();
+    cases(
+        &mut e,
+        "4",
+        &[
+            ("${min(1,2,6,4)}", 1),
+            ("${min(${body},2)}", 2),
+            ("${min(${body},-1)}", -1),
+            ("${min(${body},0)}", 0),
+            ("${min(${body},${body},-1)}", -1),
+            ("${min(1,2,3,4,5,6,7,8,9)}", 1),
+        ],
+    );
+    cases(&mut e, list(&[4, 9, 7]), &[("${min(${body})}", 4)]);
+    cases(
+        &mut e,
+        text_list(&["4", "7", "7"]),
+        &[("${min(${body},-8,11,6)}", -8)],
+    );
+}
+
+#[test]
+fn test_max() {
+    let (_t, mut e) = exchange();
+    cases(
+        &mut e,
+        "4",
+        &[
+            ("${max(1,2,6,4)}", 6),
+            ("${max(${body},2)}", 4),
+            ("${max(${body},-1)}", 4),
+            ("${max(${body},0)}", 4),
+            ("${max(${body},${body},-1)}", 4),
+            ("${max(1,2,3,4,5,6,7,8,9)}", 9),
+        ],
+    );
+    cases(&mut e, list(&[4, 9, 7]), &[("${max(${body})}", 9)]);
+    cases(
+        &mut e,
+        text_list(&["4", "7", "7"]),
+        &[("${max(${body},-8,11,6)}", 11)],
+    );
+}
+
+#[test]
+fn test_floor() {
+    let (_t, mut e) = exchange();
+    cases(
+        &mut e,
+        "5.3",
+        &[
+            ("${floor()}", 5),
+            ("${floor(${body})}", 5),
+            ("${floor(6)}", 6),
+            ("${floor(6.0)}", 6),
+            ("${floor(6.8)}", 6),
+            ("${floor(-12.9)}", -13),
+            ("${floor(0.0)}", 0),
+        ],
+    );
+    e.message_mut().set_header("myNum", "234.56");
+    assert_expression(&e, "${floor(${header.myNum})}", "234");
+}
+
+#[test]
+fn test_ceil() {
+    let (_t, mut e) = exchange();
+    cases(
+        &mut e,
+        "5.3",
+        &[
+            ("${ceil()}", 6),
+            ("${ceil(${body})}", 6),
+            ("${ceil(6)}", 6),
+            ("${ceil(6.0)}", 6),
+            ("${ceil(6.1)}", 7),
+            ("${ceil(-12.9)}", -12),
+            ("${ceil(0.0)}", 0),
+        ],
+    );
+    e.message_mut().set_header("myNum", "234.56");
+    assert_expression(&e, "${ceil(${header.myNum})}", "235");
+}
+
+#[test]
+fn test_abs() {
+    let (_t, mut e) = exchange();
+    cases(&mut e, "-987", &[("${abs()}", 987), ("${abs(-5)}", 5)]);
+    assert_expression(&e, "${abs(${body})}", "987");
+    e.message_mut().set_header("myVal", "0");
+    assert_expression(&e, "${abs(${header.myVal})}", "0");
+    e.message_mut().set_header("myVal", -222);
+    assert_expression(&e, "${abs(${header.myVal})}", "222");
+}
