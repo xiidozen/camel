@@ -184,6 +184,10 @@ pub fn misc_function(function: &str, index: usize) -> ParseResult<Option<SharedE
         return Ok(Some(named_expression(d, move |e| {
             let text = msg.evaluate_string(e)?.unwrap_or_default();
             Err(match kind {
+                // a checked Java exception (not a RuntimeException) is wrapped
+                Some(k) if !k.is(ErrorKind::Runtime) => {
+                    CamelError::wrap(ErrorKind::RuntimeCamel, CamelError::new(k, text))
+                }
                 Some(k) => CamelError::new(k, text),
                 None => CamelError::wrap(
                     ErrorKind::RuntimeCamel,

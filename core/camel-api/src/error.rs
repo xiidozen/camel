@@ -44,6 +44,21 @@ macro_rules! kinds {
                 }
             }
 
+            /// The full Java class name, such as `java.lang.IllegalArgumentException` or
+            /// `org.apache.camel.NoSuchEndpointException`.
+            pub fn java_class_name(&self) -> String {
+                match self {
+                    ErrorKind::General => "java.lang.Exception".to_string(),
+                    ErrorKind::Runtime => "java.lang.RuntimeException".to_string(),
+                    ErrorKind::IllegalArgument => "java.lang.IllegalArgumentException".to_string(),
+                    ErrorKind::IllegalState => "java.lang.IllegalStateException".to_string(),
+                    ErrorKind::UnsupportedOperation => "java.lang.UnsupportedOperationException".to_string(),
+                    ErrorKind::Io => "java.io.IOException".to_string(),
+                    ErrorKind::RejectedExecution => "java.util.concurrent.RejectedExecutionException".to_string(),
+                    other => format!("org.apache.camel.{}", other.java_name()),
+                }
+            }
+
             /// All the kinds.
             pub const ALL: &'static [ErrorKind] = &[$(ErrorKind::$kind),+];
 
@@ -51,6 +66,11 @@ macro_rules! kinds {
             /// `IllegalArgumentException` or `java.lang.IllegalArgumentException`).
             pub fn from_java_name(name: &str) -> Option<ErrorKind> {
                 let simple = name.rsplit('.').next().unwrap_or(name);
+                match simple {
+                    "IOException" => return Some(ErrorKind::Io),
+                    "Exception" => return Some(ErrorKind::General),
+                    _ => {}
+                }
                 Self::ALL.iter().copied().find(|k| k.java_name() == simple)
             }
         }
@@ -859,7 +879,7 @@ pub fn error_type_name(e: &(dyn Error + 'static)) -> String {
     match e.downcast_ref::<CamelError>() {
         Some(c) => match c.subtype() {
             Some(s) => s.to_string(),
-            None => format!("org.apache.camel.{}", c.kind().java_name()),
+            None => c.kind().java_class_name(),
         },
         None => std::any::type_name_of_val(e).to_string(),
     }
@@ -1091,7 +1111,11 @@ impl ErrorType {
     pub fn matches(&self, error: &(dyn Error + 'static)) -> bool {
         match self {
             ErrorType::Any => true,
-            ErrorType::Kind(k) => error.downcast_ref::<CamelError>().is_some_and(|c| c.is(*k)),
+            ErrorType::Kind(k) => match error.downcast_ref::<CamelError>() {
+                Some(c) => c.is(*k),
+                // a Rust I/O error is a Java IOException
+                None => error.downcast_ref::<std::io::Error>().is_some() && ErrorKind::Io.is(*k),
+            },
             ErrorType::Class(name) => {
                 let simple = name.rsplit('.').next().unwrap_or(name);
                 if let Some(c) = error.downcast_ref::<CamelError>() {
@@ -1122,7 +1146,7 @@ impl fmt::Display for ErrorType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ErrorType::Any => f.write_str("java.lang.Exception"),
-            ErrorType::Kind(k) => write!(f, "org.apache.camel.{}", k.java_name()),
+            ErrorType::Kind(k) => f.write_str(&k.java_class_name()),
             ErrorType::Class(c) => f.write_str(c),
         }
     }

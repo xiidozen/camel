@@ -19,6 +19,7 @@ camel-core-reifier = { workspace = true }
 camel-core-engine = { workspace = true }
 camel-direct = { workspace = true }
 camel-mock = { workspace = true }
+camel-log = { workspace = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros"] }

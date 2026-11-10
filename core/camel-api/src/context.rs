@@ -6,6 +6,7 @@
 use crate::endpoint::SharedEndpoint;
 use crate::error::{CamelError, CamelResult};
 use crate::spi::language::Language;
+use crate::spi::log_listener::LogListener;
 use crate::spi::registry::Registry;
 use crate::spi::uuid::{DefaultUuidGenerator, UuidGenerator};
 use std::any::Any;
@@ -46,6 +47,11 @@ pub trait CamelContext: Send + Sync {
     /// languages (such as [`StandaloneContext`]) always fails.
     fn resolve_language(&self, name: &str) -> CamelResult<Arc<dyn Language>> {
         Err(CamelError::no_such_language(name))
+    }
+
+    /// The listeners of the log messages (Java `CamelContextExtension.getLogListeners`).
+    fn log_listeners(&self) -> Vec<Arc<dyn LogListener>> {
+        Vec::new()
     }
 
     /// The bean registry, if the context has one.

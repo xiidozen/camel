@@ -715,7 +715,7 @@ fn test_throw_exception() {
     let cause = std::error::Error::source(&err)
         .and_then(|c| c.downcast_ref::<CamelError>())
         .unwrap();
-    assert_eq!(Some("java.io.IOException"), cause.detail());
+    assert!(cause.is(ErrorKind::Io), "{cause:?}");
     assert_eq!(Some("Some IO error"), cause.message());
 }
 

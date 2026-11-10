@@ -13,6 +13,7 @@ members = [
     "core/camel-core",
     "components/camel-direct",
     "components/camel-mock",
+    "components/camel-log",
 ]
 
 [workspace.package]
@@ -35,3 +36,4 @@ camel-core-engine = { path = "core/camel-core-engine" }
 camel-core = { path = "core/camel-core" }
 camel-direct = { path = "components/camel-direct" }
 camel-mock = { path = "components/camel-mock" }
+camel-log = { path = "components/camel-log" }

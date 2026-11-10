@@ -9,6 +9,7 @@ use camel_api::error::{CamelError, CamelResult, ErrorKind};
 use camel_api::route::Route;
 use camel_api::service::{ServiceState, StatefulService, SuspendableService};
 use camel_api::spi::language::Language;
+use camel_api::spi::log_listener::LogListener;
 use camel_api::spi::registry::{lookup_bean, Registry};
 use camel_api::spi::uuid::{DefaultUuidGenerator, UuidGenerator};
 use camel_support::component_support;
@@ -50,6 +51,7 @@ pub struct DefaultCamelContext {
     endpoints: RwLock<IndexMap<String, SharedEndpoint>>,
     routes: RwLock<Vec<Arc<DefaultRoute>>>,
     route_counter: AtomicU32,
+    log_listeners: RwLock<Vec<Arc<dyn LogListener>>>,
     message_history: AtomicBool,
     state: ServiceState,
 }
@@ -76,6 +78,7 @@ impl DefaultCamelContext {
             endpoints: RwLock::new(IndexMap::new()),
             routes: RwLock::new(Vec::new()),
             route_counter: AtomicU32::new(0),
+            log_listeners: RwLock::new(Vec::new()),
             message_history: AtomicBool::new(false),
             state: ServiceState::new(),
         })
@@ -126,6 +129,11 @@ impl DefaultCamelContext {
             .write()
             .unwrap()
             .insert(name.to_string(), factory);
+    }
+
+    /// Adds a listener of the log messages (Java `addLogListener`).
+    pub fn add_log_listener(&self, listener: Arc<dyn LogListener>) {
+        self.log_listeners.write().unwrap().push(listener);
     }
 
     /// Adds the language with the name (replacing an existing one).
@@ -507,6 +515,10 @@ impl CamelContext for DefaultCamelContext {
 
     fn registry(&self) -> Option<Arc<dyn Registry>> {
         Some(self.registry.clone())
+    }
+
+    fn log_listeners(&self) -> Vec<Arc<dyn LogListener>> {
+        self.log_listeners.read().unwrap().clone()
     }
 
     fn resolve_language(&self, name: &str) -> CamelResult<Arc<dyn Language>> {

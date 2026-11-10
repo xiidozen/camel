@@ -14,7 +14,7 @@
 //! let defs = builder.build();
 //! assert_eq!("DeadLetterChannel[mock:dead]", defs[0].error_handler.as_ref().unwrap().to_string());
 //! assert_eq!(
-//!     "OnException[[org.apache.camel.IllegalArgumentException] -> [to[mock:invalid]]]",
+//!     "OnException[[java.lang.IllegalArgumentException] -> [to[mock:invalid]]]",
 //!     defs[0].builder_on_exceptions[0].to_string()
 //! );
 //! ```

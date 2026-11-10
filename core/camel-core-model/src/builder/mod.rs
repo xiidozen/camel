@@ -174,7 +174,7 @@ pub trait Dsl: Sized {
     ///     })
     ///     .build();
     /// assert_eq!(
-    ///     "Route[From[direct:start] -> [DoTry[[to[direct:risky], DoCatch[org.apache.camel.IllegalArgumentException -> [to[mock:catch]]], DoFinally[[to[mock:finally]]]]]]]",
+    ///     "Route[From[direct:start] -> [DoTry[[to[direct:risky], DoCatch[java.lang.IllegalArgumentException -> [to[mock:catch]]], DoFinally[[to[mock:finally]]]]]]]",
     ///     route.to_string()
     /// );
     /// ```
@@ -663,7 +663,12 @@ mod tests {
         assert_eq!(1, def.steps[10].outputs().len());
         let text = def.to_string();
         assert!(text.starts_with("Route(r)[From[direct:a] -> [to[mock:a], to[mock:b], Log[Got ${body}], Log[x], SetProperty[p, simple{${body}}], SetVariable[v, 1], Transform[append(body, !)], RemoveHeader[h], RemoveHeaders[Camel*], RemoveHeaders[x*], Pipeline[[to[mock:p]]], process[Processor@"), "{text}");
-        assert!(text.ends_with("process[ref:bean], Stop, ThrowException[org.apache.camel.IllegalArgumentException]]]"), "{text}");
+        assert!(
+            text.ends_with(
+                "process[ref:bean], Stop, ThrowException[java.lang.IllegalArgumentException]]]"
+            ),
+            "{text}"
+        );
     }
 
     #[test]

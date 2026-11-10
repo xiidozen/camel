@@ -1,0 +1,19 @@
+[package]
+name = "camel-log"
+description = "Camel :: Log — log messages to the log (port of components/camel-log)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+camel-api = { workspace = true }
+camel-util = { workspace = true }
+camel-support = { workspace = true }
+camel-core-processor = { workspace = true }
+log = "0.4"
+
+[dev-dependencies]
+camel-core = { workspace = true }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros"] }

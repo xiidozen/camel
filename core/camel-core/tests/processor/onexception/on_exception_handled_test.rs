@@ -1,4 +1,4 @@
-//! Port of `OnExceptionHandledTest` (the `log:foo` step waits for the log component).
+//! Port of `OnExceptionHandledTest`.
 
 use super::caught_is;
 use crate::support::ContextTestSupport;
@@ -11,6 +11,7 @@ async fn test_handled() {
         r.on_exception(
             on_exception(ErrorKind::IllegalArgument)
                 .handled(true)
+                .to("log:foo?showAll=true")
                 .to("mock:handled"),
         );
         r.add(from("direct:start").throw_exception(CamelError::illegal_argument("Forced")));
