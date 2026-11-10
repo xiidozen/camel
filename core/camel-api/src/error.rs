@@ -103,6 +103,8 @@ kinds! {
     RuntimeCamel => Some(K::Runtime),
     /// `CamelExchangeException`: an error related to an exchange.
     CamelExchange => Some(K::Camel),
+    /// `ClosedCorrelationKeyException`: the aggregation of the correlation key is closed.
+    ClosedCorrelationKey => Some(K::CamelExchange),
     /// `CamelAuthorizationException`: the exchange is not authorized.
     CamelAuthorization => Some(K::CamelExchange),
     /// `CamelExecutionException`: wraps an error thrown while processing an exchange (by a
@@ -468,6 +470,17 @@ impl CamelError {
             Self::exchange_message(Some(message), Some(&exchange.display()), None),
         )
         .with_exchange_id(exchange.exchange_id())
+    }
+
+    /// A `ClosedCorrelationKeyException`: the correlation key (the detail) is closed.
+    pub fn closed_correlation_key(key: &str, exchange: &dyn ExchangeRef) -> Self {
+        let mut e = Self::camel_exchange(
+            &format!("The correlation key [{key}] has been closed"),
+            exchange,
+        );
+        e.kind = K::ClosedCorrelationKey;
+        e.detail = Some(key.to_string());
+        e
     }
 
     /// A `CamelExchangeException` with the message and cause for the exchange.

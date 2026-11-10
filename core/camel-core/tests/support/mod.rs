@@ -70,3 +70,33 @@ pub fn cause_of(e: &CamelError) -> &CamelError {
         .and_then(|c| c.downcast_ref::<CamelError>())
         .unwrap_or_else(|| panic!("no Camel error cause: {e:?}"))
 }
+
+/// Java `BodyInAggregatingStrategy`: joins the bodies with `+`.
+#[allow(dead_code)]
+pub fn body_in_aggregating_strategy() -> camel_core::api::processor::SharedAggregationStrategy {
+    Arc::new(camel_core::api::processor::aggregation_fn(
+        |old: Option<Exchange>, new: Option<Exchange>| {
+            let Some(new) = new else { return Ok(old) };
+            let Some(mut old) = old else {
+                return Ok(Some(new));
+            };
+            let body = format!("{}+{}", old.message().body(), new.message().body());
+            old.message_mut().set_body(body);
+            Ok(Some(old))
+        },
+    ))
+}
+
+/// Waits until the condition holds, polling every 10 millis, and panics after the timeout
+/// (Java Awaitility `await().atMost(timeout).until(condition)`).
+#[allow(dead_code)]
+pub async fn await_until(timeout: std::time::Duration, condition: impl Fn() -> bool) {
+    let deadline = tokio::time::Instant::now() + timeout;
+    while !condition() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the condition was not met within {timeout:?}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}

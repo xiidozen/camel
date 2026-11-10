@@ -45,6 +45,7 @@ impl ProcessorDefinition {
             | Eip::Pipeline { steps }
             | Eip::Split { steps, .. }
             | Eip::Multicast { steps, .. } => steps.iter().collect(),
+            Eip::Aggregate(a) => a.steps.iter().collect(),
             Eip::DoTry {
                 steps,
                 catches,
@@ -102,6 +103,72 @@ impl fmt::Debug for AggregationRef {
         match self {
             AggregationRef::Ref(r) => write!(f, "Ref({r})"),
             AggregationRef::Strategy(_) => f.write_str("Strategy"),
+        }
+    }
+}
+
+/// The aggregate EIP (Java `AggregateDefinition`); the options left `None` use the defaults
+/// of the aggregator.
+#[derive(Debug, Clone)]
+pub struct AggregateDefinition {
+    /// The correlation key of the exchanges.
+    pub correlation: ExpressionDefinition,
+    /// The aggregation strategy (required).
+    pub strategy: Option<AggregationRef>,
+    /// The steps of the completed exchanges.
+    pub steps: Vec<ProcessorDefinition>,
+    /// The number of exchanges of a complete group.
+    pub completion_size: Option<i32>,
+    /// The number of exchanges of a complete group, per group.
+    pub completion_size_expression: Option<ExpressionDefinition>,
+    /// The inactivity timeout of a group in millis.
+    pub completion_timeout: Option<i64>,
+    /// The inactivity timeout in millis, per group.
+    pub completion_timeout_expression: Option<ExpressionDefinition>,
+    /// How often the timeouts are checked in millis.
+    pub completion_timeout_checker_interval: Option<u64>,
+    /// Completes all groups every interval millis.
+    pub completion_interval: Option<i64>,
+    /// Completes a group when it matches (a predicate).
+    pub completion_predicate: Option<ExpressionDefinition>,
+    /// Checks the completion on the incoming exchange.
+    pub eager_check_completion: bool,
+    /// Ignores exchanges without correlation key.
+    pub ignore_invalid_correlation_keys: bool,
+    /// Closes the keys of completed groups (the number of keys remembered, 0 for no limit).
+    pub close_correlation_key_on_completion: Option<usize>,
+    /// Discards groups completed by timeout.
+    pub discard_on_completion_timeout: bool,
+    /// Discards the group when the strategy fails.
+    pub discard_on_aggregation_failure: bool,
+    /// Completes all groups when a new group starts.
+    pub completion_on_new_correlation_group: bool,
+}
+
+impl AggregateDefinition {
+    /// A definition with the correlation, strategy and steps, and the default options.
+    pub fn new(
+        correlation: ExpressionDefinition,
+        strategy: Option<AggregationRef>,
+        steps: Vec<ProcessorDefinition>,
+    ) -> Self {
+        AggregateDefinition {
+            correlation,
+            strategy,
+            steps,
+            completion_size: None,
+            completion_size_expression: None,
+            completion_timeout: None,
+            completion_timeout_expression: None,
+            completion_timeout_checker_interval: None,
+            completion_interval: None,
+            completion_predicate: None,
+            eager_check_completion: false,
+            ignore_invalid_correlation_keys: false,
+            close_correlation_key_on_completion: None,
+            discard_on_completion_timeout: false,
+            discard_on_aggregation_failure: false,
+            completion_on_new_correlation_group: false,
         }
     }
 }
@@ -235,6 +302,8 @@ pub enum Eip {
         /// Whether to stop on the first failed copy.
         stop_on_exception: bool,
     },
+    /// Aggregates exchanges by correlation key (`aggregate`).
+    Aggregate(Box<AggregateDefinition>),
     /// Delays the exchange by the millis of the expression (`delay`).
     Delay(ExpressionDefinition),
     /// Sends to the endpoint of a uri in the simple language (`toD`).
@@ -309,6 +378,7 @@ impl Eip {
             Eip::Split { .. } => "split",
             Eip::Multicast { .. } => "multicast",
             Eip::Delay(_) => "delay",
+            Eip::Aggregate(_) => "aggregate",
             Eip::ToD { .. } => "toD",
             Eip::RecipientList { .. } => "recipientList",
             Eip::WireTap { .. } => "wireTap",
@@ -387,6 +457,7 @@ impl fmt::Display for ProcessorDefinition {
             } => write!(f, "Split[{expression} -> {}]", Steps(steps)),
             Eip::Multicast { steps, .. } => write!(f, "Multicast[{}]", Steps(steps)),
             Eip::Delay(e) => write!(f, "Delay[{e} -> []]"),
+            Eip::Aggregate(a) => write!(f, "Aggregate[{} -> {}]", a.correlation, Steps(&a.steps)),
             Eip::ToD { uri, .. } => write!(f, "DynamicTo[toD[{uri}]]"),
             Eip::RecipientList { expression, .. } => write!(f, "RecipientList[{expression}]"),
             Eip::WireTap { uri, .. } => write!(f, "WireTap[{uri}]"),

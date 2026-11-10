@@ -49,6 +49,14 @@ pub fn copy_results(target: &mut Exchange, source: &Exchange) {
     target.set_failure_handled(source.is_failure_handled());
 }
 
+/// Moves the out message, if any, to the in message (Java `ExchangeHelper.prepareOutToIn`).
+pub fn prepare_out_to_in(exchange: &mut Exchange) {
+    if let Some(out) = exchange.out_message().cloned() {
+        exchange.set_in(out);
+        exchange.set_out(None);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

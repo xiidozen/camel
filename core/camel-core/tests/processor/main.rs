@@ -4,6 +4,7 @@
 #[path = "../support/mod.rs"]
 mod support;
 
+mod aggregator;
 mod choice_no_otherwise_test;
 mod converter;
 mod dead_letter_channel_redelivery_test;

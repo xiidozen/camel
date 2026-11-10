@@ -364,10 +364,10 @@ pub trait AggregationStrategy: Send + Sync {
     /// # Arguments
     ///
     /// * `exchange` - the current aggregated exchange
-    /// * `index` - the index of the exchange that timed out
-    /// * `total` - the total number of exchanges
-    /// * `timeout_millis` - the timeout
-    fn timeout(&self, exchange: &mut Exchange, index: usize, total: usize, timeout_millis: u64) {
+    /// * `index` - the index of the exchange that timed out (`-1` from the aggregator)
+    /// * `total` - the total number of exchanges (`-1` if not known)
+    /// * `timeout_millis` - the timeout (`-1` if not known)
+    fn timeout(&self, exchange: &mut Exchange, index: i32, total: i32, timeout_millis: i64) {
         let _ = (exchange, index, total, timeout_millis);
     }
 

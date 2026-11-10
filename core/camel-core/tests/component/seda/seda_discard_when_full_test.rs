@@ -1,6 +1,6 @@
 //! Port of `SedaDiscardWhenFullTest`.
 
-use crate::support::ContextTestSupport;
+use crate::support::{await_until, ContextTestSupport};
 use camel_core::prelude::*;
 use std::time::Duration;
 
@@ -24,13 +24,7 @@ async fn test_discard_when_full() {
             .unwrap();
     }
     t.context.start_route("foo").await.unwrap();
-    tokio::time::timeout(Duration::from_secs(10), async {
-        while mock.received_counter() < 1 {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .unwrap();
+    await_until(Duration::from_secs(10), || mock.received_counter() >= 1).await;
     t.template
         .send_body("seda:foo?discardWhenFull=true", "Camel World")
         .await

@@ -62,7 +62,7 @@ pub mod prelude {
     pub use camel_core_engine::ModelCamelContext;
     pub use camel_core_model::builder::*;
     pub use camel_mock::MockEndpoint;
-    pub use camel_util::value::Value;
+    pub use camel_util::value::{Value, ValueMap};
 }
 
 /// Registers the factories of the core components (`direct`, `mock`, `log`, `seda`) on the context, so they

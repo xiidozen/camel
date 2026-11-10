@@ -43,7 +43,8 @@ pub use errorhandler::*;
 use crate::errorhandler::{ErrorHandlerDefinition, OnExceptionDefinition};
 use crate::expression::ExpressionDefinition;
 use crate::processor::{
-    AggregationRef, CatchDefinition, Eip, ProcessRef, ProcessorDefinition, WhenDefinition,
+    AggregateDefinition, AggregationRef, CatchDefinition, Eip, ProcessRef, ProcessorDefinition,
+    WhenDefinition,
 };
 use crate::route::RouteDefinition;
 use camel_api::enums::{ExchangePattern, LoggingLevel};
@@ -294,6 +295,150 @@ pub trait Dsl: Sized {
                 ..
             }) => *ignore_invalid_endpoint = true,
             _ => {}
+        }
+        self
+    }
+
+    /// Aggregates the exchanges with the same correlation key with the strategy; the steps
+    /// process the completed groups (Java `.aggregate(correlation, strategy)`). At least one
+    /// completion option is required, such as [`completion_size`](Dsl::completion_size) or
+    /// [`completion_timeout`](Dsl::completion_timeout).
+    fn aggregate<F>(
+        self,
+        correlation: impl Into<ExpressionDefinition>,
+        strategy: SharedAggregationStrategy,
+        steps: F,
+    ) -> Self
+    where
+        F: FnOnce(StepsDsl) -> StepsDsl,
+    {
+        let steps = steps(StepsDsl::default()).steps;
+        self.eip(Eip::Aggregate(Box::new(AggregateDefinition::new(
+            correlation.into(),
+            Some(AggregationRef::Strategy(strategy)),
+            steps,
+        ))))
+    }
+
+    /// As [`aggregate`](Dsl::aggregate), with the strategy bean of the registry
+    /// (Java `aggregationStrategy = "#bean:name"`).
+    fn aggregate_ref<F>(
+        self,
+        correlation: impl Into<ExpressionDefinition>,
+        strategy: &str,
+        steps: F,
+    ) -> Self
+    where
+        F: FnOnce(StepsDsl) -> StepsDsl,
+    {
+        let steps = steps(StepsDsl::default()).steps;
+        self.eip(Eip::Aggregate(Box::new(AggregateDefinition::new(
+            correlation.into(),
+            Some(AggregationRef::Ref(strategy.to_string())),
+            steps,
+        ))))
+    }
+
+    /// Completes a group of the last aggregate after that many exchanges (Java `.completionSize(n)`).
+    fn completion_size(mut self, completion_size: i32) -> Self {
+        if let Some(Eip::Aggregate(a)) = self.last_mut().map(|l| &mut l.eip) {
+            a.completion_size = Some(completion_size);
+        }
+        self
+    }
+
+    /// Completes a group of the last aggregate after the number of exchanges of the expression, per group (Java `.completionSize(expression)`).
+    fn completion_size_expression(mut self, size: impl Into<ExpressionDefinition>) -> Self {
+        if let Some(Eip::Aggregate(a)) = self.last_mut().map(|l| &mut l.eip) {
+            a.completion_size_expression = Some(size.into());
+        }
+        self
+    }
+
+    /// Completes a group of the last aggregate after it was inactive for the millis (Java `.completionTimeout(ms)`).
+    fn completion_timeout(mut self, millis: i64) -> Self {
+        if let Some(Eip::Aggregate(a)) = self.last_mut().map(|l| &mut l.eip) {
+            a.completion_timeout = Some(millis);
+        }
+        self
+    }
+
+    /// Completes a group of the last aggregate after it was inactive for the millis of the expression (Java `.completionTimeout(expression)`).
+    fn completion_timeout_expression(mut self, millis: impl Into<ExpressionDefinition>) -> Self {
+        if let Some(Eip::Aggregate(a)) = self.last_mut().map(|l| &mut l.eip) {
+            a.completion_timeout_expression = Some(millis.into());
+        }
+        self
+    }
+
+    /// How often the last aggregate checks the timeouts, in millis (default 1000).
+    fn completion_timeout_checker_interval(mut self, millis: u64) -> Self {
+        if let Some(Eip::Aggregate(a)) = self.last_mut().map(|l| &mut l.eip) {
+            a.completion_timeout_checker_interval = Some(millis);
+        }
+        self
+    }
+
+    /// Completes all groups of the last aggregate every interval millis (Java `.completionInterval(ms)`).
+    fn completion_interval(mut self, millis: i64) -> Self {
+        if let Some(Eip::Aggregate(a)) = self.last_mut().map(|l| &mut l.eip) {
+            a.completion_interval = Some(millis);
+        }
+        self
+    }
+
+    /// Completes a group of the last aggregate when its aggregated exchange matches (Java `.completionPredicate(..)`).
+    fn completion_predicate(mut self, predicate: impl Into<ExpressionDefinition>) -> Self {
+        if let Some(Eip::Aggregate(a)) = self.last_mut().map(|l| &mut l.eip) {
+            a.completion_predicate = Some(predicate.into());
+        }
+        self
+    }
+
+    /// The last aggregate checks the completion on the incoming exchange, before aggregating it.
+    fn eager_check_completion(mut self) -> Self {
+        if let Some(Eip::Aggregate(a)) = self.last_mut().map(|l| &mut l.eip) {
+            a.eager_check_completion = true;
+        }
+        self
+    }
+
+    /// The last aggregate ignores exchanges without correlation key (instead of failing them).
+    fn ignore_invalid_correlation_keys(mut self) -> Self {
+        if let Some(Eip::Aggregate(a)) = self.last_mut().map(|l| &mut l.eip) {
+            a.ignore_invalid_correlation_keys = true;
+        }
+        self
+    }
+
+    /// The last aggregate closes the correlation keys of completed groups, remembering at most `capacity` keys (0 for no limit); later exchanges of a closed key fail with a `ClosedCorrelationKeyException`.
+    fn close_correlation_key_on_completion(mut self, capacity: usize) -> Self {
+        if let Some(Eip::Aggregate(a)) = self.last_mut().map(|l| &mut l.eip) {
+            a.close_correlation_key_on_completion = Some(capacity);
+        }
+        self
+    }
+
+    /// The last aggregate discards the groups completed by timeout.
+    fn discard_on_completion_timeout(mut self) -> Self {
+        if let Some(Eip::Aggregate(a)) = self.last_mut().map(|l| &mut l.eip) {
+            a.discard_on_completion_timeout = true;
+        }
+        self
+    }
+
+    /// The last aggregate discards a group when its aggregation strategy fails.
+    fn discard_on_aggregation_failure(mut self) -> Self {
+        if let Some(Eip::Aggregate(a)) = self.last_mut().map(|l| &mut l.eip) {
+            a.discard_on_aggregation_failure = true;
+        }
+        self
+    }
+
+    /// The last aggregate completes all groups when a new correlation group starts.
+    fn completion_on_new_correlation_group(mut self) -> Self {
+        if let Some(Eip::Aggregate(a)) = self.last_mut().map(|l| &mut l.eip) {
+            a.completion_on_new_correlation_group = true;
         }
         self
     }

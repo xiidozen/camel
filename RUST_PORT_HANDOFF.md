@@ -71,7 +71,13 @@ Crates live **in the directory of the Maven module they replace** (`core/camel-a
   so no trait is ported without a user and a test.
 - `core/camel-support`: **in progress** (registry, header filter strategy, pattern helper).
 - `core/camel-core-processor`: **in progress** — pipeline, filter, choice, message translators,
-  stop, throw exception, log and send processors (`tests/processors.rs`).
+  stop, throw exception, log and send processors (`tests/processors.rs`); `multicast` (sequential
+  multicast, split, delay), `dynamic` (toD, recipient list, wire tap, convertBodyTo,
+  setExchangePattern, `ProducerCache`), `aggregate` (the aggregate EIP, strategies, memory
+  repository; spi `AggregationRepository` in camel-api). Processors have no start/stop
+  lifecycle yet: the aggregator's timeout/interval checkers are tokio tasks holding a `Weak`,
+  started on the first exchange; forceCompletionOnStop needs that lifecycle. Parallel processing,
+  streaming and timeouts of multicast/split/recipient list are pending.
 - `core/camel-base-engine`: **in progress** — `DefaultCamelContext`, `DefaultRoute`, `RouteSpec`,
   `ProducerTemplate` on tokio (`tests/context.rs`).
 - `components/camel-direct`: **done** (first component; use it as the template for porting
@@ -92,9 +98,11 @@ Crates live **in the directory of the Maven module they replace** (`core/camel-a
   are ported (`camel_core_processor::errorhandler`; the reifier wraps each step as Java channels do).
 - `components/camel-log`: **in progress** (formatter options, level, groupSize, log listeners).
 - `components/camel-seda`: **in progress** (queues, concurrent consumers, InOut waiting).
-- **Next:** the unit of work (useOriginalMessage, onCompletion), the rest of
-  the simple functions (port `SimpleTest` and `SimpleOperatorTest`), error handling (`DefaultErrorHandler`, `onException`, `doTry`), then more
-  EIPs (split, aggregate, multicast, recipient list, wire tap, ...) with their camel-core tests.
+- Test helpers in `core/camel-core/tests/support`: `ContextTestSupport`, `cause_of` (Java
+  `getCause()`), `await_until` (Awaitility; never a bare sleep loop), `body_in_aggregating_strategy`.
+- **Next:** processor lifecycle (start/stop of the processors of a route), the unit of work (useOriginalMessage, onCompletion), parallel processing for
+  multicast/split/recipient list, the rest of the simple functions, then camel-main and the
+  YAML/XML DSLs.
 - Java files still present in `core/camel-api/src/main/java` are the ones not ported yet.
 - Everything else in the repository: **not started** (status `todo` in the backlog).
 

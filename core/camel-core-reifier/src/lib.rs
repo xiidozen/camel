@@ -20,6 +20,7 @@ use camel_core_model::errorhandler::{
 use camel_core_model::expression::ExpressionDefinition;
 use camel_core_model::processor::{AggregationRef, Eip, ProcessRef, ProcessorDefinition};
 use camel_core_model::route::RouteDefinition;
+use camel_core_processor::aggregate::{AggregateOptions, AggregateProcessor};
 use camel_core_processor::choice::ChoiceProcessor;
 use camel_core_processor::dynamic::{
     ConvertBodyProcessor, RecipientListProcessor, SendDynamicProcessor,
@@ -301,6 +302,49 @@ impl<'a> RouteReifier<'a> {
                 ))
             }
             Eip::Delay(e) => Arc::new(DelayProcessor::new(self.expr(e)?)),
+            Eip::Aggregate(a) => {
+                let strategy =
+                    resolve_aggregation(self.context, &a.strategy)?.ok_or_else(|| {
+                        CamelError::illegal_argument(format!(
+                            "AggregationStrategy must be set on {}",
+                            def
+                        ))
+                    })?;
+                let opt_expr =
+                    |e: &Option<ExpressionDefinition>| e.as_ref().map(|e| self.expr(e)).transpose();
+                let defaults = AggregateOptions::default();
+                let options = AggregateOptions {
+                    completion_size: a.completion_size.unwrap_or(defaults.completion_size),
+                    completion_size_expression: opt_expr(&a.completion_size_expression)?,
+                    completion_timeout: a.completion_timeout.unwrap_or(defaults.completion_timeout),
+                    completion_timeout_expression: opt_expr(&a.completion_timeout_expression)?,
+                    completion_timeout_checker_interval: a
+                        .completion_timeout_checker_interval
+                        .unwrap_or(defaults.completion_timeout_checker_interval),
+                    completion_interval: a
+                        .completion_interval
+                        .unwrap_or(defaults.completion_interval),
+                    completion_predicate: a
+                        .completion_predicate
+                        .as_ref()
+                        .map(|p| reify_predicate(self.context, p))
+                        .transpose()?,
+                    eager_check_completion: a.eager_check_completion,
+                    ignore_invalid_correlation_keys: a.ignore_invalid_correlation_keys,
+                    close_correlation_key_on_completion: a.close_correlation_key_on_completion,
+                    discard_on_completion_timeout: a.discard_on_completion_timeout,
+                    discard_on_aggregation_failure: a.discard_on_aggregation_failure,
+                    completion_on_new_correlation_group: a.completion_on_new_correlation_group,
+                    repository: None,
+                };
+                let outputs: SharedProcessor = Arc::new(Pipeline::new(self.step_list(&a.steps)?));
+                Arc::new(AggregateProcessor::new(
+                    self.expr(&a.correlation)?,
+                    strategy,
+                    outputs,
+                    options,
+                )?)
+            }
             Eip::ToD {
                 uri,
                 pattern,
