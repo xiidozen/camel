@@ -38,3 +38,8 @@ backlog
 .codex
 .mcp.json
 .omc
+
+# Rust
+/target/
+**/target/
+Cargo.lock.bak

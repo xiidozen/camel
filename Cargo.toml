@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = [
+    "core/camel-util",
+]
+
+[workspace.package]
+version = "4.23.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/apache/camel"
+rust-version = "1.80"
+
+[workspace.dependencies]
+camel-util = { path = "core/camel-util" }
