@@ -5,4 +5,5 @@ cd "$(dirname "$0")/../.."
 cargo fmt --all -- --check
 cargo build --workspace --all-targets
 cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
