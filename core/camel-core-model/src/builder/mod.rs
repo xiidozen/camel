@@ -42,12 +42,14 @@ pub use errorhandler::*;
 
 use crate::errorhandler::{ErrorHandlerDefinition, OnExceptionDefinition};
 use crate::expression::ExpressionDefinition;
-use crate::processor::{CatchDefinition, Eip, ProcessRef, ProcessorDefinition, WhenDefinition};
+use crate::processor::{
+    AggregationRef, CatchDefinition, Eip, ProcessRef, ProcessorDefinition, WhenDefinition,
+};
 use crate::route::RouteDefinition;
 use camel_api::enums::{ExchangePattern, LoggingLevel};
 use camel_api::error::{CamelError, CamelResult, ErrorType};
 use camel_api::exchange::Exchange;
-use camel_api::processor::{processor_fn, SharedProcessor};
+use camel_api::processor::{processor_fn, SharedAggregationStrategy, SharedProcessor};
 use std::sync::Arc;
 
 pub use camel_support::builder::{
@@ -188,6 +190,85 @@ pub trait Dsl: Sized {
             catches: t.catches,
             finally: t.finally,
         })
+    }
+
+    /// Splits the message into parts (by the expression) processed by the steps (Java
+    /// `.split(..)`); see [`aggregation_strategy`](Dsl::aggregation_strategy),
+    /// [`stop_on_exception`](Dsl::stop_on_exception) and [`delimiter`](Dsl::delimiter).
+    fn split<F>(self, expression: impl Into<ExpressionDefinition>, steps: F) -> Self
+    where
+        F: FnOnce(StepsDsl) -> StepsDsl,
+    {
+        let steps = steps(StepsDsl::default()).steps;
+        self.eip(Eip::Split {
+            expression: expression.into(),
+            steps,
+            strategy: None,
+            stop_on_exception: false,
+            delimiter: None,
+        })
+    }
+
+    /// Sends a copy of the exchange to each step of the block (Java `.multicast().to(a).to(b)`).
+    fn multicast<F>(self, steps: F) -> Self
+    where
+        F: FnOnce(StepsDsl) -> StepsDsl,
+    {
+        let steps = steps(StepsDsl::default()).steps;
+        self.eip(Eip::Multicast {
+            steps,
+            strategy: None,
+            stop_on_exception: false,
+        })
+    }
+
+    /// Delays by the millis of the expression (Java `.delay(..)`).
+    fn delay(self, millis: impl Into<ExpressionDefinition>) -> Self {
+        self.eip(Eip::Delay(millis.into()))
+    }
+
+    /// Sets the aggregation strategy of the last step (split or multicast).
+    fn aggregation_strategy(mut self, strategy: SharedAggregationStrategy) -> Self {
+        if let Some(Eip::Split { strategy: s, .. } | Eip::Multicast { strategy: s, .. }) =
+            self.last_mut().map(|l| &mut l.eip)
+        {
+            *s = Some(AggregationRef::Strategy(strategy));
+        }
+        self
+    }
+
+    /// Sets the aggregation strategy bean (by name) of the last step (split or multicast).
+    fn aggregation_strategy_ref(mut self, name: &str) -> Self {
+        if let Some(Eip::Split { strategy: s, .. } | Eip::Multicast { strategy: s, .. }) =
+            self.last_mut().map(|l| &mut l.eip)
+        {
+            *s = Some(AggregationRef::Ref(name.to_string()));
+        }
+        self
+    }
+
+    /// The last step (split or multicast) stops on the first failure.
+    fn stop_on_exception(mut self) -> Self {
+        if let Some(
+            Eip::Split {
+                stop_on_exception, ..
+            }
+            | Eip::Multicast {
+                stop_on_exception, ..
+            },
+        ) = self.last_mut().map(|l| &mut l.eip)
+        {
+            *stop_on_exception = true;
+        }
+        self
+    }
+
+    /// The delimiter of the texts split by the last step (a split).
+    fn delimiter(mut self, delimiter: &str) -> Self {
+        if let Some(Eip::Split { delimiter: d, .. }) = self.last_mut().map(|l| &mut l.eip) {
+            *d = Some(delimiter.to_string());
+        }
+        self
     }
 
     /// Sets the message body.

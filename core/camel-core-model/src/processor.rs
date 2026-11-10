@@ -4,7 +4,7 @@
 use crate::expression::ExpressionDefinition;
 use camel_api::enums::{ExchangePattern, LoggingLevel};
 use camel_api::error::{CamelError, ErrorType};
-use camel_api::processor::SharedProcessor;
+use camel_api::processor::{SharedAggregationStrategy, SharedProcessor};
 use camel_util::uri_support::sanitize_uri;
 use std::fmt;
 
@@ -41,7 +41,10 @@ impl ProcessorDefinition {
     /// The nested steps of the node (for filter, pipeline, ...), if any.
     pub fn outputs(&self) -> Vec<&ProcessorDefinition> {
         match &self.eip {
-            Eip::Filter { steps, .. } | Eip::Pipeline { steps } => steps.iter().collect(),
+            Eip::Filter { steps, .. }
+            | Eip::Pipeline { steps }
+            | Eip::Split { steps, .. }
+            | Eip::Multicast { steps, .. } => steps.iter().collect(),
             Eip::DoTry {
                 steps,
                 catches,
@@ -81,6 +84,24 @@ impl fmt::Debug for ProcessRef {
         match self {
             ProcessRef::Ref(r) => write!(f, "Ref({r})"),
             ProcessRef::Processor(_) => f.write_str("Processor"),
+        }
+    }
+}
+
+/// How an EIP gets its aggregation strategy.
+#[derive(Clone)]
+pub enum AggregationRef {
+    /// A strategy bean looked up in the registry by name.
+    Ref(String),
+    /// A strategy given in Rust code.
+    Strategy(SharedAggregationStrategy),
+}
+
+impl fmt::Debug for AggregationRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AggregationRef::Ref(r) => write!(f, "Ref({r})"),
+            AggregationRef::Strategy(_) => f.write_str("Strategy"),
         }
     }
 }
@@ -192,6 +213,30 @@ pub enum Eip {
     Process(ProcessRef),
     /// Fails the exchange with an error (`throwException`).
     ThrowException(CamelError),
+    /// Splits the message into parts processed by the steps (`split`).
+    Split {
+        /// The expression of the parts.
+        expression: ExpressionDefinition,
+        /// The steps of each part.
+        steps: Vec<ProcessorDefinition>,
+        /// The aggregation of the parts (default: the original exchange).
+        strategy: Option<AggregationRef>,
+        /// Whether to stop on the first failed part.
+        stop_on_exception: bool,
+        /// The delimiter of texts (default `,`).
+        delimiter: Option<String>,
+    },
+    /// Sends a copy to each step (`multicast`).
+    Multicast {
+        /// The outputs (each step gets a copy).
+        steps: Vec<ProcessorDefinition>,
+        /// The aggregation of the replies (default: the last reply).
+        strategy: Option<AggregationRef>,
+        /// Whether to stop on the first failed copy.
+        stop_on_exception: bool,
+    },
+    /// Delays the exchange by the millis of the expression (`delay`).
+    Delay(ExpressionDefinition),
     /// `doTry` with its `doCatch` and `doFinally` clauses.
     DoTry {
         /// The steps of the try block.
@@ -223,6 +268,9 @@ impl Eip {
             Eip::Process(_) => "process",
             Eip::ThrowException(_) => "throwException",
             Eip::DoTry { .. } => "doTry",
+            Eip::Split { .. } => "split",
+            Eip::Multicast { .. } => "multicast",
+            Eip::Delay(_) => "delay",
         }
     }
 }
@@ -291,6 +339,11 @@ impl fmt::Display for ProcessorDefinition {
                 "ThrowException[{}]",
                 camel_api::error::error_type_name(e)
             ),
+            Eip::Split {
+                expression, steps, ..
+            } => write!(f, "Split[{expression} -> {}]", Steps(steps)),
+            Eip::Multicast { steps, .. } => write!(f, "Multicast[{}]", Steps(steps)),
+            Eip::Delay(e) => write!(f, "Delay[{e} -> []]"),
             Eip::DoTry {
                 steps,
                 catches,

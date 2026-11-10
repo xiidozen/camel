@@ -12,10 +12,12 @@
 #![deny(missing_docs)]
 #![deny(rustdoc::broken_intra_doc_links)]
 
+pub mod aggregate;
 pub mod choice;
 pub mod errorhandler;
 pub mod filter;
 pub mod log_processor;
+pub mod multicast;
 pub mod pipeline;
 pub mod send;
 pub mod transform;

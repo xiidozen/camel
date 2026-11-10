@@ -32,8 +32,9 @@ pub fn copy_results(target: &mut Exchange, source: &Exchange) {
         }
     }
     target.set_exception(source.exception().cloned());
-    for (k, v) in source.properties() {
-        target.set_property(k, v.clone());
+    // the custom and the internal properties (Java copyInternalProperties)
+    for (k, v) in source.all_properties() {
+        target.set_property(&k, v);
     }
     for (k, v) in source.variables() {
         target.set_variable(k, v.clone());

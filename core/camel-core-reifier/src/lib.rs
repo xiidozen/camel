@@ -10,14 +10,15 @@
 use camel_api::context::CamelContext;
 use camel_api::error::{CamelError, CamelResult};
 use camel_api::processor::{
-    ExpressionPredicate, Processor, SharedExpression, SharedPredicate, SharedProcessor,
+    ExpressionPredicate, Processor, SharedAggregationStrategy, SharedExpression, SharedPredicate,
+    SharedProcessor,
 };
 use camel_api::spi::registry::lookup_bean;
 use camel_core_model::errorhandler::{
     ErrorHandlerDefinition, ErrorHandlerKind, RedeliveryPolicyDefinition,
 };
 use camel_core_model::expression::ExpressionDefinition;
-use camel_core_model::processor::{Eip, ProcessRef, ProcessorDefinition};
+use camel_core_model::processor::{AggregationRef, Eip, ProcessRef, ProcessorDefinition};
 use camel_core_model::route::RouteDefinition;
 use camel_core_processor::choice::ChoiceProcessor;
 use camel_core_processor::errorhandler::exception_policy::ExceptionPolicy;
@@ -25,6 +26,7 @@ use camel_core_processor::errorhandler::redelivery_policy::RedeliveryPolicyOverr
 use camel_core_processor::errorhandler::{ErrorHandlerConfig, RedeliveryErrorHandler};
 use camel_core_processor::filter::FilterProcessor;
 use camel_core_processor::log_processor::LogProcessor;
+use camel_core_processor::multicast::{DelayProcessor, MulticastProcessor, SplitProcessor};
 use camel_core_processor::pipeline::Pipeline;
 use camel_core_processor::send::SendProcessor;
 use camel_core_processor::transform::{
@@ -263,6 +265,38 @@ impl<'a> RouteReifier<'a> {
             Eip::Stop => Arc::new(StopProcessor),
             Eip::Process(r) => resolve_process_ref(self.context, r)?,
             Eip::ThrowException(e) => Arc::new(ThrowExceptionProcessor::new(e.clone())),
+            Eip::Split {
+                expression,
+                steps,
+                strategy,
+                stop_on_exception,
+                delimiter,
+            } => {
+                let strategy = resolve_aggregation(self.context, strategy)?;
+                let mut p = SplitProcessor::new(
+                    self.expr(expression)?,
+                    Arc::new(Pipeline::new(self.step_list(steps)?)),
+                    strategy,
+                    *stop_on_exception,
+                );
+                if let Some(d) = delimiter {
+                    p = p.with_delimiter(d);
+                }
+                Arc::new(p)
+            }
+            Eip::Multicast {
+                steps,
+                strategy,
+                stop_on_exception,
+            } => {
+                let strategy = resolve_aggregation(self.context, strategy)?;
+                Arc::new(MulticastProcessor::new(
+                    self.step_list(steps)?,
+                    strategy,
+                    *stop_on_exception,
+                ))
+            }
+            Eip::Delay(e) => Arc::new(DelayProcessor::new(self.expr(e)?)),
             Eip::DoTry {
                 steps,
                 catches,
@@ -456,4 +490,28 @@ pub fn reify_error_handler(
         }));
     }
     Ok(Some(Arc::new(config)))
+}
+
+/// The aggregation strategy of a reference: the strategy itself, or a bean from the registry.
+///
+/// # Errors
+///
+/// Returns a `NoSuchBeanException` if there is no such strategy bean.
+pub fn resolve_aggregation(
+    context: &Arc<dyn CamelContext>,
+    r: &Option<AggregationRef>,
+) -> CamelResult<Option<SharedAggregationStrategy>> {
+    match r {
+        None => Ok(None),
+        Some(AggregationRef::Strategy(s)) => Ok(Some(s.clone())),
+        Some(AggregationRef::Ref(name)) => {
+            let not_found = || {
+                CamelError::no_such_bean_of_type(Some(name), "org.apache.camel.AggregationStrategy")
+            };
+            let registry = context.registry().ok_or_else(not_found)?;
+            lookup_bean::<SharedAggregationStrategy>(registry.as_ref(), name)
+                .map(|s| Some((*s).clone()))
+                .ok_or_else(not_found)
+        }
+    }
 }
