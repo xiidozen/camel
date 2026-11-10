@@ -73,7 +73,7 @@ progress and what is still to do. Update it in the same commit as each port.
 | `core/camel-management` | 137 | 291 | todo | |
 | `core/camel-management-api` | 127 | 0 | todo | |
 | `core/camel-support` | 318 | 13 | todo | |
-| `core/camel-util` | 89 | 35 | wip | Done: `AntPathMatcher`, `StringHelper`, `StringQuoteHelper`, `URISupport`, `URIScanner`, `UnsafeUriCharactersEncoder`, `CamelURIParser`, `SensitiveUtils`, `Pair` (+ camel-core `StingQuoteHelperTest`, `UnsafeCharactersEncoderTest`). New `net` module reproduces `java.net.URI`/`URLEncoder`/`URLDecoder`. Tooling TODO: regenerate `SENSITIVE_KEYS` from the catalog. |
+| `core/camel-util` | 89 | 35 | wip | Done: `AntPathMatcher`, `StringHelper`, `StringQuoteHelper`, `URISupport`, `URIScanner`, `UnsafeUriCharactersEncoder`, `CamelURIParser`, `SensitiveUtils`, `Pair`, `TimeUtils` (+ signed `SignedDuration` for `java.time.Duration`), `UnitUtils`, `StopWatch`, `OgnlHelper`, `KeyValueHolder`, `ReferenceCount` (+ camel-core `StingQuoteHelperTest`, `UnsafeCharactersEncoderTest`, `OgnlHelperTest`, `KeyValueHolderTest`, `ReferenceCountTest`). New `net` module reproduces `java.net.URI`/`URLEncoder`/`URLDecoder`. Tooling TODO: regenerate `SENSITIVE_KEYS` from the catalog. |
 | `core/camel-xml-io` | 9 | 6 | todo | |
 | `core/camel-xml-io-util` | 4 | 2 | todo | |
 | `core/camel-xml-jaxb` | 3 | 0 | todo | |
