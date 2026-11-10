@@ -65,8 +65,14 @@ Crates live **in the directory of the Maven module they replace** (`core/camel-a
 - `core/camel-api`: **in progress** — done: enums, `CamelError`/`ErrorKind`, Exchange constants,
   `Message`, `Exchange`, `convert::FromValue`, async `Processor`, `Expression`, `Predicate`,
   `AggregationStrategy`, minimal `CamelContext`, `spi::uuid`, `Service` lifecycle + `ServiceState`,
-  `Endpoint`/`Component`/`Producer`/`Consumer`/`PollingConsumer`. Next: `Route`, `TypeConverter`,
-  `Registry`, the rest of `spi/` (276 files), then the remaining top-level interfaces. Java files
+  `Endpoint`/`Component`/`Producer`/`Consumer`/`PollingConsumer`, `Route`, `spi::{Registry, Language,
+  Synchronization, HeaderFilterStrategy}`. The rest of `camel-api` (mostly `spi/`) is ported in
+  **vertical slices**: each interface together with the engine/support code that implements it,
+  so no trait is ported without a user and a test.
+- `core/camel-support`: **in progress** (registry, header filter strategy, pattern helper).
+- **Next milestone:** a running engine — `camel-base-engine` (DefaultCamelContext, routes), core
+  EIP processors, the Rust route DSL, and the `direct`, `mock` and `log` components, so a route
+  written in Rust runs end to end. Java files
   still present in `core/camel-api/src/main/java` are the ones not ported yet.
 - Everything else in the repository: **not started** (status `todo` in the backlog).
 
