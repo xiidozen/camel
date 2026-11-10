@@ -869,3 +869,172 @@ fn test_iif() {
     );
     assert_expression(&e, "${iif(${header.foo} > 0,${body},${null})}", Value::Null);
 }
+
+fn text(e: &Exchange, exp: &str) -> String {
+    evaluate(e, exp).to_string()
+}
+
+// testDistinct: the ${join(..)} case comes with the join function
+#[test]
+fn test_distinct() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_body("1,2,3,3,4,3,5");
+    assert_eq!(Some(5), evaluate(&e, "${distinct()}").size());
+    assert_eq!("[1, 2, 3, 4, 5]", text(&e, "${distinct()}"));
+    assert_eq!(
+        "[Z, X, A, B, C, D, E]",
+        text(&e, "${distinct('Z','X','Z','A','B','A','C','D','B','E')}")
+    );
+    assert_eq!(
+        "[Z, 4, 1, 2, 3, 5, A, B, C, D, E]",
+        text(
+            &e,
+            "${distinct('Z','4',${body},'A','B','A','C','D','B','E')}"
+        )
+    );
+    e.message_mut().set_body(Value::Null);
+    assert_eq!("[]", text(&e, "${distinct()}"));
+}
+
+#[test]
+fn test_reverse() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_body("1,2,3,4,5");
+    assert_eq!("[5, 4, 3, 2, 1]", text(&e, "${reverse()}"));
+    assert_eq!(
+        "[E, B, D, C, A, B, A, Z, X, Z]",
+        text(&e, "${reverse('Z','X','Z','A','B','A','C','D','B','E')}")
+    );
+    assert_eq!(
+        "[E, B, D, C, A, B, A, 5, 4, 3, 2, 1, 4, Z]",
+        text(
+            &e,
+            "${reverse('Z','4',${body},'A','B','A','C','D','B','E')}"
+        )
+    );
+    e.message_mut().set_body(Value::Null);
+    assert_eq!("[]", text(&e, "${reverse()}"));
+}
+
+#[test]
+fn test_shuffle() {
+    let (_t, mut e) = exchange();
+    let input = "1,2,3,4,5,6,7,8,9,0";
+    e.message_mut().set_body(input);
+    assert_eq!(Some(10), evaluate(&e, "${shuffle()}").size());
+    let (s, s2) = (text(&e, "${shuffle()}"), text(&e, "${shuffle()}"));
+    assert_ne!(input, s);
+    assert_ne!(s, s2, "should be random when calling again");
+    e.message_mut().set_body(Value::Null);
+    assert_eq!("[]", text(&e, "${shuffle()}"));
+}
+
+#[test]
+fn test_split() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_body("A,B,C,D,E");
+    let arr = text_list(&["A", "B", "C", "D", "E"]);
+    assert_eq!(arr, evaluate(&e, "${split()}"));
+    assert_eq!(arr, evaluate(&e, "${split(',')}"));
+    assert_eq!(text_list(&["A,B,C,D,E"]), evaluate(&e, "${split(';')}"));
+    e.message_mut().set_header("myHead", "1;2;3;4");
+    assert_eq!(
+        text_list(&["1", "2", "3", "4"]),
+        evaluate(&e, "${split(${header.myHead},;)}")
+    );
+    e.message_mut().set_body("A1,B1,C1\nA2,B2,C2\nA3,B3,C3");
+    assert_eq!(
+        text_list(&["A1,B1,C1", "A2,B2,C2", "A3,B3,C3"]),
+        evaluate(&e, "${split(\\n)}")
+    );
+}
+
+#[test]
+fn test_sort() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_body(text_list(&["Z", "A", "H", "D"]));
+    assert_eq!(text_list(&["A", "D", "H", "Z"]), evaluate(&e, "${sort()}"));
+    assert_eq!(
+        text_list(&["Z", "H", "D", "A"]),
+        evaluate(&e, "${sort(true)}")
+    );
+    assert_eq!(
+        text_list(&["A", "D", "H", "Z"]),
+        evaluate(&e, "${sort(${body})}")
+    );
+    e.message_mut().set_body("5,2,1,3,4");
+    assert_eq!(
+        text_list(&["1", "2", "3", "4", "5"]),
+        evaluate(&e, "${sort()}")
+    );
+}
+
+#[test]
+fn test_for_each() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_body("Camel,World,Cheese");
+    assert_eq!(
+        text_list(&["Hello Camel", "Hello World", "Hello Cheese"]),
+        evaluate(&e, "${forEach(${body},'Hello ${body}')}")
+    );
+    assert_eq!(
+        text_list(&["Bye Camel", "Bye World", "Bye Cheese"]),
+        evaluate(&e, "${forEach(${body},'Bye ${body}')}")
+    );
+    e.message_mut().set_body("1,2,3");
+    assert_eq!(
+        list(&[8, 9, 10]),
+        evaluate(&e, "${forEach(${body},${sum(${body},7)})}")
+    );
+    e.message_mut().set_body(Value::Null);
+    assert_eq!(
+        Value::List(vec![]),
+        evaluate(&e, "${forEach(${body},'Hello ${body}')}")
+    );
+}
+
+#[test]
+fn test_filter() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_body("Camel,Dog,Cheese");
+    assert_eq!(
+        text_list(&["Camel", "Cheese"]),
+        evaluate(&e, "${filter(${body},${length()} > 4)}")
+    );
+    assert_eq!(
+        text_list(&["Dog"]),
+        evaluate(&e, "${filter(${body},${contains(dog)})}")
+    );
+}
+
+#[test]
+fn test_list() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_body("4");
+    assert_expression(&e, "${list(1,2,3)}", "[1, 2, 3]");
+    assert_expression(&e, "${list(1,2,3,${body})}", "[1, 2, 3, 4]");
+    assert_expression(&e, "${list('a','b','c')}", "[a, b, c]");
+    assert_expression(&e, "${list()}", "[]");
+}
+
+#[test]
+fn test_map() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_body("d");
+    assert_expression(&e, "${map(1,a,2,b,3,c)}", "{1=a, 2=b, 3=c}");
+    assert_expression(&e, "${map(1,a,2,b,3,c,4,${body})}", "{1=a, 2=b, 3=c, 4=d}");
+    assert_expression(&e, "${map()}", "{}");
+}
+
+#[test]
+fn test_range() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_body("5");
+    assert_expression(&e, "${range(1,4)}", "[1, 2, 3]");
+    assert_expression(&e, "${range(1,${body})}", "[1, 2, 3, 4]");
+    assert_expression(&e, "${range(0,10)}", "[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]");
+    assert_expression(&e, "${range(1,2)}", "[1]");
+    for exp in ["${range(1,1)}", "${range(0,0)}", "${range(4,1)}"] {
+        assert_expression(&e, exp, Value::Null);
+    }
+}

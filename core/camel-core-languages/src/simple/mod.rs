@@ -3,6 +3,7 @@
 //! `${header.foo} == 'bar' && ${body} contains 'World'`.
 
 pub mod ast;
+pub mod collection_functions;
 pub mod expression_parser;
 pub mod functions;
 pub mod language;
