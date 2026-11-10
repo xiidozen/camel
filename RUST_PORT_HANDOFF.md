@@ -74,9 +74,11 @@ Crates live **in the directory of the Maven module they replace** (`core/camel-a
   stop, throw exception, log and send processors (`tests/processors.rs`); `multicast` (sequential
   multicast, split, delay), `dynamic` (toD, recipient list, wire tap, convertBodyTo,
   setExchangePattern, `ProducerCache`), `aggregate` (the aggregate EIP, strategies, memory
-  repository; spi `AggregationRepository` in camel-api). Processors have no start/stop
-  lifecycle yet: the aggregator's timeout/interval checkers are tokio tasks holding a `Weak`,
-  started on the first exchange; forceCompletionOnStop needs that lifecycle. Parallel processing,
+  repository; spi `AggregationRepository` in camel-api). Processor lifecycle:
+  `Processor::start_processor`/`stop_processor` (default no-op, idempotent; named so to not
+  clash with `Service::start` on producers); composites forward to their children and the
+  route starts its processors before the consumer and stops them after it. The aggregator's
+  timeout/interval checkers are tokio tasks started with the route and aborted on stop. Parallel processing,
   streaming and timeouts of multicast/split/recipient list are pending.
 - `core/camel-base-engine`: **in progress** — `DefaultCamelContext`, `DefaultRoute`, `RouteSpec`,
   `ProducerTemplate` on tokio (`tests/context.rs`).
@@ -100,7 +102,7 @@ Crates live **in the directory of the Maven module they replace** (`core/camel-a
 - `components/camel-seda`: **in progress** (queues, concurrent consumers, InOut waiting).
 - Test helpers in `core/camel-core/tests/support`: `ContextTestSupport`, `cause_of` (Java
   `getCause()`), `await_until` (Awaitility; never a bare sleep loop), `body_in_aggregating_strategy`.
-- **Next:** processor lifecycle (start/stop of the processors of a route), the unit of work (useOriginalMessage, onCompletion), parallel processing for
+- **Next:** the unit of work (useOriginalMessage, onCompletion), parallel processing for
   multicast/split/recipient list, the rest of the simple functions, then camel-main and the
   YAML/XML DSLs.
 - Java files still present in `core/camel-api/src/main/java` are the ones not ported yet.

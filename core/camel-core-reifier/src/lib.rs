@@ -335,7 +335,9 @@ impl<'a> RouteReifier<'a> {
                     discard_on_completion_timeout: a.discard_on_completion_timeout,
                     discard_on_aggregation_failure: a.discard_on_aggregation_failure,
                     completion_on_new_correlation_group: a.completion_on_new_correlation_group,
-                    repository: None,
+                    force_completion_on_stop: a.force_completion_on_stop,
+                    complete_all_on_stop: a.complete_all_on_stop,
+                    repository: a.repository.as_ref().map(|r| r.0.clone()),
                 };
                 let outputs: SharedProcessor = Arc::new(Pipeline::new(self.step_list(&a.steps)?));
                 Arc::new(AggregateProcessor::new(

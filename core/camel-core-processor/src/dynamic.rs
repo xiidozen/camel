@@ -56,6 +56,28 @@ impl ProducerCache {
         })
     }
 
+    /// Stops the cached producers (Java: stopping the `ProducerCache`).
+    ///
+    /// # Errors
+    ///
+    /// Returns the first error, after stopping all of them.
+    pub async fn stop(&self) -> CamelResult<()> {
+        let producers: Vec<SharedProducer> = self
+            .producers
+            .lock()
+            .unwrap()
+            .drain()
+            .map(|(_, p)| p)
+            .collect();
+        let mut first = None;
+        for p in producers {
+            if let Err(e) = p.stop().await {
+                first.get_or_insert(e);
+            }
+        }
+        first.map_or(Ok(()), Err)
+    }
+
     /// Sends the exchange to the endpoint of the uri; any failure is set on the exchange.
     pub async fn send(&self, uri: &str, pattern: Option<ExchangePattern>, exchange: &mut Exchange) {
         match self.acquire(exchange, uri).await {
@@ -114,6 +136,14 @@ impl SendDynamicProcessor {
 }
 
 impl Processor for SendDynamicProcessor {
+    fn start_processor(&self) -> BoxFuture<'_, CamelResult<()>> {
+        Box::pin(async move { Ok(()) })
+    }
+
+    fn stop_processor(&self) -> BoxFuture<'_, CamelResult<()>> {
+        Box::pin(async move { self.cache.stop().await })
+    }
+
     fn process<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>> {
         Box::pin(async move {
             let uri = match self.uri.evaluate(exchange) {
@@ -194,6 +224,14 @@ impl RecipientListProcessor {
 }
 
 impl Processor for RecipientListProcessor {
+    fn start_processor(&self) -> BoxFuture<'_, CamelResult<()>> {
+        Box::pin(async move { Ok(()) })
+    }
+
+    fn stop_processor(&self) -> BoxFuture<'_, CamelResult<()>> {
+        Box::pin(async move { self.cache.stop().await })
+    }
+
     fn process<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>> {
         Box::pin(async move {
             let value = match self.expression.evaluate(exchange) {
@@ -259,6 +297,14 @@ impl WireTapProcessor {
 }
 
 impl Processor for WireTapProcessor {
+    fn start_processor(&self) -> BoxFuture<'_, CamelResult<()>> {
+        Box::pin(async move { Ok(()) })
+    }
+
+    fn stop_processor(&self) -> BoxFuture<'_, CamelResult<()>> {
+        Box::pin(async move { self.send.stop_processor().await })
+    }
+
     fn process<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>> {
         Box::pin(async move {
             if tokio::runtime::Handle::try_current().is_err() {

@@ -44,13 +44,14 @@ use crate::errorhandler::{ErrorHandlerDefinition, OnExceptionDefinition};
 use crate::expression::ExpressionDefinition;
 use crate::processor::{
     AggregateDefinition, AggregationRef, CatchDefinition, Eip, ProcessRef, ProcessorDefinition,
-    WhenDefinition,
+    RepositoryRef, WhenDefinition,
 };
 use crate::route::RouteDefinition;
 use camel_api::enums::{ExchangePattern, LoggingLevel};
 use camel_api::error::{CamelError, CamelResult, ErrorType};
 use camel_api::exchange::Exchange;
 use camel_api::processor::{processor_fn, SharedAggregationStrategy, SharedProcessor};
+use camel_api::spi::aggregation_repository::AggregationRepository;
 use std::sync::Arc;
 
 pub use camel_support::builder::{
@@ -431,6 +432,31 @@ pub trait Dsl: Sized {
     fn discard_on_aggregation_failure(mut self) -> Self {
         if let Some(Eip::Aggregate(a)) = self.last_mut().map(|l| &mut l.eip) {
             a.discard_on_aggregation_failure = true;
+        }
+        self
+    }
+
+    /// The last aggregate completes all its groups when the route stops (Java `.forceCompletionOnStop()`).
+    fn force_completion_on_stop(mut self) -> Self {
+        if let Some(Eip::Aggregate(a)) = self.last_mut().map(|l| &mut l.eip) {
+            a.force_completion_on_stop = true;
+        }
+        self
+    }
+
+    /// The last aggregate completes all its groups when the route stops (Java `.completeAllOnStop()`).
+    fn complete_all_on_stop(mut self) -> Self {
+        if let Some(Eip::Aggregate(a)) = self.last_mut().map(|l| &mut l.eip) {
+            a.complete_all_on_stop = true;
+        }
+        self
+    }
+
+    /// The repository of the groups of the last aggregate (default in memory; Java
+    /// `.aggregationRepository(..)`).
+    fn aggregation_repository(mut self, repository: Arc<dyn AggregationRepository>) -> Self {
+        if let Some(Eip::Aggregate(a)) = self.last_mut().map(|l| &mut l.eip) {
+            a.repository = Some(RepositoryRef(repository));
         }
         self
     }

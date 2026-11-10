@@ -8,7 +8,9 @@ use camel_api::exchange_constants::{
     EXCEPTION_CAUGHT, EXCEPTION_HANDLED, FAILURE_ENDPOINT, FAILURE_LOCATION, FAILURE_NODE_ID,
     FAILURE_ROUTE_ID, TO_ENDPOINT, TRY_ROUTE_BLOCK,
 };
-use camel_api::processor::{BoxFuture, Processor, SharedPredicate, SharedProcessor};
+use camel_api::processor::{
+    start_processors, stop_processors, BoxFuture, Processor, SharedPredicate, SharedProcessor,
+};
 use camel_util::value::Value;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -48,7 +50,26 @@ impl TryProcessor {
     }
 }
 
+impl TryProcessor {
+    /// The try block, the catch and the finally clauses.
+    fn all(&self) -> Vec<SharedProcessor> {
+        std::iter::once(&self.try_processor)
+            .chain(&self.catches)
+            .chain(&self.finally)
+            .cloned()
+            .collect()
+    }
+}
+
 impl Processor for TryProcessor {
+    fn start_processor(&self) -> BoxFuture<'_, CamelResult<()>> {
+        Box::pin(async move { start_processors(&self.all()).await })
+    }
+
+    fn stop_processor(&self) -> BoxFuture<'_, CamelResult<()>> {
+        Box::pin(async move { stop_processors(&self.all()).await })
+    }
+
     fn process<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>> {
         Box::pin(async move {
             let last_handled = exchange.property(EXCEPTION_HANDLED).cloned();
@@ -153,6 +174,14 @@ impl CatchProcessor {
 }
 
 impl Processor for CatchProcessor {
+    fn start_processor(&self) -> BoxFuture<'_, CamelResult<()>> {
+        Box::pin(async move { start_processors([&self.processor]).await })
+    }
+
+    fn stop_processor(&self) -> BoxFuture<'_, CamelResult<()>> {
+        Box::pin(async move { stop_processors([&self.processor]).await })
+    }
+
     fn process<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>> {
         Box::pin(async move {
             let Some(e) = exchange.exception().cloned() else {
@@ -213,6 +242,14 @@ impl FinallyProcessor {
 }
 
 impl Processor for FinallyProcessor {
+    fn start_processor(&self) -> BoxFuture<'_, CamelResult<()>> {
+        Box::pin(async move { start_processors([&self.processor]).await })
+    }
+
+    fn stop_processor(&self) -> BoxFuture<'_, CamelResult<()>> {
+        Box::pin(async move { stop_processors([&self.processor]).await })
+    }
+
     fn process<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>> {
         Box::pin(async move {
             let exception = exchange.exception().cloned();

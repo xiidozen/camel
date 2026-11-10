@@ -4,7 +4,9 @@ use crate::filter::FilterProcessor;
 use crate::{continue_processing, process_and_capture};
 use camel_api::error::CamelResult;
 use camel_api::exchange::Exchange;
-use camel_api::processor::{BoxFuture, Processor, SharedProcessor};
+use camel_api::processor::{
+    start_processors, stop_processors, BoxFuture, Processor, SharedProcessor,
+};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Routes the exchange to the first `when` whose predicate matches, or to `otherwise` if none
@@ -37,6 +39,27 @@ impl ChoiceProcessor {
 }
 
 impl Processor for ChoiceProcessor {
+    fn start_processor(&self) -> BoxFuture<'_, CamelResult<()>> {
+        Box::pin(async move {
+            for w in &self.whens {
+                w.start_processor().await?;
+            }
+            start_processors(&self.otherwise).await
+        })
+    }
+
+    fn stop_processor(&self) -> BoxFuture<'_, CamelResult<()>> {
+        Box::pin(async move {
+            let mut r = Ok(());
+            for w in &self.whens {
+                if let Err(e) = w.stop_processor().await {
+                    r = Err(e);
+                }
+            }
+            stop_processors(&self.otherwise).await.and(r)
+        })
+    }
+
     fn process<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>> {
         Box::pin(async move {
             for when in &self.whens {

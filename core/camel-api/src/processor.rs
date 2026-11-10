@@ -32,10 +32,66 @@ pub trait Processor: Send + Sync {
     /// Returns the error if processing failed; the routing engine sets it on the exchange and
     /// lets the error handler deal with it.
     fn process<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>>;
+
+    /// Starts the processor, and the processors it contains, before its route consumes (Java:
+    /// starting the processor as a service). Must be idempotent; the default does nothing.
+    ///
+    /// The name differs from [`Service::start`](crate::service::Service::start) because
+    /// producers are both processors and services.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error if the processor cannot start.
+    fn start_processor(&self) -> BoxFuture<'_, CamelResult<()>> {
+        Box::pin(std::future::ready(Ok(())))
+    }
+
+    /// Stops the processor, and the processors it contains, after its route stopped consuming
+    /// (Java: stopping the processor as a service). Must be idempotent; the default does
+    /// nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error if the processor cannot stop.
+    fn stop_processor(&self) -> BoxFuture<'_, CamelResult<()>> {
+        Box::pin(std::future::ready(Ok(())))
+    }
 }
 
 /// A shared processor.
 pub type SharedProcessor = Arc<dyn Processor>;
+
+/// Starts the processors in order (Java `ServiceHelper.startService(collection)`).
+///
+/// # Errors
+///
+/// Returns the first error; the processors after it are not started.
+pub async fn start_processors<'a>(
+    processors: impl IntoIterator<Item = &'a SharedProcessor>,
+) -> CamelResult<()> {
+    for p in processors {
+        p.start_processor().await?;
+    }
+    Ok(())
+}
+
+/// Stops all the processors in order, even if some fail (Java
+/// `ServiceHelper.stopService(collection)`).
+///
+/// # Errors
+///
+/// Returns the first error, after stopping all of them.
+pub async fn stop_processors<'a>(
+    processors: impl IntoIterator<Item = &'a SharedProcessor>,
+) -> CamelResult<()> {
+    let mut first = None;
+    for p in processors {
+        if let Err(e) = p.stop_processor().await {
+            first.get_or_insert(e);
+        }
+    }
+    first.map_or(Ok(()), Err)
+}
 
 /// A processor from a synchronous closure.
 pub struct FnProcessor<F>(F);

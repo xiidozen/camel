@@ -18,7 +18,9 @@ use camel_api::exchange_constants::{
     EXCEPTION_CAUGHT, EXCEPTION_HANDLED, FAILURE_ENDPOINT, FAILURE_ROUTE_ID, REDELIVERED,
     REDELIVERY_COUNTER, REDELIVERY_DELAY, REDELIVERY_MAX_COUNTER, TO_ENDPOINT,
 };
-use camel_api::processor::{BoxFuture, Processor, SharedPredicate, SharedProcessor};
+use camel_api::processor::{
+    start_processors, stop_processors, BoxFuture, Processor, SharedPredicate, SharedProcessor,
+};
 use exception_policy::{find_exception_policy, ExceptionPolicy};
 use redelivery_policy::RedeliveryPolicy;
 use std::sync::Arc;
@@ -524,7 +526,41 @@ impl RedeliveryErrorHandler {
     }
 }
 
+impl RedeliveryErrorHandler {
+    /// The output and the processors of the configuration (dead letter, onException, ...).
+    fn processors(&self) -> Vec<SharedProcessor> {
+        let c = &self.config;
+        let mut list = vec![self.output.clone()];
+        list.extend(c.dead_letter.as_ref().map(|d| d.processor.clone()));
+        list.extend(
+            c.on_redelivery
+                .iter()
+                .chain(&c.on_exception_occurred)
+                .chain(&c.on_prepare_failure)
+                .cloned(),
+        );
+        for policy in &c.exception_policies {
+            list.extend(
+                policy
+                    .processor
+                    .iter()
+                    .chain(&policy.on_redelivery)
+                    .cloned(),
+            );
+        }
+        list
+    }
+}
+
 impl Processor for RedeliveryErrorHandler {
+    fn start_processor(&self) -> BoxFuture<'_, CamelResult<()>> {
+        Box::pin(async move { start_processors(&self.processors()).await })
+    }
+
+    fn stop_processor(&self) -> BoxFuture<'_, CamelResult<()>> {
+        Box::pin(async move { stop_processors(&self.processors()).await })
+    }
+
     fn process<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>> {
         Box::pin(async move {
             let mut task = Task::new(&self.config, exchange);

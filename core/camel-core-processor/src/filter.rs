@@ -3,7 +3,9 @@
 use crate::process_and_capture;
 use camel_api::error::CamelResult;
 use camel_api::exchange::Exchange;
-use camel_api::processor::{BoxFuture, Processor, SharedPredicate, SharedProcessor};
+use camel_api::processor::{
+    start_processors, stop_processors, BoxFuture, Processor, SharedPredicate, SharedProcessor,
+};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Routes the exchange to the processor only if the predicate matches.
@@ -57,6 +59,14 @@ impl FilterProcessor {
 }
 
 impl Processor for FilterProcessor {
+    fn start_processor(&self) -> BoxFuture<'_, CamelResult<()>> {
+        Box::pin(async move { start_processors([&self.processor]).await })
+    }
+
+    fn stop_processor(&self) -> BoxFuture<'_, CamelResult<()>> {
+        Box::pin(async move { stop_processors([&self.processor]).await })
+    }
+
     fn process<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>> {
         Box::pin(async move {
             let matches = match self.matches(exchange) {

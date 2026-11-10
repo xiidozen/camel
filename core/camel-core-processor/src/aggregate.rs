@@ -17,8 +17,9 @@ use camel_api::spi::aggregation_repository::AggregationRepository;
 use camel_support::exchange_helper::{create_correlated_copy, prepare_out_to_in};
 use camel_util::value::Value;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::{Arc, Mutex, Once};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tokio::task::JoinHandle;
 
 /// Uses the latest exchange, propagating the errors and failures of the previous ones (Java
 /// `UseLatestAggregationStrategy`).
@@ -218,6 +219,10 @@ pub struct AggregateOptions {
     pub discard_on_aggregation_failure: bool,
     /// Completes all groups when a new correlation group starts.
     pub completion_on_new_correlation_group: bool,
+    /// Completes all groups when the route stops.
+    pub force_completion_on_stop: bool,
+    /// Completes all groups when the route stops (Java: also waits for them to complete).
+    pub complete_all_on_stop: bool,
     /// The repository (default in memory).
     pub repository: Option<Arc<dyn AggregationRepository>>,
 }
@@ -238,6 +243,8 @@ impl Default for AggregateOptions {
             discard_on_completion_timeout: false,
             discard_on_aggregation_failure: false,
             completion_on_new_correlation_group: false,
+            force_completion_on_stop: false,
+            complete_all_on_stop: false,
             repository: None,
         }
     }
@@ -277,7 +284,8 @@ struct Inner {
     options: AggregateOptions,
     repository: Arc<dyn AggregationRepository>,
     state: Mutex<State>,
-    background: Once,
+    /// The timeout checker and interval tasks, `None` until started.
+    background: Mutex<Option<Vec<JoinHandle<()>>>>,
 }
 
 /// Aggregates the exchanges with the same correlation key into one exchange, sent to the
@@ -342,7 +350,7 @@ impl AggregateProcessor {
                     timeouts: HashMap::new(),
                     closed,
                 }),
-                background: Once::new(),
+                background: Mutex::new(None),
             }),
         })
     }
@@ -383,40 +391,56 @@ fn size_of(exchange: &Exchange) -> i64 {
 }
 
 impl Inner {
-    /// Starts the timeout checker and the interval task (once, on the first exchange).
+    /// Starts the timeout checker and the interval task, unless started (when the route
+    /// starts, or on the first exchange outside a route).
     fn start_background(self: &Arc<Self>) {
         if tokio::runtime::Handle::try_current().is_err() {
             return;
         }
-        self.background.call_once(|| {
+        let mut background = self.background.lock().unwrap();
+        if background.is_some() {
+            return;
+        }
+        let mut handles = Vec::new();
+        {
             let has_timeout = self.options.completion_timeout > 0
                 || self.options.completion_timeout_expression.is_some();
             if has_timeout {
                 let weak = Arc::downgrade(self);
                 let every =
                     Duration::from_millis(self.options.completion_timeout_checker_interval.max(1));
-                tokio::spawn(async move {
+                handles.push(tokio::spawn(async move {
                     loop {
                         tokio::time::sleep(every).await;
                         let Some(inner) = weak.upgrade() else { break };
                         let list = inner.complete_timed_out();
                         inner.submit_all(list).await;
                     }
-                });
+                }));
             }
             if self.options.completion_interval > 0 {
                 let weak = Arc::downgrade(self);
                 let every = Duration::from_millis(self.options.completion_interval as u64);
-                tokio::spawn(async move {
+                handles.push(tokio::spawn(async move {
                     loop {
                         tokio::time::sleep(every).await;
                         let Some(inner) = weak.upgrade() else { break };
                         let list = inner.complete_all(completed_by::INTERVAL);
                         inner.submit_all(list).await;
                     }
-                });
+                }));
             }
-        });
+        }
+        *background = Some(handles);
+    }
+
+    /// Stops the background tasks.
+    fn stop_background(&self) {
+        if let Some(handles) = self.background.lock().unwrap().take() {
+            for h in handles {
+                h.abort();
+            }
+        }
     }
 
     /// Completes the groups whose timeout has passed (Java `AggregationTimeoutMap.onEviction`).
@@ -708,6 +732,36 @@ impl Inner {
 }
 
 impl Processor for AggregateProcessor {
+    fn start_processor(&self) -> BoxFuture<'_, CamelResult<()>> {
+        Box::pin(async move {
+            self.inner.processor.start_processor().await?;
+            self.inner.start_background();
+            Ok(())
+        })
+    }
+
+    /// Completes all groups if `force_completion_on_stop` or `complete_all_on_stop` (Java
+    /// `prepareShutdown`), then stops the background tasks and the outputs.
+    fn stop_processor(&self) -> BoxFuture<'_, CamelResult<()>> {
+        Box::pin(async move {
+            let inner = &self.inner;
+            if inner.options.force_completion_on_stop || inner.options.complete_all_on_stop {
+                let list = inner.complete_all(completed_by::FORCE);
+                inner.submit_all(list).await;
+            }
+            inner.stop_background();
+            {
+                let mut state = inner.state.lock().unwrap();
+                state.timeouts.clear();
+                if let Some(c) = state.closed.as_mut() {
+                    c.keys.clear();
+                    c.set.clear();
+                }
+            }
+            inner.processor.stop_processor().await
+        })
+    }
+
     fn process<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>> {
         Box::pin(async move {
             let inner = &self.inner;

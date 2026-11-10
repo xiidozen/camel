@@ -11,7 +11,8 @@ use camel_api::exchange_constants::{
     CORRELATION_ID, EXCEPTION_CAUGHT, SPLIT_COMPLETE, SPLIT_INDEX, SPLIT_SIZE,
 };
 use camel_api::processor::{
-    BoxFuture, Processor, SharedAggregationStrategy, SharedExpression, SharedProcessor,
+    start_processors, stop_processors, BoxFuture, Processor, SharedAggregationStrategy,
+    SharedExpression, SharedProcessor,
 };
 use camel_support::exchange_helper::{copy_results, create_correlated_copy};
 use camel_util::value::Value;
@@ -103,6 +104,14 @@ impl MulticastProcessor {
 }
 
 impl Processor for MulticastProcessor {
+    fn start_processor(&self) -> BoxFuture<'_, CamelResult<()>> {
+        Box::pin(async move { start_processors(&self.processors).await })
+    }
+
+    fn stop_processor(&self) -> BoxFuture<'_, CamelResult<()>> {
+        Box::pin(async move { stop_processors(&self.processors).await })
+    }
+
     fn process<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>> {
         Box::pin(async move {
             let pairs: Vec<(SharedProcessor, Exchange)> = self
@@ -182,6 +191,14 @@ impl SplitProcessor {
 }
 
 impl Processor for SplitProcessor {
+    fn start_processor(&self) -> BoxFuture<'_, CamelResult<()>> {
+        Box::pin(async move { start_processors([&self.processor]).await })
+    }
+
+    fn stop_processor(&self) -> BoxFuture<'_, CamelResult<()>> {
+        Box::pin(async move { stop_processors([&self.processor]).await })
+    }
+
     fn process<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>> {
         Box::pin(async move {
             let value = match self.expression.evaluate(exchange) {

@@ -5,7 +5,9 @@ use camel_api::endpoint::{SharedConsumer, SharedEndpoint};
 use camel_api::enums::ServiceStatus;
 use camel_api::error::{CamelError, CamelResult};
 use camel_api::exchange::Exchange;
-use camel_api::processor::{BoxFuture, Processor, SharedProcessor};
+use camel_api::processor::{
+    start_processors, stop_processors, BoxFuture, Processor, SharedProcessor,
+};
 use camel_api::route::Route;
 use camel_api::service::ServiceState;
 use camel_api::service::{Service, StatefulService, SuspendableService};
@@ -89,6 +91,14 @@ struct RouteProcessor {
 }
 
 impl Processor for RouteProcessor {
+    fn start_processor(&self) -> BoxFuture<'_, CamelResult<()>> {
+        Box::pin(async move { start_processors([&self.processor]).await })
+    }
+
+    fn stop_processor(&self) -> BoxFuture<'_, CamelResult<()>> {
+        Box::pin(async move { stop_processors([&self.processor]).await })
+    }
+
     fn process<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>> {
         if exchange.from_route_id().is_none() {
             exchange.set_from_route_id(self.route_id.clone());
@@ -139,6 +149,9 @@ impl DefaultRoute {
     }
 
     async fn do_start(&self) -> CamelResult<()> {
+        // the processors first, so the consumer routes into started processors (Java
+        // RouteService.doWarmUp)
+        self.processor.start_processor().await?;
         let consumer = self
             .endpoint
             .clone()
@@ -152,10 +165,13 @@ impl DefaultRoute {
     async fn do_stop(&self) -> CamelResult<()> {
         let consumer = self.consumer.lock().unwrap().take();
         *self.started_at.lock().unwrap() = None;
-        match consumer {
+        let stopped = match consumer {
             Some(c) => c.stop().await,
             None => Ok(()),
-        }
+        };
+        // then the processors (which may still complete pending work, such as aggregations)
+        let processors = self.processor.stop_processor().await;
+        stopped.and(processors)
     }
 }
 

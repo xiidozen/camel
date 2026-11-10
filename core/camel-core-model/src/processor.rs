@@ -5,8 +5,10 @@ use crate::expression::ExpressionDefinition;
 use camel_api::enums::{ExchangePattern, LoggingLevel};
 use camel_api::error::{CamelError, ErrorType};
 use camel_api::processor::{SharedAggregationStrategy, SharedProcessor};
+use camel_api::spi::aggregation_repository::AggregationRepository;
 use camel_util::uri_support::sanitize_uri;
 use std::fmt;
+use std::sync::Arc;
 
 /// A step of a route: what it does ([`Eip`]) and its common options.
 #[derive(Clone, Debug)]
@@ -107,6 +109,16 @@ impl fmt::Debug for AggregationRef {
     }
 }
 
+/// An aggregation repository given in Rust code.
+#[derive(Clone)]
+pub struct RepositoryRef(pub Arc<dyn AggregationRepository>);
+
+impl fmt::Debug for RepositoryRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("AggregationRepository")
+    }
+}
+
 /// The aggregate EIP (Java `AggregateDefinition`); the options left `None` use the defaults
 /// of the aggregator.
 #[derive(Debug, Clone)]
@@ -143,6 +155,12 @@ pub struct AggregateDefinition {
     pub discard_on_aggregation_failure: bool,
     /// Completes all groups when a new group starts.
     pub completion_on_new_correlation_group: bool,
+    /// Completes all groups when the route stops.
+    pub force_completion_on_stop: bool,
+    /// Completes all groups when the route stops.
+    pub complete_all_on_stop: bool,
+    /// The repository of the groups (default in memory).
+    pub repository: Option<RepositoryRef>,
 }
 
 impl AggregateDefinition {
@@ -169,6 +187,9 @@ impl AggregateDefinition {
             discard_on_completion_timeout: false,
             discard_on_aggregation_failure: false,
             completion_on_new_correlation_group: false,
+            force_completion_on_stop: false,
+            complete_all_on_stop: false,
+            repository: None,
         }
     }
 }
