@@ -70,6 +70,10 @@ Crates live **in the directory of the Maven module they replace** (`core/camel-a
   **vertical slices**: each interface together with the engine/support code that implements it,
   so no trait is ported without a user and a test.
 - `core/camel-support`: **in progress** (registry, header filter strategy, pattern helper).
+- `core/camel-core-processor`: **in progress** — pipeline, filter, choice, message translators,
+  stop, throw exception, log and send processors (`tests/processors.rs`). Next: the engine
+  (`camel-base-engine`: DefaultCamelContext, route startup), then the `direct`/`mock`/`log`
+  components and the Rust route DSL.
 - **Next milestone:** a running engine — `camel-base-engine` (DefaultCamelContext, routes), core
   EIP processors, the Rust route DSL, and the `direct`, `mock` and `log` components, so a route
   written in Rust runs end to end. Java files

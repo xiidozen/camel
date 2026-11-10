@@ -1,0 +1,16 @@
+[package]
+name = "camel-core-processor"
+description = "Camel :: Core Processor — the EIP processors of the routing engine (port of core/camel-core-processor)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+camel-api = { workspace = true }
+camel-util = { workspace = true }
+log = "0.4"
+
+[dev-dependencies]
+camel-util = { workspace = true }

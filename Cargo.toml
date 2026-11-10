@@ -4,6 +4,7 @@ members = [
     "core/camel-util",
     "core/camel-api",
     "core/camel-support",
+    "core/camel-core-processor",
 ]
 
 [workspace.package]
@@ -17,3 +18,4 @@ rust-version = "1.80"
 camel-util = { path = "core/camel-util" }
 camel-api = { path = "core/camel-api" }
 camel-support = { path = "core/camel-support" }
+camel-core-processor = { path = "core/camel-core-processor" }

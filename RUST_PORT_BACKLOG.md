@@ -72,7 +72,7 @@ progress and what is still to do. Update it in the same commit as each port.
 | `core/camel-core-engine` | 11 | 0 | todo | |
 | `core/camel-core-languages` | 90 | 0 | todo | |
 | `core/camel-core-model` | 402 | 5 | todo | |
-| `core/camel-core-processor` | 170 | 0 | todo | |
+| `core/camel-core-processor` | 170 | 0 | wip | Done (Java removed): `Pipeline` + `PipelineHelper`, `FilterProcessor`, `ChoiceProcessor`, `SetBody`/`SetHeader`/`SetProperty`/`SetVariable`/`RemoveHeader`/`RemoveHeaders`/`Stop` processors. Partial (Java kept until complete): `SendProcessor` (no ProducerCache/event notifier yet), `LogProcessor` (no masking/log listeners), `TransformProcessor` (in `SetBodyProcessor`), `ThrowExceptionProcessor` (takes a ready error; no class + message expression). Errors are carried on the exchange as in Java (`process_and_capture`). |
 | `core/camel-core-reifier` | 171 | 0 | todo | |
 | `core/camel-core-xml` | 32 | 1 | todo | |
 | `core/camel-health` | 12 | 0 | todo | |
