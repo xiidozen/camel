@@ -91,6 +91,8 @@ java_enum! {
     }
 }
 
+// the enum is declared by a macro, so `#[derive(Default)]` cannot be used
+#[allow(clippy::derivable_impls)]
 impl Default for ExchangePattern {
     fn default() -> Self {
         ExchangePattern::InOnly
