@@ -62,7 +62,12 @@ Crates live **in the directory of the Maven module they replace** (`core/camel-a
   `PackageHelper`, the `java21`/`java25` multi-release sources and their tests.
 - `core/camel-core/src/test/java/org/apache/camel/util/ObjectHelperTest.java` is kept on
   purpose: its `camel-util` parts are ported, the `camel-support` `ObjectHelper` parts are not.
-- `core/camel-api`: **in progress** — see its row in the backlog for what is done.
+- `core/camel-api`: **in progress** — done: enums, `CamelError`/`ErrorKind`, Exchange constants,
+  `Message`, `Exchange`, `convert::FromValue`, async `Processor`, `Expression`, `Predicate`,
+  `AggregationStrategy`, minimal `CamelContext`, `spi::uuid`, `Service` lifecycle + `ServiceState`,
+  `Endpoint`/`Component`/`Producer`/`Consumer`/`PollingConsumer`. Next: `Route`, `TypeConverter`,
+  `Registry`, the rest of `spi/` (276 files), then the remaining top-level interfaces. Java files
+  still present in `core/camel-api/src/main/java` are the ones not ported yet.
 - Everything else in the repository: **not started** (status `todo` in the backlog).
 
 ## 5. Order of work
