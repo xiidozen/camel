@@ -33,6 +33,7 @@
 #![deny(rustdoc::broken_intra_doc_links)]
 
 pub mod builder;
+pub mod errorhandler;
 pub mod expression;
 pub mod processor;
 pub mod route;

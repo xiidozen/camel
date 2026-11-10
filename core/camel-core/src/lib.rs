@@ -56,6 +56,7 @@ pub mod prelude {
     pub use camel_api::error::{CamelError, CamelResult, ErrorKind};
     pub use camel_api::exchange::Exchange;
     pub use camel_api::processor::{Expression, Predicate, Processor};
+    pub use camel_api::spi::registry::Registry;
     pub use camel_base_engine::context::DefaultCamelContext;
     pub use camel_base_engine::producer_template::ProducerTemplate;
     pub use camel_core_engine::ModelCamelContext;

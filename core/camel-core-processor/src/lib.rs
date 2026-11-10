@@ -13,6 +13,7 @@
 #![deny(rustdoc::broken_intra_doc_links)]
 
 pub mod choice;
+pub mod errorhandler;
 pub mod filter;
 pub mod log_processor;
 pub mod pipeline;

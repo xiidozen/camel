@@ -36,6 +36,11 @@
 //! assert_eq!("Route[From[direct:b] -> [SetHeader[foo, 123], to[direct:a]]]", defs[1].to_string());
 //! ```
 
+mod errorhandler;
+
+pub use errorhandler::*;
+
+use crate::errorhandler::{ErrorHandlerDefinition, OnExceptionDefinition};
 use crate::expression::ExpressionDefinition;
 use crate::processor::{CatchDefinition, Eip, ProcessRef, ProcessorDefinition, WhenDefinition};
 use crate::route::RouteDefinition;
@@ -477,6 +482,18 @@ impl RouteDsl {
         self
     }
 
+    /// Sets the error handler of the route (Java `.errorHandler(..)` on the route).
+    pub fn error_handler(mut self, error_handler: impl Into<ErrorHandlerDefinition>) -> Self {
+        self.def.error_handler = Some(error_handler.into());
+        self
+    }
+
+    /// Adds an `onException` clause scoped to the route.
+    pub fn on_exception(mut self, clause: impl Into<OnExceptionDefinition>) -> Self {
+        self.def.on_exceptions.push(clause.into());
+        self
+    }
+
     /// Sets a route property.
     pub fn route_property(mut self, key: &str, value: impl Into<camel_util::value::Value>) -> Self {
         self.def.properties.insert(key.to_string(), value.into());
@@ -506,10 +523,13 @@ impl From<RouteDsl> for RouteDefinition {
     }
 }
 
-/// The routes collected by a [`RouteBuilder`].
+/// The routes collected by a [`RouteBuilder`], with the error handler and `onException`
+/// clauses that apply to all of them.
 #[derive(Default)]
 pub struct Routes {
     definitions: Vec<RouteDefinition>,
+    error_handler: Option<ErrorHandlerDefinition>,
+    on_exceptions: Vec<OnExceptionDefinition>,
 }
 
 impl Routes {
@@ -519,14 +539,38 @@ impl Routes {
         self
     }
 
+    /// Sets the error handler of the routes of this builder (Java `errorHandler(..)` in
+    /// `configure()`).
+    pub fn error_handler(&mut self, error_handler: impl Into<ErrorHandlerDefinition>) -> &mut Self {
+        self.error_handler = Some(error_handler.into());
+        self
+    }
+
+    /// Adds an `onException` clause for the routes of this builder.
+    pub fn on_exception(&mut self, clause: impl Into<OnExceptionDefinition>) -> &mut Self {
+        self.on_exceptions.push(clause.into());
+        self
+    }
+
     /// The route definitions.
     pub fn definitions(&self) -> &[RouteDefinition] {
         &self.definitions
     }
 
-    /// Takes the route definitions.
+    /// Takes the route definitions, with the error handler and `onException` clauses of the
+    /// builder applied.
     pub fn into_definitions(self) -> Vec<RouteDefinition> {
+        let (error_handler, on_exceptions) = (self.error_handler, self.on_exceptions);
         self.definitions
+            .into_iter()
+            .map(|mut d| {
+                if d.error_handler.is_none() {
+                    d.error_handler = error_handler.clone();
+                }
+                d.builder_on_exceptions = on_exceptions.clone();
+                d
+            })
+            .collect()
     }
 }
 

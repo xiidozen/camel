@@ -110,6 +110,7 @@ dependencies = [
  "camel-api",
  "camel-util",
  "log",
+ "tokio",
 ]
 
 [[package]]

@@ -64,6 +64,9 @@ pub struct Exchange {
     external_redelivered: bool,
     interrupted: bool,
     redelivery_exhausted: bool,
+    failure_handled: bool,
+    redelivery_counter: i32,
+    redelivery_max_counter: i32,
     error_handler_handled: Option<bool>,
     stream_cache_disabled: bool,
     notify_event: bool,
@@ -129,6 +132,9 @@ impl Exchange {
             external_redelivered: false,
             interrupted: false,
             redelivery_exhausted: false,
+            failure_handled: false,
+            redelivery_counter: 0,
+            redelivery_max_counter: 0,
             error_handler_handled: None,
             stream_cache_disabled: false,
             notify_event: false,
@@ -529,6 +535,37 @@ impl Exchange {
     /// Sets whether the redelivery attempts are exhausted.
     pub fn set_redelivery_exhausted(&mut self, exhausted: bool) {
         self.redelivery_exhausted = exhausted;
+    }
+
+    /// Whether the failure was handled by a failure processor (Java
+    /// `ExchangeExtension.isFailureHandled`).
+    pub fn is_failure_handled(&self) -> bool {
+        self.failure_handled
+    }
+
+    /// Sets whether the failure was handled by a failure processor.
+    pub fn set_failure_handled(&mut self, handled: bool) {
+        self.failure_handled = handled;
+    }
+
+    /// The redelivery attempt (0 when not redelivered, -1 after the error handler finished).
+    pub fn redelivery_counter(&self) -> i32 {
+        self.redelivery_counter
+    }
+
+    /// Sets the redelivery attempt.
+    pub fn set_redelivery_counter(&mut self, counter: i32) {
+        self.redelivery_counter = counter;
+    }
+
+    /// The maximum number of redelivery attempts (0 when unknown).
+    pub fn redelivery_max_counter(&self) -> i32 {
+        self.redelivery_max_counter
+    }
+
+    /// Sets the maximum number of redelivery attempts.
+    pub fn set_redelivery_max_counter(&mut self, counter: i32) {
+        self.redelivery_max_counter = counter;
     }
 
     /// Whether an error handler handled the error (`None` if no error handler was involved).

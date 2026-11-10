@@ -1,5 +1,6 @@
 //! Routes of the model (Java `RouteDefinition` and `FromDefinition`).
 
+use crate::errorhandler::{ErrorHandlerDefinition, OnExceptionDefinition};
 use crate::processor::{ProcessorDefinition, Steps};
 use camel_util::uri_support::sanitize_uri;
 use camel_util::value::ValueMap;
@@ -26,6 +27,13 @@ pub struct RouteDefinition {
     pub source_location: Option<String>,
     /// The route properties.
     pub properties: ValueMap,
+    /// The error handler of the route (`None`: the one of the route builder, else the default
+    /// error handler).
+    pub error_handler: Option<ErrorHandlerDefinition>,
+    /// The `onException` clauses of the route.
+    pub on_exceptions: Vec<OnExceptionDefinition>,
+    /// The `onException` clauses of the route builder (they apply to all its routes).
+    pub builder_on_exceptions: Vec<OnExceptionDefinition>,
 }
 
 impl RouteDefinition {
@@ -41,6 +49,9 @@ impl RouteDefinition {
             description: None,
             source_location: None,
             properties: ValueMap::new(),
+            error_handler: None,
+            on_exceptions: Vec::new(),
+            builder_on_exceptions: Vec::new(),
         }
     }
 }

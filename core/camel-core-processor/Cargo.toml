@@ -11,6 +11,7 @@ rust-version.workspace = true
 camel-api = { workspace = true }
 camel-util = { workspace = true }
 log = "0.4"
+tokio = { version = "1", features = ["time"] }
 
 [dev-dependencies]
 camel-util = { workspace = true }

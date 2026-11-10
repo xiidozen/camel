@@ -88,8 +88,10 @@ Crates live **in the directory of the Maven module they replace** (`core/camel-a
 - `core/camel-core-languages`: **in progress** — the simple language parsers and core functions
   (see the backlog row for what is pending), and the constant/header/exchangeProperty/variable
   languages; registered by `camel_core::default_context()`.
-- **Next:** the rest of the simple functions (port `SimpleTest` and `SimpleOperatorTest`), the
-  `log` component, error handling (`DefaultErrorHandler`, `onException`, `doTry`), then more
+- Error handling: `doTry`, the default error handler, the dead letter channel and `onException`
+  are ported (`camel_core_processor::errorhandler`; the reifier wraps each step as Java channels do).
+- **Next:** the `log` component, the unit of work (useOriginalMessage, onCompletion), the rest of
+  the simple functions (port `SimpleTest` and `SimpleOperatorTest`), error handling (`DefaultErrorHandler`, `onException`, `doTry`), then more
   EIPs (split, aggregate, multicast, recipient list, wire tap, ...) with their camel-core tests.
 - Java files still present in `core/camel-api/src/main/java` are the ones not ported yet.
 - Everything else in the repository: **not started** (status `todo` in the backlog).
