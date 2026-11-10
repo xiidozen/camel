@@ -6,6 +6,10 @@ members = [
     "core/camel-support",
     "core/camel-core-processor",
     "core/camel-base-engine",
+    "core/camel-core-model",
+    "core/camel-core-reifier",
+    "core/camel-core-engine",
+    "core/camel-core",
     "components/camel-direct",
     "components/camel-mock",
 ]
@@ -23,5 +27,9 @@ camel-api = { path = "core/camel-api" }
 camel-support = { path = "core/camel-support" }
 camel-core-processor = { path = "core/camel-core-processor" }
 camel-base-engine = { path = "core/camel-base-engine" }
+camel-core-model = { path = "core/camel-core-model" }
+camel-core-reifier = { path = "core/camel-core-reifier" }
+camel-core-engine = { path = "core/camel-core-engine" }
+camel-core = { path = "core/camel-core" }
 camel-direct = { path = "components/camel-direct" }
 camel-mock = { path = "components/camel-mock" }

@@ -39,12 +39,64 @@ dependencies = [
 ]
 
 [[package]]
+name = "camel-core"
+version = "4.23.0"
+dependencies = [
+ "camel-api",
+ "camel-base-engine",
+ "camel-core-engine",
+ "camel-core-model",
+ "camel-core-processor",
+ "camel-core-reifier",
+ "camel-direct",
+ "camel-mock",
+ "camel-support",
+ "camel-util",
+ "tokio",
+]
+
+[[package]]
+name = "camel-core-engine"
+version = "4.23.0"
+dependencies = [
+ "camel-api",
+ "camel-base-engine",
+ "camel-core-model",
+ "camel-core-reifier",
+ "camel-direct",
+ "camel-mock",
+ "camel-support",
+ "camel-util",
+ "tokio",
+]
+
+[[package]]
+name = "camel-core-model"
+version = "4.23.0"
+dependencies = [
+ "camel-api",
+ "camel-support",
+ "camel-util",
+]
+
+[[package]]
 name = "camel-core-processor"
 version = "4.23.0"
 dependencies = [
  "camel-api",
  "camel-util",
  "log",
+]
+
+[[package]]
+name = "camel-core-reifier"
+version = "4.23.0"
+dependencies = [
+ "camel-api",
+ "camel-core-model",
+ "camel-core-processor",
+ "camel-support",
+ "camel-util",
 ]
 
 [[package]]

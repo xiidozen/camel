@@ -5,7 +5,28 @@
 > here; build and test the Cargo workspace with `./etc/rust/check.sh`. Progress is tracked in
 > [`RUST_PORT_BACKLOG.md`](RUST_PORT_BACKLOG.md), and [`RUST_PORT_HANDOFF.md`](RUST_PORT_HANDOFF.md)
 > explains how to continue the work. In the Rust version, routes are written in **Rust, YAML or XML**
-> (the Java DSL is replaced by a Rust route DSL).
+> (the Java DSL is replaced by a Rust route DSL):
+>
+> ```rust
+> use camel_core::prelude::*;
+>
+> # async fn run() -> CamelResult<()> {
+> let context = camel_core::default_context();
+> context
+>     .add_routes(|r: &mut Routes| {
+>         r.add(
+>             from("direct:orders")
+>                 .choice(|c| {
+>                     c.when(header("priority").is_equal_to("high"), |w| w.to("direct:express"))
+>                         .otherwise(|o| o.to("direct:standard"))
+>                 }),
+>         );
+>     })
+>     .await?;
+> context.start().await?;
+> # Ok(())
+> # }
+> ```
 
 [![Maven Central](https://img.shields.io/maven-central/v/org.apache.camel/apache-camel.svg?label=Maven%20Central)](https://central.sonatype.com/artifact/org.apache.camel/apache-camel)
 [![Javadocs](https://www.javadoc.io/badge/org.apache.camel/apache-camel.svg?color=brightgreen)](https://www.javadoc.io/doc/org.apache.camel/camel-api)

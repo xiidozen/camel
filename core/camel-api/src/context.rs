@@ -5,6 +5,7 @@
 
 use crate::endpoint::SharedEndpoint;
 use crate::error::{CamelError, CamelResult};
+use crate::spi::language::Language;
 use crate::spi::registry::Registry;
 use crate::spi::uuid::{DefaultUuidGenerator, UuidGenerator};
 use std::any::Any;
@@ -34,6 +35,17 @@ pub trait CamelContext: Send + Sync {
     /// components (such as [`StandaloneContext`]) always fails.
     fn endpoint(&self, uri: &str) -> CamelResult<SharedEndpoint> {
         Err(CamelError::no_such_endpoint(uri))
+    }
+
+    /// Resolves the language by name (such as `simple` or `constant`), creating it on first use
+    /// (Java `resolveLanguage`).
+    ///
+    /// # Errors
+    ///
+    /// Returns a `NoSuchLanguageException` if there is no such language. A context without
+    /// languages (such as [`StandaloneContext`]) always fails.
+    fn resolve_language(&self, name: &str) -> CamelResult<Arc<dyn Language>> {
+        Err(CamelError::no_such_language(name))
     }
 
     /// The bean registry, if the context has one.

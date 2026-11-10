@@ -1,0 +1,23 @@
+[package]
+name = "camel-core"
+description = "Camel :: Core — the Camel framework with its core components, and the camel-core tests (port of core/camel-core)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+camel-api = { workspace = true }
+camel-util = { workspace = true }
+camel-support = { workspace = true }
+camel-core-processor = { workspace = true }
+camel-base-engine = { workspace = true }
+camel-core-model = { workspace = true }
+camel-core-reifier = { workspace = true }
+camel-core-engine = { workspace = true }
+camel-direct = { workspace = true }
+camel-mock = { workspace = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros"] }

@@ -182,7 +182,7 @@ impl ErrorKind {
 /// let e = CamelError::no_such_endpoint("kafak:topic");
 /// assert!(e.is(ErrorKind::RuntimeCamel));
 /// assert_eq!(
-///     "No endpoint could be found for: kafak:topic, please check your classpath contains the needed Camel component jar (not a built-in Camel component; did you mean 'kafka'?).",
+///     "No endpoint could be found for: kafak:topic, please check the needed Camel component is added to the CamelContext (not a built-in Camel component; did you mean 'kafka'?).",
 ///     e.to_string()
 /// );
 /// ```
@@ -568,6 +568,30 @@ impl CamelError {
         .with_detail(route_id)
     }
 
+    /// A `FailedToCreateRouteException` for the failing node of the route: `Failed to create
+    /// route: id at: >>> node <<< in route: route... because: cause`.
+    pub fn failed_to_create_route_at(
+        route_id: &str,
+        location: Option<&str>,
+        route: &str,
+        at: &str,
+        cause: impl Into<BoxError>,
+    ) -> Self {
+        let cause: BoxError = cause.into();
+        let loc = location
+            .map(|l| format!(" (source: {l})"))
+            .unwrap_or_default();
+        let route = sanitize_uri(&camel_util::string_helper::limit_length_with_suffix(
+            route,
+            60,
+            Some("..."),
+        ));
+        let msg = format!(
+            "Failed to create route: {route_id}{loc} at: >>> {at} <<< in route: {route} because: {cause}"
+        );
+        Self::with_cause(K::FailedToCreateRoute, msg, cause).with_detail(route_id)
+    }
+
     /// A `FailedToStartRouteException` with the cause.
     pub fn failed_to_start_route_cause(
         route_id: &str,
@@ -638,7 +662,7 @@ impl CamelError {
     pub fn no_such_endpoint(uri: &str) -> Self {
         let sanitized = sanitize_uri(uri);
         let msg = format!(
-            "No endpoint could be found for: {sanitized}, please check your classpath contains the needed Camel component jar{}.",
+            "No endpoint could be found for: {sanitized}, please check the needed Camel component is added to the CamelContext{}.",
             component_hint(&endpoint_scheme(uri))
         );
         Self::new(K::NoSuchEndpoint, msg).with_detail(sanitized)
@@ -934,7 +958,7 @@ mod tests {
             CamelError::expression_illegal_syntax("${foo").to_string()
         );
         assert_eq!(
-            "No endpoint could be found for: ftp://joe:xxxxxx@host, please check your classpath contains the needed Camel component jar (the ftp component is in camel-ftp; add camel-ftp to the dependencies).",
+            "No endpoint could be found for: ftp://joe:xxxxxx@host, please check the needed Camel component is added to the CamelContext (the ftp component is in camel-ftp; add camel-ftp to the dependencies).",
             CamelError::no_such_endpoint("ftp://joe:secret@host").to_string()
         );
         assert_eq!(

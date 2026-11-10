@@ -1,0 +1,13 @@
+[package]
+name = "camel-core-model"
+description = "Camel :: Core Model — the route model and the Rust route DSL (port of core/camel-core-model)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+camel-api = { workspace = true }
+camel-util = { workspace = true }
+camel-support = { workspace = true }

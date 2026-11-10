@@ -48,17 +48,21 @@ In the route below, we use the direct component to link the two routes together:
 
 [tabs]
 ====
-Java::
+Rust::
 +
-[source,java]
+[source,rust]
 ----
-from("activemq:queue:order.in")
-    .to("bean:orderServer?method=validate")
-    .to("direct:processOrder");
+routes.add(
+    from("activemq:queue:order.in")
+        .to("bean:orderServer?method=validate")
+        .to("direct:processOrder"),
+);
 
-from("direct:processOrder")
-    .to("bean:orderService?method=process")
-    .to("activemq:queue:order.out");
+routes.add(
+    from("direct:processOrder")
+        .to("bean:orderService?method=process")
+        .to("activemq:queue:order.out"),
+);
 ----
 
 XML::

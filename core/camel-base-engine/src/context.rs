@@ -8,6 +8,7 @@ use camel_api::enums::ServiceStatus;
 use camel_api::error::{CamelError, CamelResult, ErrorKind};
 use camel_api::route::Route;
 use camel_api::service::{ServiceState, StatefulService, SuspendableService};
+use camel_api::spi::language::Language;
 use camel_api::spi::registry::{lookup_bean, Registry};
 use camel_api::spi::uuid::{DefaultUuidGenerator, UuidGenerator};
 use camel_support::component_support;
@@ -21,6 +22,9 @@ use std::sync::{Arc, Mutex, RwLock, Weak};
 
 /// Creates a component for a uri scheme on first use.
 pub type ComponentFactory = Arc<dyn Fn() -> SharedComponent + Send + Sync>;
+
+/// Creates a language on first use.
+pub type LanguageFactory = Arc<dyn Fn() -> Arc<dyn Language> + Send + Sync>;
 
 static CONTEXT_COUNTER: AtomicU32 = AtomicU32::new(0);
 
@@ -41,6 +45,8 @@ pub struct DefaultCamelContext {
     components: RwLock<IndexMap<String, SharedComponent>>,
     started_components: Mutex<HashSet<String>>,
     component_factories: RwLock<HashMap<String, ComponentFactory>>,
+    languages: RwLock<HashMap<String, Arc<dyn Language>>>,
+    language_factories: RwLock<HashMap<String, LanguageFactory>>,
     endpoints: RwLock<IndexMap<String, SharedEndpoint>>,
     routes: RwLock<Vec<Arc<DefaultRoute>>>,
     route_counter: AtomicU32,
@@ -65,6 +71,8 @@ impl DefaultCamelContext {
             components: RwLock::new(IndexMap::new()),
             started_components: Mutex::new(HashSet::new()),
             component_factories: RwLock::new(HashMap::new()),
+            languages: RwLock::new(HashMap::new()),
+            language_factories: RwLock::new(HashMap::new()),
             endpoints: RwLock::new(IndexMap::new()),
             routes: RwLock::new(Vec::new()),
             route_counter: AtomicU32::new(0),
@@ -118,6 +126,29 @@ impl DefaultCamelContext {
             .write()
             .unwrap()
             .insert(name.to_string(), factory);
+    }
+
+    /// Adds the language with the name (replacing an existing one).
+    pub fn add_language(&self, name: &str, language: Arc<dyn Language>) {
+        self.languages
+            .write()
+            .unwrap()
+            .insert(name.to_string(), language);
+    }
+
+    /// Registers a factory creating the language on first use.
+    pub fn register_language_factory(&self, name: &str, factory: LanguageFactory) {
+        self.language_factories
+            .write()
+            .unwrap()
+            .insert(name.to_string(), factory);
+    }
+
+    /// The names of the languages in use.
+    pub fn language_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.languages.read().unwrap().keys().cloned().collect();
+        names.sort();
+        names
     }
 
     /// The component for the scheme: an added one, one bound in the registry, or one created
@@ -258,14 +289,8 @@ impl DefaultCamelContext {
     /// `FailedToStartRouteException` if the id is a duplicate or the route fails to start.
     pub async fn add_route(&self, spec: RouteSpec) -> CamelResult<String> {
         let (id, custom) = match &spec.id {
-            Some(id) => (id.clone(), true),
-            None => (
-                format!(
-                    "route{}",
-                    self.route_counter.fetch_add(1, Ordering::SeqCst) + 1
-                ),
-                false,
-            ),
+            Some(id) => (id.clone(), spec.custom_id),
+            None => (self.generate_route_id(), false),
         };
         if self.routes.read().unwrap().iter().any(|r| r.id() == id) {
             return Err(CamelError::failed_to_start_route(
@@ -289,6 +314,14 @@ impl DefaultCamelContext {
             camel_api::service::Service::start(route.as_ref()).await?;
         }
         Ok(id)
+    }
+
+    /// Generates a route id: `route1`, `route2`, ... (Java `NodeIdFactory` for routes).
+    pub fn generate_route_id(&self) -> String {
+        format!(
+            "route{}",
+            self.route_counter.fetch_add(1, Ordering::SeqCst) + 1
+        )
     }
 
     /// The routes.
@@ -474,6 +507,24 @@ impl CamelContext for DefaultCamelContext {
 
     fn registry(&self) -> Option<Arc<dyn Registry>> {
         Some(self.registry.clone())
+    }
+
+    fn resolve_language(&self, name: &str) -> CamelResult<Arc<dyn Language>> {
+        if let Some(l) = self.languages.read().unwrap().get(name) {
+            return Ok(l.clone());
+        }
+        let created = lookup_bean::<Arc<dyn Language>>(self.registry.as_ref(), name)
+            .map(|l| (*l).clone())
+            .or_else(|| {
+                self.language_factories
+                    .read()
+                    .unwrap()
+                    .get(name)
+                    .map(|f| f())
+            })
+            .ok_or_else(|| CamelError::no_such_language(name))?;
+        let mut languages = self.languages.write().unwrap();
+        Ok(languages.entry(name.to_string()).or_insert(created).clone())
     }
 
     fn as_any(&self) -> &dyn Any {

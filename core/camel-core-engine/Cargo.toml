@@ -1,0 +1,21 @@
+[package]
+name = "camel-core-engine"
+description = "Camel :: Core Engine — the CamelContext with the route model (port of core/camel-core-engine)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+camel-api = { workspace = true }
+camel-base-engine = { workspace = true }
+camel-core-model = { workspace = true }
+camel-core-reifier = { workspace = true }
+
+[dev-dependencies]
+camel-util = { workspace = true }
+camel-support = { workspace = true }
+camel-direct = { workspace = true }
+camel-mock = { workspace = true }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros"] }
