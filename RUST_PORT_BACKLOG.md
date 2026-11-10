@@ -47,6 +47,11 @@ progress and what is still to do. Update it in the same commit as each port.
 | `java.util.concurrent` executors | `std::thread` + channels, or `tokio` where async I/O is needed |
 | Java DSL (`RouteBuilder`) | Rust builder DSL with the same method names in snake_case |
 | Groovy / jOOR / MVEL / OGNL languages | `n/a` unless a Rust interpreter exists |
+| `java.lang.Object` (bodies, headers, `Map<String, Object>`) | `camel_util::value::Value` enum (Null/Bool/Int/Float/Text/Bytes/List/Map) + `Value::Object` holding any `Send + Sync` Rust value, downcastable |
+| JVM system properties (`System.getProperty`) | `camel_util::system_properties` process-wide registry with environment variable fallback |
+| `java.net.URI`, `URLEncoder`, `URLDecoder` | `camel_util::net` (exact JDK parsing semantics) |
+| `java.time.Duration` (signed) | `camel_util::time_utils::SignedDuration` |
+| `null` return values | `Option<T>`; `IllegalArgumentException` and friends become `Result<T, E>` |
 | Components wrapping Java-only SDKs | Port onto the closest maintained Rust crate, or mark `n/a` with reason |
 
 ## Modules
@@ -73,7 +78,7 @@ progress and what is still to do. Update it in the same commit as each port.
 | `core/camel-management` | 137 | 291 | todo | |
 | `core/camel-management-api` | 127 | 0 | todo | |
 | `core/camel-support` | 318 | 13 | todo | |
-| `core/camel-util` | 89 | 35 | wip | Done: `AntPathMatcher`, `StringHelper`, `StringQuoteHelper`, `URISupport`, `URIScanner`, `UnsafeUriCharactersEncoder`, `CamelURIParser`, `SensitiveUtils`, `Pair`, `TimeUtils` (+ signed `SignedDuration` for `java.time.Duration`), `UnitUtils`, `StopWatch`, `OgnlHelper`, `KeyValueHolder`, `ReferenceCount` (+ camel-core `StingQuoteHelperTest`, `UnsafeCharactersEncoderTest`, `OgnlHelperTest`, `KeyValueHolderTest`, `ReferenceCountTest`). New `net` module reproduces `java.net.URI`/`URLEncoder`/`URLDecoder`. Tooling TODO: regenerate `SENSITIVE_KEYS` from the catalog. |
+| `core/camel-util` | 89 | 35 | wip | Done: `AntPathMatcher`, `StringHelper`, `StringQuoteHelper`, `URISupport`, `URIScanner`, `UnsafeUriCharactersEncoder`, `CamelURIParser`, `SensitiveUtils`, `Pair`, `TimeUtils` (+ signed `SignedDuration` for `java.time.Duration`), `UnitUtils`, `StopWatch`, `OgnlHelper`, `KeyValueHolder`, `ReferenceCount`, `EscapeHelper`, `CollectionHelper`, `ObjectHelper` (portable part; reflection/class loading helpers n/a) (+ camel-core `StingQuoteHelperTest`, `UnsafeCharactersEncoderTest`, `OgnlHelperTest`, `KeyValueHolderTest`, `ReferenceCountTest`). New `net` module reproduces `java.net.URI`/`URLEncoder`/`URLDecoder`. Tooling TODO: regenerate `SENSITIVE_KEYS` from the catalog. camel-core `ObjectHelperTest`: camel-util parts ported, `camel-support` `ObjectHelper` parts pending. |
 | `core/camel-xml-io` | 9 | 6 | todo | |
 | `core/camel-xml-io-util` | 4 | 2 | todo | |
 | `core/camel-xml-jaxb` | 3 | 0 | todo | |
