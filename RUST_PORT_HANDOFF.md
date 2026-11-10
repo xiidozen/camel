@@ -78,8 +78,12 @@ Crates live **in the directory of the Maven module they replace** (`core/camel-a
   components: crate in the component folder, `create_endpoint` taking options with
   `component_support::get_and_remove_parameter`, `Weak` context in the endpoint, tests ported
   from camel-core into `tests/`).
-- **Next:** the `mock` component, then the Rust route DSL (`RouteBuilder` producing `RouteSpec`s
-  via the model + reifier), then the `log` component and error handling.
+- `components/camel-mock`: **in progress** — `MockEndpoint` with the common expectations
+  (`tests/mock_endpoint.rs`); the clause builder (`message(i).header(..)`) waits for the
+  expression builder.
+- **Next:** the Rust route DSL (`RouteBuilder` producing `RouteSpec`s via the model + reifier),
+  the expression builder (`header(..)`, `body()`, `constant(..)`) and the simple language, then
+  the `log` component and error handling; then port the camel-core route tests.
 - Java files still present in `core/camel-api/src/main/java` are the ones not ported yet.
 - Everything else in the repository: **not started** (status `todo` in the backlog).
 

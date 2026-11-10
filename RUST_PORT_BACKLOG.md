@@ -461,7 +461,7 @@ progress and what is still to do. Update it in the same commit as each port.
 | `components/camel-mina-sftp` | 13 | 78 | todo | |
 | `components/camel-minio` | 8 | 14 | todo | |
 | `components/camel-mllp` | 33 | 78 | todo | |
-| `components/camel-mock` | 12 | 0 | todo | |
+| `components/camel-mock` | 12 | 0 | wip | Rust crate `camel-mock`: `MockComponent`, `MockEndpoint` (count/minimum count, bodies in order / any order with type coercion, headers, properties, variables, values in any order, predicates per message / all messages, exchange pattern, ascending/descending/no duplicates, reply processors, reporter, retainFirst/Last, assertPeriod, resultWaitTime, resultMinimumWaitTime, sleepForEmptyTest, Java assertion messages). 69 tests ported from camel-core `MockEndpointTest` (`tests/mock_endpoint.rs`). Java kept until done: the `AssertionClause`/`MockValueBuilder`/`MockExpressionClause` builder (`message(i).header(..).isEqualTo(..)`; needs the expression builder), `TimeClause`, `expectedFileExists`, `InterceptSendToMockEndpointStrategy` (mock endpoints by advice), `failFast`, `browseLimit`, the exchange formatter. Still Java in `MockEndpointTest`: testMessageIndexIsEqualTo, testPredicateEvaluationIsNull/IsInstanceOf, testBodyPredicate, testNotBodyPredicate, testHeaderPredicate, testNotHeaderPredicate (clause builder). |
 | `components/camel-mongodb` | 29 | 36 | todo | |
 | `components/camel-mongodb-gridfs` | 7 | 3 | todo | |
 | `components/camel-mustache` | 3 | 3 | todo | |

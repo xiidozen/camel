@@ -131,6 +131,13 @@ pub trait Expression: Send + Sync {
         let _ = context;
         Ok(())
     }
+
+    /// The text form of the expression (Java `toString()`), used in log and error messages: the
+    /// expression text for a language expression (such as `${header.foo}`). The default is the
+    /// short type name.
+    fn describe(&self) -> String {
+        short_type_name(std::any::type_name::<Self>())
+    }
 }
 
 /// A shared expression.
@@ -164,6 +171,10 @@ impl Expression for ConstantExpression {
     fn evaluate(&self, _exchange: &Exchange) -> CamelResult<Value> {
         Ok(self.0.clone())
     }
+
+    fn describe(&self) -> String {
+        self.0.to_string()
+    }
 }
 
 impl fmt::Display for ConstantExpression {
@@ -189,6 +200,13 @@ pub trait Predicate: Send + Sync {
     fn init(&self, context: &Arc<dyn CamelContext>) -> CamelResult<()> {
         let _ = context;
         Ok(())
+    }
+
+    /// The text form of the predicate (Java `toString()`), used in log and error messages: the
+    /// expression text for a language predicate (such as `${header.foo}`). The default is the
+    /// short type name.
+    fn describe(&self) -> String {
+        short_type_name(std::any::type_name::<Self>())
     }
 }
 
@@ -236,6 +254,35 @@ impl Predicate for ExpressionPredicate {
         let value = self.0.evaluate(exchange)?;
         Ok(camel_util::object_helper::evaluate_value_predicate(&value))
     }
+
+    fn describe(&self) -> String {
+        self.0.describe()
+    }
+}
+
+/// The type name without the module paths (`a::b::Foo<c::Bar>` becomes `Foo<Bar>`).
+///
+/// # Examples
+///
+/// ```
+/// use camel_api::processor::short_type_name;
+/// assert_eq!("FnExpression<{{closure}}>", short_type_name("camel_api::processor::FnExpression<my::test::{{closure}}>"));
+/// ```
+pub fn short_type_name(name: &str) -> String {
+    let mut out = String::new();
+    let mut segment = String::new();
+    for c in name.chars() {
+        match c {
+            '<' | '>' | ',' | ' ' | '(' | ')' | '[' | ']' | '&' => {
+                out.push_str(segment.rsplit("::").next().unwrap_or(""));
+                segment.clear();
+                out.push(c);
+            }
+            _ => segment.push(c),
+        }
+    }
+    out.push_str(segment.rsplit("::").next().unwrap_or(""));
+    out
 }
 
 /// A strategy for aggregating two exchanges together into a single exchange.
