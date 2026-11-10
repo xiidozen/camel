@@ -91,6 +91,7 @@ Crates live **in the directory of the Maven module they replace** (`core/camel-a
 - Error handling: `doTry`, the default error handler, the dead letter channel and `onException`
   are ported (`camel_core_processor::errorhandler`; the reifier wraps each step as Java channels do).
 - `components/camel-log`: **in progress** (formatter options, level, groupSize, log listeners).
+- `components/camel-seda`: **in progress** (queues, concurrent consumers, InOut waiting).
 - **Next:** the unit of work (useOriginalMessage, onCompletion), the rest of
   the simple functions (port `SimpleTest` and `SimpleOperatorTest`), error handling (`DefaultErrorHandler`, `onException`, `doTry`), then more
   EIPs (split, aggregate, multicast, recipient list, wire tap, ...) with their camel-core tests.

@@ -10,6 +10,7 @@
 pub mod builder;
 pub mod component_support;
 pub mod exchange_formatter;
+pub mod exchange_helper;
 pub mod header_filter_strategy;
 pub mod object_helper;
 pub mod pattern_helper;

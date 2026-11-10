@@ -61,6 +61,7 @@ dependencies = [
  "camel-direct",
  "camel-log",
  "camel-mock",
+ "camel-seda",
  "camel-support",
  "camel-util",
  "tokio",
@@ -159,6 +160,18 @@ dependencies = [
  "camel-base-engine",
  "camel-core-processor",
  "camel-direct",
+ "camel-support",
+ "camel-util",
+ "log",
+ "tokio",
+]
+
+[[package]]
+name = "camel-seda"
+version = "4.23.0"
+dependencies = [
+ "camel-api",
+ "camel-core",
  "camel-support",
  "camel-util",
  "log",

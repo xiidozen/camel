@@ -5,3 +5,4 @@
 mod support;
 
 mod log;
+mod seda;
