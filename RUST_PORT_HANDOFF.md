@@ -128,16 +128,19 @@ Javadoc must be converted so `cargo doc` produces equivalent documentation:
 | Java DSL (`RouteBuilder`) | Rust route DSL; routes in Rust, YAML or XML only |
 | internal locks in collections | `&mut self` APIs; callers wrap in `Mutex` when shared |
 
-Still open (decide when porting `camel-api`): the processing model. Recommended: `async`
-processors on `tokio` (Camel's `AsyncProcessor`/callback model maps naturally to futures),
-`Arc<dyn Processor>` routes, and an `Exchange` owned by the routing engine and passed by
-`&mut`.
+Processing model (decided in `camel-api`): `Processor::process(&self, &mut Exchange)` returns a
+boxed `Send` future (`processor::BoxFuture`) — this replaces `AsyncProcessor` + `AsyncCallback`;
+errors are returned (`CamelResult`) and the engine stores them on the exchange. `Exchange` and
+`Message` are concrete structs (Java's `DefaultExchange`/`DefaultMessage` merged in). Expressions
+and predicates are synchronous. The engine will run on `tokio`; `processor::block_on` exists for
+tests and synchronous callers.
 
 ## 9. Commits, pushes and quality bar
 
 - Commit message: `Rust port: <module> <what>` + a body listing what was ported and what was
   dropped as not applicable, ending with the `Co-Authored-By:` trailer of the AI used.
-- Never push with a failing `./etc/rust/check.sh`. Never use `git push --force`.
+- Never push with a failing `./etc/rust/check.sh`: chain it as `./etc/rust/check.sh && git commit ... && git push`
+  so a failure stops the commit. Never use `git push --force`.
 - Push to `origin rust` after every finished group.
 
 ## 10. Pitfalls found so far

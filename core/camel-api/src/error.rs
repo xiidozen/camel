@@ -766,7 +766,7 @@ pub fn error_type_name(e: &(dyn Error + 'static)) -> String {
 }
 
 /// What an error needs to know about an exchange (implemented by
-/// `Exchange`).
+/// [`crate::exchange::Exchange`]).
 pub trait ExchangeRef {
     /// The exchange id.
     fn exchange_id(&self) -> String;
