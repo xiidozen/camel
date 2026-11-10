@@ -62,7 +62,7 @@ Crates live **in the directory of the Maven module they replace** (`core/camel-a
   `PackageHelper`, the `java21`/`java25` multi-release sources and their tests.
 - `core/camel-core/src/test/java/org/apache/camel/util/ObjectHelperTest.java` is kept on
   purpose: its `camel-util` parts are ported, the `camel-support` `ObjectHelper` parts are not.
-- **Next:** `core/camel-api` (see §5 and the open design question in §8).
+- `core/camel-api`: **in progress** — see its row in the backlog for what is done.
 - Everything else in the repository: **not started** (status `todo` in the backlog).
 
 ## 5. Order of work

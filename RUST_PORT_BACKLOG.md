@@ -61,7 +61,7 @@ progress and what is still to do. Update it in the same commit as each port.
 
 | Module | Java main files | Java test files | Status | Notes |
 | --- | ---: | ---: | --- | --- |
-| `core/camel-api` | 546 | 0 | todo | |
+| `core/camel-api` | 546 | 0 | wip | Done: enums, all exceptions (`error::CamelError` + `ErrorKind` keeping the Java hierarchy and messages), `Exchange` constants + `ExchangePropertyKey`, `Message` (concrete struct), `convert::FromValue`. Next: Exchange, CamelContext, Processor/Expression/Predicate, Endpoint/Component/Producer/Consumer, Service, spi. |
 | `core/camel-base` | 100 | 0 | todo | |
 | `core/camel-base-engine` | 112 | 0 | todo | |
 | `core/camel-cluster` | 6 | 0 | todo | |
