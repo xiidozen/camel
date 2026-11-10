@@ -1,0 +1,20 @@
+[package]
+name = "camel-base-engine"
+description = "Camel :: Base Engine — the CamelContext, routes and producer template (port of core/camel-base-engine)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+camel-api = { workspace = true }
+camel-util = { workspace = true }
+camel-support = { workspace = true }
+camel-core-processor = { workspace = true }
+indexmap = "2"
+log = "0.4"
+tokio = { version = "1", features = ["rt", "sync", "time"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros"] }

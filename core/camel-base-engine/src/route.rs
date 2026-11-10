@@ -1,0 +1,249 @@
+//! Routes (Java `org.apache.camel.impl.engine.DefaultRoute`): the consumer of the route
+//! endpoint and the processor the consumed exchanges are routed through.
+
+use camel_api::endpoint::{SharedConsumer, SharedEndpoint};
+use camel_api::enums::ServiceStatus;
+use camel_api::error::{CamelError, CamelResult};
+use camel_api::exchange::Exchange;
+use camel_api::processor::{BoxFuture, Processor, SharedProcessor};
+use camel_api::route::Route;
+use camel_api::service::ServiceState;
+use camel_api::service::{Service, StatefulService, SuspendableService};
+use camel_util::value::ValueMap;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
+
+/// What is needed to create a route: the endpoint uri to consume from, the processor to route
+/// the exchanges through, and the route options. The route DSLs (Rust, YAML, XML) produce
+/// these.
+pub struct RouteSpec {
+    /// The route id (generated as `route1`, `route2`, ... when not set).
+    pub id: Option<String>,
+    /// The uri of the endpoint to consume from.
+    pub from_uri: String,
+    /// The processor (usually a pipeline) the exchanges are routed through.
+    pub processor: SharedProcessor,
+    /// Whether the route starts with the context (default `true`).
+    pub auto_startup: bool,
+    /// The startup order (routes with a lower order start first).
+    pub startup_order: Option<i32>,
+    /// The route group.
+    pub group: Option<String>,
+    /// The route description.
+    pub description: Option<String>,
+    /// The source location (file and line) the route was defined in.
+    pub source_location: Option<String>,
+    /// The route properties.
+    pub properties: ValueMap,
+}
+
+impl RouteSpec {
+    /// A route from the endpoint uri through the processor, with the default options.
+    pub fn new(from_uri: impl Into<String>, processor: SharedProcessor) -> Self {
+        RouteSpec {
+            id: None,
+            from_uri: from_uri.into(),
+            processor,
+            auto_startup: true,
+            startup_order: None,
+            group: None,
+            description: None,
+            source_location: None,
+            properties: ValueMap::new(),
+        }
+    }
+
+    /// Sets the route id.
+    pub fn with_id(mut self, id: impl Into<String>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
+    /// Sets whether the route starts with the context.
+    pub fn with_auto_startup(mut self, auto_startup: bool) -> Self {
+        self.auto_startup = auto_startup;
+        self
+    }
+
+    /// Sets the startup order.
+    pub fn with_startup_order(mut self, order: i32) -> Self {
+        self.startup_order = Some(order);
+        self
+    }
+}
+
+/// Sets the route id on the exchanges entering the route, then runs the route processor.
+struct RouteProcessor {
+    route_id: String,
+    processor: SharedProcessor,
+}
+
+impl Processor for RouteProcessor {
+    fn process<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>> {
+        if exchange.from_route_id().is_none() {
+            exchange.set_from_route_id(self.route_id.clone());
+        }
+        self.processor.process(exchange)
+    }
+}
+
+/// A route of the [`DefaultCamelContext`](crate::context::DefaultCamelContext).
+pub struct DefaultRoute {
+    id: String,
+    custom_id: bool,
+    endpoint: SharedEndpoint,
+    processor: SharedProcessor,
+    consumer: Mutex<Option<SharedConsumer>>,
+    state: ServiceState,
+    started_at: Mutex<Option<Instant>>,
+    auto_startup: bool,
+    startup_order: Option<i32>,
+    group: Option<String>,
+    description: Option<String>,
+    source_location: Option<String>,
+    properties: ValueMap,
+}
+
+impl DefaultRoute {
+    /// Creates the route from the spec, with the resolved endpoint.
+    pub fn new(id: String, custom_id: bool, endpoint: SharedEndpoint, spec: RouteSpec) -> Self {
+        let processor: SharedProcessor = Arc::new(RouteProcessor {
+            route_id: id.clone(),
+            processor: spec.processor,
+        });
+        DefaultRoute {
+            id,
+            custom_id,
+            endpoint,
+            processor,
+            consumer: Mutex::new(None),
+            state: ServiceState::new(),
+            started_at: Mutex::new(None),
+            auto_startup: spec.auto_startup,
+            startup_order: spec.startup_order,
+            group: spec.group,
+            description: spec.description,
+            source_location: spec.source_location,
+            properties: spec.properties,
+        }
+    }
+
+    async fn do_start(&self) -> CamelResult<()> {
+        let consumer = self
+            .endpoint
+            .clone()
+            .create_consumer(self.processor.clone())?;
+        consumer.start().await?;
+        *self.consumer.lock().unwrap() = Some(consumer);
+        *self.started_at.lock().unwrap() = Some(Instant::now());
+        Ok(())
+    }
+
+    async fn do_stop(&self) -> CamelResult<()> {
+        let consumer = self.consumer.lock().unwrap().take();
+        *self.started_at.lock().unwrap() = None;
+        match consumer {
+            Some(c) => c.stop().await,
+            None => Ok(()),
+        }
+    }
+}
+
+impl Service for DefaultRoute {
+    fn start(&self) -> BoxFuture<'_, CamelResult<()>> {
+        Box::pin(async move {
+            self.state
+                .start(|| self.do_start())
+                .await
+                .map_err(|e| CamelError::failed_to_start_route_cause(&self.id, &e.to_string(), e))
+        })
+    }
+
+    fn stop(&self) -> BoxFuture<'_, CamelResult<()>> {
+        Box::pin(self.state.stop(|| self.do_stop()))
+    }
+}
+
+impl StatefulService for DefaultRoute {
+    fn status(&self) -> ServiceStatus {
+        self.state.status()
+    }
+}
+
+impl SuspendableService for DefaultRoute {
+    /// Suspends the route: the consumer stops consuming (a direct consumer is removed, so
+    /// producers block or fail), but the route keeps its resources.
+    fn suspend(&self) -> BoxFuture<'_, CamelResult<()>> {
+        Box::pin(self.state.suspend(|| async {
+            let consumer = self.consumer.lock().unwrap().clone();
+            match consumer {
+                Some(c) => c.stop().await,
+                None => Ok(()),
+            }
+        }))
+    }
+
+    fn resume(&self) -> BoxFuture<'_, CamelResult<()>> {
+        Box::pin(self.state.resume(|| async {
+            let consumer = self.consumer.lock().unwrap().clone();
+            match consumer {
+                Some(c) => c.start().await,
+                None => Ok(()),
+            }
+        }))
+    }
+}
+
+impl Route for DefaultRoute {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn is_custom_id(&self) -> bool {
+        self.custom_id
+    }
+
+    fn group(&self) -> Option<&str> {
+        self.group.as_deref()
+    }
+
+    fn description(&self) -> Option<&str> {
+        self.description.as_deref()
+    }
+
+    fn source_location(&self) -> Option<&str> {
+        self.source_location.as_deref()
+    }
+
+    fn endpoint(&self) -> SharedEndpoint {
+        self.endpoint.clone()
+    }
+
+    fn consumer(&self) -> Option<SharedConsumer> {
+        self.consumer.lock().unwrap().clone()
+    }
+
+    fn processor(&self) -> SharedProcessor {
+        self.processor.clone()
+    }
+
+    fn properties(&self) -> ValueMap {
+        self.properties.clone()
+    }
+
+    fn is_auto_startup(&self) -> bool {
+        self.auto_startup
+    }
+
+    fn startup_order(&self) -> Option<i32> {
+        self.startup_order
+    }
+
+    fn uptime_millis(&self) -> u64 {
+        self.started_at
+            .lock()
+            .unwrap()
+            .map(|t| t.elapsed().as_millis() as u64)
+            .unwrap_or(0)
+    }
+}

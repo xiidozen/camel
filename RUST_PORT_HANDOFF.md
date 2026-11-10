@@ -71,13 +71,16 @@ Crates live **in the directory of the Maven module they replace** (`core/camel-a
   so no trait is ported without a user and a test.
 - `core/camel-support`: **in progress** (registry, header filter strategy, pattern helper).
 - `core/camel-core-processor`: **in progress** — pipeline, filter, choice, message translators,
-  stop, throw exception, log and send processors (`tests/processors.rs`). Next: the engine
-  (`camel-base-engine`: DefaultCamelContext, route startup), then the `direct`/`mock`/`log`
-  components and the Rust route DSL.
-- **Next milestone:** a running engine — `camel-base-engine` (DefaultCamelContext, routes), core
-  EIP processors, the Rust route DSL, and the `direct`, `mock` and `log` components, so a route
-  written in Rust runs end to end. Java files
-  still present in `core/camel-api/src/main/java` are the ones not ported yet.
+  stop, throw exception, log and send processors (`tests/processors.rs`).
+- `core/camel-base-engine`: **in progress** — `DefaultCamelContext`, `DefaultRoute`, `RouteSpec`,
+  `ProducerTemplate` on tokio (`tests/context.rs`).
+- `components/camel-direct`: **done** (first component; use it as the template for porting
+  components: crate in the component folder, `create_endpoint` taking options with
+  `component_support::get_and_remove_parameter`, `Weak` context in the endpoint, tests ported
+  from camel-core into `tests/`).
+- **Next:** the `mock` component, then the Rust route DSL (`RouteBuilder` producing `RouteSpec`s
+  via the model + reifier), then the `log` component and error handling.
+- Java files still present in `core/camel-api/src/main/java` are the ones not ported yet.
 - Everything else in the repository: **not started** (status `todo` in the backlog).
 
 ## 5. Order of work
@@ -149,6 +152,18 @@ errors are returned (`CamelResult`) and the engine stores them on the exchange. 
 `Message` are concrete structs (Java's `DefaultExchange`/`DefaultMessage` merged in). Expressions
 and predicates are synchronous. The engine will run on `tokio`; `processor::block_on` exists for
 tests and synchronous callers.
+
+### Component specific exceptions
+
+`ErrorKind` only has the camel-api exceptions. A component exception (such as
+`DirectConsumerNotAvailableException`) uses the `ErrorKind` of its Java superclass plus
+`CamelError::with_subtype("<full Java class name>")`; test it with `is_subtype("SimpleName")`.
+Keep the Java message text.
+
+### Async runtime
+
+`camel-api` has no runtime dependency (its `block_on` is a minimal executor for tests). The
+engine and the components use tokio; tests of engine-level behaviour use `#[tokio::test]`.
 
 ## 9. Commits, pushes and quality bar
 

@@ -3,6 +3,9 @@
 //! The Java interface has hundreds of methods; the Rust trait grows with the port. The
 //! implementation lives in the engine crate (`camel-base-engine`).
 
+use crate::endpoint::SharedEndpoint;
+use crate::error::{CamelError, CamelResult};
+use crate::spi::registry::Registry;
 use crate::spi::uuid::{DefaultUuidGenerator, UuidGenerator};
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
@@ -19,6 +22,23 @@ pub trait CamelContext: Send + Sync {
     /// Whether message history is enabled.
     fn is_message_history(&self) -> bool {
         false
+    }
+
+    /// Resolves the endpoint for the uri, creating it with its component on first use (Java
+    /// `getEndpoint(String)`).
+    ///
+    /// # Errors
+    ///
+    /// Returns a `NoSuchEndpointException` if there is no component for the uri scheme, or a
+    /// `ResolveEndpointFailedException` if the endpoint cannot be created. A context without
+    /// components (such as [`StandaloneContext`]) always fails.
+    fn endpoint(&self, uri: &str) -> CamelResult<SharedEndpoint> {
+        Err(CamelError::no_such_endpoint(uri))
+    }
+
+    /// The bean registry, if the context has one.
+    fn registry(&self) -> Option<Arc<dyn Registry>> {
+        None
     }
 
     /// The context as `Any`, to access the concrete implementation.

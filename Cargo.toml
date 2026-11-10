@@ -5,6 +5,8 @@ members = [
     "core/camel-api",
     "core/camel-support",
     "core/camel-core-processor",
+    "core/camel-base-engine",
+    "components/camel-direct",
 ]
 
 [workspace.package]
@@ -19,3 +21,5 @@ camel-util = { path = "core/camel-util" }
 camel-api = { path = "core/camel-api" }
 camel-support = { path = "core/camel-support" }
 camel-core-processor = { path = "core/camel-core-processor" }
+camel-base-engine = { path = "core/camel-base-engine" }
+camel-direct = { path = "components/camel-direct" }

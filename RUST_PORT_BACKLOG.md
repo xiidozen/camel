@@ -63,13 +63,13 @@ progress and what is still to do. Update it in the same commit as each port.
 | --- | ---: | ---: | --- | --- |
 | `core/camel-api` | 546 | 0 | wip | Done: enums, all exceptions (`error::CamelError` + `ErrorKind` keeping the Java hierarchy and messages), `Exchange` constants + `ExchangePropertyKey`, `Message` and `Exchange` (concrete structs), `convert::FromValue`, async `Processor` (replaces AsyncProcessor/AsyncCallback), `Expression`, `Predicate`, `AggregationStrategy` (+ closure adapters), minimal `CamelContext` trait, `spi::UuidGenerator` (+ DefaultUuidGenerator), async `Service` lifecycle (+ `ServiceState` state machine), `Endpoint`/`Component`/`Producer`/`Consumer`/`PollingConsumer`, `Route`, `spi::{Registry, Language, Synchronization, HeaderFilterStrategy}`. camel-api is ported in vertical slices, driven by what the engine needs. Next: TypeConverter, Registry, rest of spi. |
 | `core/camel-base` | 100 | 0 | todo | |
-| `core/camel-base-engine` | 112 | 0 | todo | |
+| `core/camel-base-engine` | 112 | 0 | wip | `DefaultCamelContext` (components by name / registry / registered factory, endpoints by normalized uri, routes with startup order, start/stop/suspend/resume, rollback on start failure), `DefaultRoute`, `ProducerTemplate` (send/request body, `CamelExecutionException` wrapping). Runs on tokio. Pending: error handler, unit of work, route controller/supervising, shutdown strategy, type converter registry, properties component, events, management. |
 | `core/camel-cluster` | 6 | 0 | todo | |
 | `core/camel-console` | 57 | 69 | todo | |
 | `core/camel-core` | 0 | 3179 | todo | |
 | `core/camel-core-all` | 0 | 0 | todo | |
 | `core/camel-core-catalog` | 7 | 0 | todo | |
-| `core/camel-core-engine` | 11 | 0 | todo | |
+| `core/camel-core-engine` | 11 | 0 | wip | `DefaultCamelContext` lives in `camel-base-engine` (`context.rs`); model parts pending with the model crate. |
 | `core/camel-core-languages` | 90 | 0 | todo | |
 | `core/camel-core-model` | 402 | 5 | todo | |
 | `core/camel-core-processor` | 170 | 0 | wip | Done (Java removed): `Pipeline` + `PipelineHelper`, `FilterProcessor`, `ChoiceProcessor`, `SetBody`/`SetHeader`/`SetProperty`/`SetVariable`/`RemoveHeader`/`RemoveHeaders`/`Stop` processors. Partial (Java kept until complete): `SendProcessor` (no ProducerCache/event notifier yet), `LogProcessor` (no masking/log listeners), `TransformProcessor` (in `SetBodyProcessor`), `ThrowExceptionProcessor` (takes a ready error; no class + message expression). Errors are carried on the exchange as in Java (`process_and_capture`). |
@@ -298,7 +298,7 @@ progress and what is still to do. Update it in the same commit as each port.
 | `components/camel-dhis2/camel-dhis2-api` | 7 | 5 | todo | |
 | `components/camel-dhis2/camel-dhis2-component` | 8 | 8 | todo | |
 | `components/camel-diagram` | 10 | 9 | todo | |
-| `components/camel-direct` | 5 | 0 | todo | |
+| `components/camel-direct` | 5 | 0 | done | Rust crate `camel-direct` (block/timeout wait with tokio, failIfNoConsumers, one consumer per endpoint, suspend/resume). Java removed; `direct.json` metadata and the doc kept. Tests ported from camel-core (`tests/direct.rs`); still Java: `DirectNoConsumerTest` (`testWireTapFailIfNoConsumerFalse` needs wireTap), `DirectEndpointRouteInlinedTest`, `DirectNoToTypeTest`, `DirectQueueTest`, `DirectShouldUseSameThreadTest`, `DirectSynchronousTest`, `DirectProducerSuspendedConsumerTest`, `SendingToAlotOfDifferentDirectEndpointTest` (need mock / Rust DSL). Doc: replace the Java tab with a Rust tab once the Rust DSL exists. Generic endpoint options (`exchangePattern`, `bridgeErrorHandler`, `lazyStartProducer`) are not handled yet. |
 | `components/camel-disruptor` | 17 | 69 | todo | |
 | `components/camel-dns` | 13 | 10 | todo | |
 | `components/camel-docker` | 14 | 49 | todo | |

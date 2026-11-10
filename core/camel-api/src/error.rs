@@ -16,6 +16,11 @@ use std::sync::Arc;
 /// A shared, thread safe error (the cause of a [`CamelError`]).
 pub type BoxError = Arc<dyn Error + Send + Sync + 'static>;
 
+/// Boxes any error as a [`BoxError`] (to use it as the cause of a [`CamelError`]).
+pub fn box_error<E: Error + Send + Sync + 'static>(error: E) -> BoxError {
+    Arc::new(error)
+}
+
 macro_rules! kinds {
     ($($(#[$m:meta])* $kind:ident => $parent:expr),+ $(,)?) => {
         /// The kind of a [`CamelError`]: one per Java exception class.
@@ -188,6 +193,7 @@ pub struct CamelError {
     source: Option<BoxError>,
     exchange_id: Option<String>,
     detail: Option<String>,
+    subtype: Option<&'static str>,
 }
 
 impl fmt::Debug for CamelError {
@@ -238,6 +244,7 @@ impl CamelError {
             source: None,
             exchange_id: None,
             detail: None,
+            subtype: None,
         }
     }
 
@@ -253,6 +260,7 @@ impl CamelError {
             source: Some(cause.into()),
             exchange_id: None,
             detail: None,
+            subtype: None,
         }
     }
 
@@ -264,6 +272,7 @@ impl CamelError {
             source: Some(cause.into()),
             exchange_id: None,
             detail: None,
+            subtype: None,
         }
     }
 
@@ -290,6 +299,46 @@ impl CamelError {
     pub fn with_detail(mut self, detail: impl Into<String>) -> Self {
         self.detail = Some(detail.into());
         self
+    }
+
+    /// Sets the Java class name of a component specific exception (such as
+    /// `org.apache.camel.component.direct.DirectConsumerNotAvailableException`). Component
+    /// exceptions use the [`ErrorKind`] of their Java superclass, plus this subtype.
+    pub fn with_subtype(mut self, java_class_name: &'static str) -> Self {
+        self.subtype = Some(java_class_name);
+        self
+    }
+
+    /// The Java class name of a component specific exception, if set.
+    pub fn subtype(&self) -> Option<&'static str> {
+        self.subtype
+    }
+
+    /// Whether the error is the component specific exception (compared by the simple or the
+    /// full Java class name).
+    pub fn is_subtype(&self, name: &str) -> bool {
+        self.subtype
+            .is_some_and(|s| s == name || s.rsplit('.').next() == Some(name))
+    }
+
+    /// Wraps the error of a failed exchange as a `CamelExecutionException`, unless it already
+    /// is one (Java `CamelExecutionException.wrapCamelExecutionException`).
+    pub fn wrap_camel_execution(exchange: Option<&dyn ExchangeRef>, error: CamelError) -> Self {
+        if error.kind == K::CamelExecution {
+            return error;
+        }
+        let msg = match exchange {
+            Some(e) => format!(
+                "Exception occurred during execution on the exchange: {}",
+                e.display()
+            ),
+            None => "Exception occurred during execution".to_string(),
+        };
+        let mut err = CamelError::with_cause(K::CamelExecution, msg, error);
+        if let Some(e) = exchange {
+            err = err.with_exchange_id(e.exchange_id());
+        }
+        err
     }
 
     /// The kind of the error.
@@ -515,6 +564,20 @@ impl CamelError {
         Self::new(
             K::FailedToStartRoute,
             format!("Failed to start route: {route_id} because: {message}"),
+        )
+        .with_detail(route_id)
+    }
+
+    /// A `FailedToStartRouteException` with the cause.
+    pub fn failed_to_start_route_cause(
+        route_id: &str,
+        message: &str,
+        cause: impl Into<BoxError>,
+    ) -> Self {
+        Self::with_cause(
+            K::FailedToStartRoute,
+            format!("Failed to start route: {route_id} because: {message}"),
+            cause,
         )
         .with_detail(route_id)
     }
@@ -760,7 +823,10 @@ fn endpoint_scheme(uri: &str) -> String {
 /// The type name of an error for messages (the Java class name for Camel errors).
 pub fn error_type_name(e: &(dyn Error + 'static)) -> String {
     match e.downcast_ref::<CamelError>() {
-        Some(c) => format!("org.apache.camel.{}", c.kind().java_name()),
+        Some(c) => match c.subtype() {
+            Some(s) => s.to_string(),
+            None => format!("org.apache.camel.{}", c.kind().java_name()),
+        },
         None => std::any::type_name_of_val(e).to_string(),
     }
 }
@@ -826,6 +892,24 @@ mod tests {
         assert!(ErrorKind::NoSuchBeanType.is(ErrorKind::NoSuchBean));
         assert!(ErrorKind::RouteStopping.is(ErrorKind::RejectedExecution));
         assert!(ErrorKind::CamelExecution.is(ErrorKind::RuntimeExchange));
+        let sub = CamelError::new(ErrorKind::CamelExchange, "x")
+            .with_subtype("org.apache.camel.component.direct.DirectConsumerNotAvailableException");
+        assert!(sub.is_subtype("DirectConsumerNotAvailableException"));
+        assert!(!sub.is_subtype("Other"));
+        assert_eq!(
+            "org.apache.camel.component.direct.DirectConsumerNotAvailableException",
+            error_type_name(&sub)
+        );
+        let wrapped = CamelError::wrap_camel_execution(None, sub);
+        assert_eq!(
+            Some("Exception occurred during execution"),
+            wrapped.message()
+        );
+        assert!(wrapped.is(ErrorKind::CamelExecution));
+        assert_eq!(
+            Some("Exception occurred during execution"),
+            CamelError::wrap_camel_execution(None, wrapped).message()
+        );
         assert_eq!(
             "NoSuchEndpointException",
             ErrorKind::NoSuchEndpoint.java_name()

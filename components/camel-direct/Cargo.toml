@@ -1,0 +1,20 @@
+[package]
+name = "camel-direct"
+description = "Camel :: Direct — synchronous call to another endpoint in the same CamelContext (port of components/camel-direct)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+camel-api = { workspace = true }
+camel-util = { workspace = true }
+camel-support = { workspace = true }
+log = "0.4"
+tokio = { version = "1", features = ["sync", "time", "rt"] }
+
+[dev-dependencies]
+camel-base-engine = { workspace = true }
+camel-core-processor = { workspace = true }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros"] }

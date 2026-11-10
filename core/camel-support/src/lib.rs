@@ -7,6 +7,7 @@
 #![deny(missing_docs)]
 #![deny(rustdoc::broken_intra_doc_links)]
 
+pub mod component_support;
 pub mod header_filter_strategy;
 pub mod pattern_helper;
 pub mod simple_registry;
