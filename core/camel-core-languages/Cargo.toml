@@ -12,4 +12,3 @@ camel-api = { workspace = true }
 camel-util = { workspace = true }
 camel-support = { workspace = true }
 regex = "1"
-gethostname = "0.5"

@@ -313,6 +313,7 @@ fn do_create(function: &str, index: usize) -> ParseResult<SharedExpression> {
         header_function,
         variable_function,
         exchange_function,
+        super::string_functions::string_function,
     ] {
         if let Some(e) = factory(function, index)? {
             return Ok(e);
@@ -327,11 +328,11 @@ fn do_create(function: &str, index: usize) -> ParseResult<SharedExpression> {
 /// The functions without arguments (Java `DirectFunctionFactory`).
 fn direct_function(function: &str) -> Option<SharedExpression> {
     let e: SharedExpression = match function {
+        // the message id defaults to the exchange id (Java MessageSupport.createMessageId)
         "id" => named_expression("id", |e| {
-            Ok(e.message()
-                .message_id()
-                .map(Value::from)
-                .unwrap_or_default())
+            Ok(Value::from(
+                e.message().message_id().unwrap_or(e.exchange_id()),
+            ))
         }),
         "messageTimestamp" => named_expression("messageTimestamp", |e| {
             Ok(Value::Int(e.message().message_timestamp()))
@@ -372,9 +373,10 @@ fn direct_function(function: &str) -> Option<SharedExpression> {
             ))
         }),
         "hostname" => named_expression("hostname", |_| {
-            Ok(Value::from(
-                gethostname::gethostname().to_string_lossy().into_owned(),
-            ))
+            // Java InetAddressUtil.getLocalHostNameSafe
+            Ok(camel_util::host_utils::get_local_host_name_safe()
+                .map(Value::from)
+                .unwrap_or_default())
         }),
         "camelId" => named_expression("camelId", |e| Ok(Value::from(e.context().name()))),
         "routeId" | "fromRouteId" => {

@@ -6,3 +6,4 @@ mod support;
 
 mod simple_parser_expression_test;
 mod simple_parser_predicate_test;
+mod simple_test;
