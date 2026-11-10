@@ -13,3 +13,4 @@ pub mod header_filter_strategy;
 pub mod object_helper;
 pub mod pattern_helper;
 pub mod simple_registry;
+pub mod uuid_generators;

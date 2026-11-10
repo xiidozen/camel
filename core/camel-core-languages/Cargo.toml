@@ -12,3 +12,7 @@ camel-api = { workspace = true }
 camel-util = { workspace = true }
 camel-support = { workspace = true }
 regex = "1"
+md-5 = "0.10"
+sha1 = "0.10"
+sha2 = "0.10"
+sha3 = "0.10"

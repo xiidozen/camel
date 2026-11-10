@@ -316,6 +316,7 @@ fn do_create(function: &str, index: usize) -> ParseResult<SharedExpression> {
         // the order of the Java SimpleFunctionDispatcher
         super::math_functions::math_function,
         super::string_functions::string_function,
+        super::misc_functions::misc_function,
     ] {
         if let Some(e) = factory(function, index)? {
             return Ok(e);

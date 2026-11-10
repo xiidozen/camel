@@ -563,3 +563,309 @@ fn test_abs() {
     e.message_mut().set_header("myVal", -222);
     assert_expression(&e, "${abs(${header.myVal})}", "222");
 }
+
+fn boolean(e: &Exchange, text: &str) -> bool {
+    match evaluate(e, text) {
+        Value::Bool(b) => b,
+        other => panic!("{text} evaluated to {other:?}"),
+    }
+}
+
+#[test]
+fn test_is_empty() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_body("");
+    for exp in [
+        "${isEmpty()}",
+        "${isEmpty(${body})}",
+        "${isEmpty(' ')}",
+        "${isEmpty('   ')}",
+        "${isEmpty(${empty(map)})}",
+    ] {
+        assert!(boolean(&e, exp), "{exp}");
+    }
+    assert!(!boolean(&e, "${isEmpty('Hello World')}"));
+    e.message_mut().set_body(Value::Map(ValueMap::new()));
+    assert!(boolean(&e, "${isEmpty()}"));
+    e.message_mut().set_body(text_list(&["A", "B"]));
+    assert!(!boolean(&e, "${isEmpty()}"));
+}
+
+#[test]
+fn test_is_alpha() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_body("HelloWorld");
+    for (exp, expected) in [
+        ("${isAlpha()}", true),
+        ("${isAlpha(${body})}", true),
+        ("${isAlpha(3)}", false),
+        ("${isAlpha('')}", false),
+        ("${isAlpha(' ')}", false),
+        ("${isAlpha('HiIamHere')}", true),
+        ("${isAlpha('Hi_I_am_here')}", false),
+        ("${isAlpha('Hi I am here!')}", false),
+    ] {
+        assert_eq!(expected, boolean(&e, exp), "{exp}");
+    }
+    e.message_mut().set_body(Value::Bytes(b"Hello".to_vec()));
+    assert!(boolean(&e, "${isAlpha()}"));
+    e.message_mut().set_body(Value::Bytes(b"Hello123".to_vec()));
+    assert!(!boolean(&e, "${isAlpha()}"));
+}
+
+#[test]
+fn test_is_alpha_numeric() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_body("Hello123");
+    for (exp, expected) in [
+        ("${isAlphaNumeric()}", true),
+        ("${isAlphaNumeric(${body})}", true),
+        ("${isAlphaNumeric(3)}", true),
+        ("${isAlphaNumeric('A')}", true),
+        ("${isAlphaNumeric('')}", false),
+        ("${isAlphaNumeric('!')}", false),
+        ("${isAlphaNumeric('HiIamHere')}", true),
+        ("${isAlphaNumeric('Hi_I_am_here')}", false),
+        ("${isAlphaNumeric('Hi I am here!')}", false),
+    ] {
+        assert_eq!(expected, boolean(&e, exp), "{exp}");
+    }
+    for (body, expected) in [
+        (&b"Hello"[..], true),
+        (b"Hello123", true),
+        (b"Hello123!", false),
+    ] {
+        e.message_mut().set_body(Value::Bytes(body.to_vec()));
+        assert_eq!(expected, boolean(&e, "${isAlphaNumeric()}"));
+    }
+}
+
+#[test]
+fn test_is_numeric() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_body(123);
+    for (exp, expected) in [
+        ("${isNumeric()}", true),
+        ("${isNumeric(${body})}", true),
+        ("${isNumeric(3)}", true),
+        ("${isNumeric('-4')}", false),
+        ("${isNumeric('1.99')}", false),
+        ("${isNumeric('')}", false),
+        ("${isNumeric('Hello')}", false),
+    ] {
+        assert_eq!(expected, boolean(&e, exp), "{exp}");
+    }
+    e.message_mut().set_body(Value::Bytes(b"Hello".to_vec()));
+    assert!(!boolean(&e, "${isNumeric()}"));
+    e.message_mut().set_body(Value::Bytes(b"123".to_vec()));
+    assert!(boolean(&e, "${isNumeric()}"));
+}
+
+#[test]
+fn test_not() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_body("");
+    assert!(boolean(&e, "${not()}"));
+    e.message_mut().set_body("Hello");
+    assert!(!boolean(&e, "${not()}"));
+    assert!(!boolean(&e, "${not(${body} == 'Hello')}"));
+    e.message_mut().set_body("Bye");
+    assert!(boolean(&e, "${not(${body} == 'Hello')}"));
+}
+
+#[test]
+fn test_kind_of_type() {
+    let (_t, mut e) = exchange();
+    let cases: Vec<(Value, &str)> = vec![
+        (Value::Null, "null"),
+        (Value::from("Hello"), "string"),
+        (Value::from(123), "number"),
+        (Value::from(98.76), "number"),
+        (Value::from(true), "boolean"),
+        (text_list(&["A", "B"]), "array"),
+        (Value::Bytes(b"abc".to_vec()), "array"),
+        (
+            Value::object(camel_core::api::spi::uuid::DefaultUuidGenerator::new()),
+            "object",
+        ),
+    ];
+    for (body, expected) in cases {
+        e.message_mut().set_body(body);
+        assert_expression(&e, "${kindOfType()}", expected);
+        assert_expression(&e, "${kindOfType(${body})}", expected);
+    }
+}
+
+#[test]
+fn test_throw_exception() {
+    let (_t, e) = exchange();
+    let simple = e.context().resolve_language("simple").unwrap();
+    let err = simple
+        .create_expression("${throwException('Forced error')}")
+        .unwrap()
+        .evaluate(&e)
+        .unwrap_err();
+    assert!(err.is(ErrorKind::IllegalArgument));
+    assert_eq!(Some("Forced error"), err.message());
+    let err = simple
+        .create_expression("${throwException('Some IO error','java.io.IOException')}")
+        .unwrap()
+        .evaluate(&e)
+        .unwrap_err();
+    let cause = std::error::Error::source(&err)
+        .and_then(|c| c.downcast_ref::<CamelError>())
+        .unwrap();
+    assert_eq!(Some("java.io.IOException"), cause.detail());
+    assert_eq!(Some("Some IO error"), cause.message());
+}
+
+// testConvertTo: the OGNL method calls on the converted value (.repeat(2), .substring(2)) are
+// Java methods, not available in Rust
+#[test]
+fn test_convert_to() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_body("Hello World");
+    assert_eq!(
+        Value::Bytes(b"Hello World".to_vec()),
+        evaluate(&e, "${convertTo(byte[])}")
+    );
+    assert_eq!(
+        Value::Bytes(b"Hello World".to_vec()),
+        evaluate(&e, "${convertTo(${body},byte[])}")
+    );
+    e.message_mut().set_body("987");
+    assert_eq!(Value::Int(987), evaluate(&e, "${convertTo(int)}"));
+    e.message_mut().set_body("true");
+    assert_eq!(Value::Bool(true), evaluate(&e, "${convertTo(boolean)}"));
+}
+
+#[test]
+fn test_uuid() {
+    let (t, e) = exchange();
+    for exp in [
+        "${uuid}",
+        "${uuid(default)}",
+        "${uuid(short)}",
+        "${uuid(simple)}",
+        "${uuid(classic)}",
+        "${uuid()}",
+        "${uuid(Short)}",
+    ] {
+        assert!(string(&e, exp).is_some(), "{exp}");
+    }
+    struct MyGen;
+    impl camel_core::api::spi::uuid::UuidGenerator for MyGen {
+        fn generate_uuid(&self) -> String {
+            "1234".to_string()
+        }
+    }
+    let generator: std::sync::Arc<dyn camel_core::api::spi::uuid::UuidGenerator> =
+        std::sync::Arc::new(MyGen);
+    use camel_core::api::spi::registry::Registry;
+    t.context
+        .simple_registry()
+        .bind("mygen", Value::object(generator))
+        .unwrap();
+    assert_expression(&e, "${uuid(mygen)}", "1234");
+}
+
+#[test]
+fn test_hash() {
+    use camel_core::languages::simple::misc_functions::digest;
+    use camel_core::util::string_helper::bytes_to_hex;
+    let (_t, e) = exchange();
+    assert_expression(
+        &e,
+        "${hash(hello)}",
+        bytes_to_hex(&digest("SHA-256", b"hello").unwrap()),
+    );
+    let body = e.message().body().to_string();
+    assert_expression(
+        &e,
+        "${hash(${body})}",
+        bytes_to_hex(&digest("SHA-256", body.as_bytes()).unwrap()),
+    );
+    assert!(string(&e, "${hash(${header.foo})}").is_some());
+    assert!(string(&e, "${hash(hello,SHA3-256)}").is_some());
+    assert_expression(
+        &e,
+        "${hash(${body},SHA3-256)}",
+        bytes_to_hex(&digest("SHA3-256", body.as_bytes()).unwrap()),
+    );
+    assert!(string(&e, "${hash(${header.foo},SHA3-256)}").is_some());
+    assert_eq!(None, string(&e, "${hash(${header.unknown})}"));
+}
+
+#[test]
+fn test_new_empty() {
+    let (_t, e) = exchange();
+    for ty in ["list", "LIST", "List", "set", "SET", "Set"] {
+        assert_eq!(
+            Value::List(vec![]),
+            evaluate(&e, &format!("${{newEmpty({ty})}}"))
+        );
+    }
+    for ty in ["map", "MAP", "Map"] {
+        assert_eq!(
+            Value::Map(ValueMap::new()),
+            evaluate(&e, &format!("${{newEmpty({ty})}}"))
+        );
+    }
+    for ty in ["string", "STRING", "String"] {
+        assert_eq!(
+            Value::from(""),
+            evaluate(&e, &format!("${{newEmpty({ty})}}"))
+        );
+    }
+    let simple = e.context().resolve_language("simple").unwrap();
+    for bad in [
+        "${newEmpty(falseSyntax}",
+        "${newEmpty()}",
+        "${newEmpty(}",
+        "${newEmpty}",
+    ] {
+        let err = simple.create_expression(bad).err().expect(bad);
+        assert!(
+            err.is_subtype("SimpleIllegalSyntaxException"),
+            "{bad}: {err:?}"
+        );
+    }
+    let err = simple
+        .create_expression("${newEmpty(unknownType)}")
+        .unwrap()
+        .evaluate(&e)
+        .unwrap_err();
+    assert!(err.is(ErrorKind::IllegalArgument));
+}
+
+// testIif: the ${file:name} cases come with the file functions
+#[test]
+fn test_iif() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_header("foo", 44);
+    assert_expression(
+        &e,
+        "${iif(${header.foo} > 0,positive,negative)}",
+        "positive",
+    );
+    e.message_mut().set_header("foo", -123);
+    assert_expression(
+        &e,
+        "${iif(${header.foo} > 0,positive,negative)}",
+        "negative",
+    );
+    e.message_mut().set_body("Hello World");
+    e.message_mut().set_header("foo", 44);
+    assert_expression(
+        &e,
+        "${iif(${header.foo} > 0,${body},Bye World)}",
+        "Hello World",
+    );
+    e.message_mut().set_header("foo", -123);
+    assert_expression(
+        &e,
+        "${iif(${header.foo} > 0,${body},Bye World)}",
+        "Bye World",
+    );
+    assert_expression(&e, "${iif(${header.foo} > 0,${body},${null})}", Value::Null);
+}

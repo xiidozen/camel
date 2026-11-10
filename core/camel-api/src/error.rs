@@ -43,6 +43,16 @@ macro_rules! kinds {
                     $(ErrorKind::$kind => concat!(stringify!($kind), "Exception")),+
                 }
             }
+
+            /// All the kinds.
+            pub const ALL: &'static [ErrorKind] = &[$(ErrorKind::$kind),+];
+
+            /// The kind of the Java exception class name, with or without package (such as
+            /// `IllegalArgumentException` or `java.lang.IllegalArgumentException`).
+            pub fn from_java_name(name: &str) -> Option<ErrorKind> {
+                let simple = name.rsplit('.').next().unwrap_or(name);
+                Self::ALL.iter().copied().find(|k| k.java_name() == simple)
+            }
         }
     };
 }
