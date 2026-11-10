@@ -4,7 +4,8 @@
 > module by module. Ported Java modules are removed, so the Maven build is not expected to work
 > here; build and test the Cargo workspace with `./etc/rust/check.sh`. Progress is tracked in
 > [`RUST_PORT_BACKLOG.md`](RUST_PORT_BACKLOG.md), and [`RUST_PORT_HANDOFF.md`](RUST_PORT_HANDOFF.md)
-> explains how to continue the work.
+> explains how to continue the work. In the Rust version, routes are written in **Rust, YAML or XML**
+> (the Java DSL is replaced by a Rust route DSL).
 
 [![Maven Central](https://img.shields.io/maven-central/v/org.apache.camel/apache-camel.svg?label=Maven%20Central)](https://central.sonatype.com/artifact/org.apache.camel/apache-camel)
 [![Javadocs](https://www.javadoc.io/badge/org.apache.camel/apache-camel.svg?color=brightgreen)](https://www.javadoc.io/doc/org.apache.camel/camel-api)

@@ -15,6 +15,10 @@ rules and the Java → Rust type mapping.
   explicit choice). The Maven build on this branch is therefore intentionally broken; only the
   Cargo workspace must build and pass.
 - Push often (after every finished group of classes) so progress is visible on GitHub.
+- **Routes are written in Rust, YAML or XML.** The owner decided the Rust framework does not keep
+  the Java DSL: build a Rust route DSL (same EIP vocabulary as the Java `RouteBuilder`, in
+  snake_case), keep the YAML and XML DSLs, mark Java-DSL-only modules (`core/camel-java-io`,
+  `dsl/camel-java-joor-dsl`) as `n/a`, and rewrite Java route examples in docs as Rust.
 
 ## 2. Environment setup
 
@@ -51,18 +55,14 @@ Crates live **in the directory of the Maven module they replace** (`core/camel-a
 
 ## 4. Current state (keep this section up to date)
 
-- `core/camel-util`: **in progress**, ~340 unit tests + ~70 doctests passing. Ported modules:
-  see `core/camel-util/src/lib.rs` and the notes in the backlog. Still Java (not yet ported) in
-  `core/camel-util/src/main/java/org/apache/camel/util/`:
-  - to port: `function/*` (`ThrowingHelper`,
-    `Suppliers`, ...), and the test `UtilEdgeCasesTest`.
-
-  - not applicable (delete with a backlog note when you get to them): `AnnotationHelper`,
-    `ReflectionHelper`, `CastUtils`, `BufferCaster`, `ClassLoadingAwareObjectInputStream`,
-    `PackageHelper`, `java21/`/`java25/` multi-release variants, `ObjectHelperLoadClassTest`,
-    `AnnotationHelperTest`, `ClassLoadingAwareObjectInputStreamTest`, `MyPojo`.
+- `core/camel-util`: **done** — all Java removed (Maven module deleted from `core/pom.xml`);
+  ~430 unit tests, 16 integration tests (`tests/util_edge_cases.rs`) and ~90 doctests. Not
+  applicable (reflection / class loading / Java serialization): `AnnotationHelper`,
+  `ReflectionHelper`, `CastUtils`, `BufferCaster`, `ClassLoadingAwareObjectInputStream`,
+  `PackageHelper`, the `java21`/`java25` multi-release sources and their tests.
 - `core/camel-core/src/test/java/org/apache/camel/util/ObjectHelperTest.java` is kept on
   purpose: its `camel-util` parts are ported, the `camel-support` `ObjectHelper` parts are not.
+- **Next:** `core/camel-api` (see §5 and the open design question in §8).
 - Everything else in the repository: **not started** (status `todo` in the backlog).
 
 ## 5. Order of work
@@ -77,8 +77,9 @@ Bottom-up by dependency, so each crate only depends on already-ported crates:
 4. `core/camel-core-model`, `camel-core-processor`, `camel-core-reifier`, `camel-core-languages`
    (simple language), `camel-core-engine`
 5. `core/camel-core` tests (3179 Java test files; port them as the features they test exist)
-6. `core/camel-main`, the XML/YAML IO modules, `dsl/*` (Java DSL becomes a Rust builder DSL;
-   YAML/XML DSLs parse into the same model)
+6. `core/camel-main`, the XML/YAML IO modules, `dsl/*`: the **Rust route DSL** replaces the Java DSL
+   (Java-DSL-only modules are n/a); the YAML and XML DSLs parse into the same model; the endpoint DSL
+   becomes generated typed Rust endpoint builders
 7. `components/*` (start with dependency-free ones: direct, seda, timer, log, mock, file,
    bean, ...), then `test-infra`, `tooling`, `catalog`, `docs`
 
@@ -124,6 +125,7 @@ Javadoc must be converted so `cargo doc` produces equivalent documentation:
 | `java.util.Properties` file format | `camel_util::properties::parse_properties` |
 | headers map | `camel_util::case_insensitive_map::CaseInsensitiveMap<Value>` |
 | reflection, class loading, Java serialization | not ported; explicit registration instead |
+| Java DSL (`RouteBuilder`) | Rust route DSL; routes in Rust, YAML or XML only |
 | internal locks in collections | `&mut self` APIs; callers wrap in `Mutex` when shared |
 
 Still open (decide when porting `camel-api`): the processing model. Recommended: `async`

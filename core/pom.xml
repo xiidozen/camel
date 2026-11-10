@@ -34,7 +34,6 @@
     <description>Camel Core Modules</description>
 
     <modules>
-        <module>camel-util</module>
         <module>camel-api</module>
         <module>camel-core-catalog</module>
         <module>camel-support</module>

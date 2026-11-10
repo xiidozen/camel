@@ -8,6 +8,7 @@ progress and what is still to do. Update it in the same commit as each port.
 
 ## Ground rules
 
+- **Route languages:** routes are written in **Rust** (a Rust route DSL), **YAML** or **XML**. The Java DSL is dropped on purpose (owner decision): Java-DSL-only modules are `n/a`, and docs/examples showing Java routes are rewritten with Rust routes.
 - **Order:** bottom-up by dependency — `core/camel-util` → `core/camel-api` →
   `core/camel-support` → engine/processor/model/languages → `core/camel-core` tests →
   DSLs → components → test-infra → tooling/catalog/docs.
@@ -47,7 +48,7 @@ progress and what is still to do. Update it in the same commit as each port.
 | Class loading, `ObjectHelper.loadClass`, service discovery via `META-INF/services` | Compile-time registration (component/language factories registered in a registry) |
 | Java serialization (`ObjectInputStream`) | Not ported; serde-based formats instead |
 | `java.util.concurrent` executors | `camel_util::concurrent` (std threads); `tokio` where async I/O is needed |
-| Java DSL (`RouteBuilder`) | Rust builder DSL with the same method names in snake_case |
+| Java DSL (`RouteBuilder`) | **Rust route DSL** (builder with the same EIP names in snake_case). Routes are written in **Rust, YAML or XML**; the Java DSL is intentionally not kept (owner decision) |
 | Groovy / jOOR / MVEL / OGNL languages | `n/a` unless a Rust interpreter exists |
 | `java.lang.Object` (bodies, headers, `Map<String, Object>`) | `camel_util::value::Value` enum (Null/Bool/Int/Float/Text/Bytes/List/Map) + `Value::Object` holding any `Send + Sync` Rust value, downcastable |
 | JVM system properties (`System.getProperty`) | `camel_util::system_properties` process-wide registry with environment variable fallback |
@@ -75,12 +76,12 @@ progress and what is still to do. Update it in the same commit as each port.
 | `core/camel-core-reifier` | 171 | 0 | todo | |
 | `core/camel-core-xml` | 32 | 1 | todo | |
 | `core/camel-health` | 12 | 0 | todo | |
-| `core/camel-java-io` | 12 | 9 | todo | |
+| `core/camel-java-io` | 12 | 9 | n/a | Reads Java DSL sources (LwJavaParser); routes are written in Rust/YAML/XML in the Rust port |
 | `core/camel-main` | 69 | 114 | todo | |
 | `core/camel-management` | 137 | 291 | todo | |
 | `core/camel-management-api` | 127 | 0 | todo | |
 | `core/camel-support` | 318 | 13 | todo | |
-| `core/camel-util` | 89 | 35 | wip | Done: `AntPathMatcher`, `StringHelper`, `StringQuoteHelper`, `URISupport`, `URIScanner`, `UnsafeUriCharactersEncoder`, `CamelURIParser`, `SensitiveUtils`, `Pair`, `TimeUtils` (+ signed `SignedDuration` for `java.time.Duration`), `UnitUtils`, `StopWatch`, `OgnlHelper`, `KeyValueHolder`, `ReferenceCount`, `EscapeHelper`, `CollectionHelper`, `ObjectHelper` (portable part; reflection/class loading helpers n/a), `backoff.*` (BackOff, SimpleBackOffTimer), `concurrent.*` (std-thread ThreadPoolExecutor, ScheduledThreadPoolExecutor, Sized/Bounded/Synchronous executors, AsyncCompletionService, ContextValue, CountDownLatch; n/a: LockHelper, NamedThreadLocal, java21/java25 virtual-thread variants), `ArtifactUtils` (hints say "dependencies" instead of "classpath"), `SecurityUtils`, `MimeTypeHelper`, `Scanner` (streaming regex tokenizer), `HomeHelper`, `SecurityViolation`, `SecureRandomHelper` (getrandom), `LocationHelper`, `ImportantHeaderUtils`, `SimpleUtils`, `HostUtils` + `InetAddressUtil` (gethostname, if-addrs), `FilterIterator`, `SkipIterator`, `function.Predicates`; n/a: `UnwrapHelper` (Quarkus proxies), `StreamUtils` (Rust iterators), `DoubleMap` (deprecated, identity keys); `FileUtil`, `FilePathResolver`, `IOHelper` (+ `charset` module replacing java.nio.charset: Java names, true Latin-1, streaming transcoders), n/a: `SkipLastByteInputStream` (deprecated, unused), `OrderedProperties`, `CamelCaseOrderedProperties`, `OrderedLocationProperties`, `PropertiesHelper` (+ `.properties` format parser), `CaseInsensitiveMap` (Arc<str> known-key dedup; `testSerialization` n/a: Java serialization) (+ camel-core `CaseInsensitiveMapTest`, `InetAddressUtilTest`, `FileUtilTest`, `FilePathResolverTest`, `StingQuoteHelperTest`, `UnsafeCharactersEncoderTest`, `OgnlHelperTest`, `KeyValueHolderTest`, `ReferenceCountTest`). New `net` module reproduces `java.net.URI`/`URLEncoder`/`URLDecoder`. Tooling TODO: regenerate `SENSITIVE_KEYS`, `IMPORTANT_HEADER_KEYS`, `SIMPLE_FUNCTIONS`, the security option tables, the artifact tables and the MIME table from the catalog. camel-core `ObjectHelperTest`: camel-util parts ported, `camel-support` `ObjectHelper` parts pending. |
+| `core/camel-util` | 89 | 35 | done | Done: `AntPathMatcher`, `StringHelper`, `StringQuoteHelper`, `URISupport`, `URIScanner`, `UnsafeUriCharactersEncoder`, `CamelURIParser`, `SensitiveUtils`, `Pair`, `TimeUtils` (+ signed `SignedDuration` for `java.time.Duration`), `UnitUtils`, `StopWatch`, `OgnlHelper`, `KeyValueHolder`, `ReferenceCount`, `EscapeHelper`, `CollectionHelper`, `ObjectHelper` (portable part; reflection/class loading helpers n/a), `backoff.*` (BackOff, SimpleBackOffTimer), `concurrent.*` (std-thread ThreadPoolExecutor, ScheduledThreadPoolExecutor, Sized/Bounded/Synchronous executors, AsyncCompletionService, ContextValue, CountDownLatch; n/a: LockHelper, NamedThreadLocal, java21/java25 virtual-thread variants), `ArtifactUtils` (hints say "dependencies" instead of "classpath"), `SecurityUtils`, `MimeTypeHelper`, `Scanner` (streaming regex tokenizer), `HomeHelper`, `SecurityViolation`, `SecureRandomHelper` (getrandom), `LocationHelper`, `ImportantHeaderUtils`, `SimpleUtils`, `HostUtils` + `InetAddressUtil` (gethostname, if-addrs), `FilterIterator`, `SkipIterator`, `function.Predicates`; n/a: `UnwrapHelper` (Quarkus proxies), `StreamUtils` (Rust iterators), `DoubleMap` (deprecated, identity keys); `FileUtil`, `FilePathResolver`, `IOHelper` (+ `charset` module replacing java.nio.charset: Java names, true Latin-1, streaming transcoders), n/a: `SkipLastByteInputStream` (deprecated, unused), `OrderedProperties`, `CamelCaseOrderedProperties`, `OrderedLocationProperties`, `PropertiesHelper` (+ `.properties` format parser), `CaseInsensitiveMap` (Arc<str> known-key dedup; `testSerialization` n/a: Java serialization) (+ camel-core `CaseInsensitiveMapTest`, `InetAddressUtilTest`, `FileUtilTest`, `FilePathResolverTest`, `StingQuoteHelperTest`, `UnsafeCharactersEncoderTest`, `OgnlHelperTest`, `KeyValueHolderTest`, `ReferenceCountTest`). New `net` module reproduces `java.net.URI`/`URLEncoder`/`URLDecoder`. Tooling TODO: regenerate `SENSITIVE_KEYS`, `IMPORTANT_HEADER_KEYS`, `SIMPLE_FUNCTIONS`, the security option tables, the artifact tables and the MIME table from the catalog. camel-core `ObjectHelperTest`: camel-util parts ported, `camel-support` `ObjectHelper` parts pending. |
 | `core/camel-xml-io` | 9 | 6 | todo | |
 | `core/camel-xml-io-util` | 4 | 2 | todo | |
 | `core/camel-xml-jaxb` | 3 | 0 | todo | |
@@ -89,12 +90,12 @@ progress and what is still to do. Update it in the same commit as each port.
 | `core/camel-yaml-io` | 5 | 9 | todo | |
 | `dsl/camel-cli-connector` | 12 | 7 | todo | |
 | `dsl/camel-cli-debug` | 1 | 0 | todo | |
-| `dsl/camel-componentdsl` | 2 | 1 | todo | |
+| `dsl/camel-componentdsl` | 2 | 1 | todo | Becomes generated, typed Rust component builders |
 | `dsl/camel-dsl-modeline` | 3 | 1 | todo | |
 | `dsl/camel-dsl-support` | 4 | 0 | todo | |
-| `dsl/camel-endpointdsl` | 4 | 47 | todo | |
+| `dsl/camel-endpointdsl` | 4 | 47 | todo | Becomes generated, typed Rust endpoint builders for the Rust route DSL |
 | `dsl/camel-endpointdsl-support` | 1 | 0 | todo | |
-| `dsl/camel-java-joor-dsl` | 2 | 30 | todo | |
+| `dsl/camel-java-joor-dsl` | 2 | 30 | n/a | Java DSL compiled at runtime with jOOR; replaced by the Rust route DSL |
 | `dsl/camel-jbang` | 0 | 0 | todo | |
 | `dsl/camel-jbang/camel-jbang-console` | 3 | 0 | todo | |
 | `dsl/camel-jbang/camel-jbang-core` | 304 | 236 | todo | |

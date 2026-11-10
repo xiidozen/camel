@@ -17,6 +17,7 @@ pub mod concurrent;
 pub mod escape_helper;
 pub mod file_path_resolver;
 pub mod file_util;
+pub mod function;
 pub mod home_helper;
 pub mod host_utils;
 pub mod important_header_utils;

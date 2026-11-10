@@ -164,6 +164,15 @@ mod tests {
         assert_eq!(None, it.next());
     }
 
+    // port of PredicatesTest
+    #[test]
+    fn test_negate() {
+        let is_empty = |s: &str| s.is_empty();
+        assert!(!is_empty("something"));
+        assert!(negate(is_empty)("something"));
+        assert!(!negate(is_empty)(""));
+    }
+
     #[test]
     fn negate_predicate() {
         let mut not_empty = negate(|s: &str| s.is_empty());
