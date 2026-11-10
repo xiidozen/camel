@@ -1,0 +1,160 @@
+# Rust port — handoff instructions
+
+This document is for whoever (human or AI agent) continues the conversion of Apache Camel
+from Java to Rust on the `rust` branch. Read it fully before changing anything, then read
+[`RUST_PORT_BACKLOG.md`](RUST_PORT_BACKLOG.md), which holds the per-module status, the ground
+rules and the Java → Rust type mapping.
+
+## 1. Goal and agreed scope
+
+- The repository owner asked for the **entire repository** to be converted to Rust, across as
+  many sessions as needed, including all unit tests and documentation.
+- Work happens on the branch **`rust`**, pushed to **`origin`** (the owner's fork). Never push
+  to `upstream` (`apache/camel`).
+- **Ported Java code is deleted** in the same commit as its Rust replacement (the owner's
+  explicit choice). The Maven build on this branch is therefore intentionally broken; only the
+  Cargo workspace must build and pass.
+- Push often (after every finished group of classes) so progress is visible on GitHub.
+
+## 2. Environment setup
+
+```bash
+# Rust toolchain (stable, edition 2021, MSRV 1.80); rustfmt and clippy are required
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal -c rustfmt,clippy
+source ~/.cargo/env
+
+git checkout rust && git pull
+# git identity used so far for this branch (repository-local config)
+git config user.name  "<the owner's GitHub login>"   # look it up: gh api /user --jq .login
+git config user.email "<the owner's email>"          # ask the owner if unknown; never guess
+
+./etc/rust/check.sh   # must pass before you start, and before every push
+```
+
+`etc/rust/check.sh` runs, in order: `cargo fmt --check`, `cargo build --all-targets`,
+`cargo test`, `cargo clippy --all-targets -- -D warnings`, and
+`RUSTDOCFLAGS="-D warnings" cargo doc --no-deps` for the whole workspace.
+
+## 3. Where things are
+
+| Path | What |
+| --- | --- |
+| `Cargo.toml` (root) | Cargo workspace; add every new crate to `members` and `[workspace.dependencies]` |
+| `core/camel-util/` | First crate (`camel-util`), being ported in place of the Java module |
+| `core/camel-util/src/*.rs` | One Rust module per Java class (or group of classes); `lib.rs` lists them alphabetically |
+| `core/camel-util/tests/resources/` | Test resources moved from `src/test/resources` |
+| `RUST_PORT_BACKLOG.md` | Status of all 703 Maven modules, ground rules, Java → Rust mapping |
+| `etc/rust/check.sh` | The quality gate |
+
+Crates live **in the directory of the Maven module they replace** (`core/camel-api/Cargo.toml`,
+`core/camel-api/src/lib.rs`, ...). Crate name = Maven artifactId (`camel-api` → `camel_api`).
+
+## 4. Current state (keep this section up to date)
+
+- `core/camel-util`: **in progress**, ~340 unit tests + ~70 doctests passing. Ported modules:
+  see `core/camel-util/src/lib.rs` and the notes in the backlog. Still Java (not yet ported) in
+  `core/camel-util/src/main/java/org/apache/camel/util/`:
+  - to port: `IOHelper` (only env lookup done), `SecurityUtils`, `ArtifactUtils`,
+    `SkipLastByteInputStream`, `backoff/*`, `concurrent/*`, `function/*` (`ThrowingHelper`,
+    `Suppliers`, ...), and the tests `UtilEdgeCasesTest`, `IOHelperTest`, `SecurityUtilsTest`,
+    `ArtifactUtilsTest`, `SkipLastNewlineInputStreamTest`, `backoff/*Test`, `concurrent/*Test`.
+  - not applicable (delete with a backlog note when you get to them): `AnnotationHelper`,
+    `ReflectionHelper`, `CastUtils`, `BufferCaster`, `ClassLoadingAwareObjectInputStream`,
+    `PackageHelper`, `java21/`/`java25/` multi-release variants, `ObjectHelperLoadClassTest`,
+    `AnnotationHelperTest`, `ClassLoadingAwareObjectInputStreamTest`, `MyPojo`.
+- `core/camel-core/src/test/java/org/apache/camel/util/ObjectHelperTest.java` is kept on
+  purpose: its `camel-util` parts are ported, the `camel-support` `ObjectHelper` parts are not.
+- Everything else in the repository: **not started** (status `todo` in the backlog).
+
+## 5. Order of work
+
+Bottom-up by dependency, so each crate only depends on already-ported crates:
+
+1. finish `core/camel-util`
+2. `core/camel-api` (Exchange, Message, CamelContext, Endpoint, Component, Processor, Producer,
+   Consumer, Expression, Predicate, Route, TypeConverter, ... — traits) — design the async
+   processing model here (see §8)
+3. `core/camel-support`, `core/camel-base`, `core/camel-base-engine`, `core/camel-management-api`
+4. `core/camel-core-model`, `camel-core-processor`, `camel-core-reifier`, `camel-core-languages`
+   (simple language), `camel-core-engine`
+5. `core/camel-core` tests (3179 Java test files; port them as the features they test exist)
+6. `core/camel-main`, the XML/YAML IO modules, `dsl/*` (Java DSL becomes a Rust builder DSL;
+   YAML/XML DSLs parse into the same model)
+7. `components/*` (start with dependency-free ones: direct, seda, timer, log, mock, file,
+   bean, ...), then `test-infra`, `tooling`, `catalog`, `docs`
+
+## 6. How to port one class (the loop)
+
+1. **Read the Java class and all its tests** (in its module *and* in
+   `core/camel-core/src/test/java/...` — many util tests live there).
+2. Write `src/<snake_case_name>.rs`:
+   - same behaviour as Java, including edge cases the tests pin down;
+   - Java `null` → `Option`, checked/illegal-argument exceptions → `Result` (error message text
+     kept identical to Java where tests assert on it);
+   - `Object` → `camel_util::value::Value`; `Map<String, Object>` → `ValueMap` (insertion
+     ordered) or `CaseInsensitiveMap` for headers;
+   - **full rustdoc** converted from the javadoc (see §7);
+   - translate every Java test into `#[cfg(test)] mod tests` (or `src/<module>/tests.rs` when
+     large) keeping the Java test names in snake_case.
+3. Add the module to `lib.rs` (alphabetical), run `cargo fmt --all` and `./etc/rust/check.sh`.
+4. `git rm` the ported Java sources **and** tests; update the module row in the backlog.
+5. Commit and push (see §9).
+
+## 7. Documentation rules (the owner asked for this explicitly)
+
+Javadoc must be converted so `cargo doc` produces equivalent documentation:
+
+- summary + description → first lines of `///`; class/package docs → `//!` module docs
+- `@param` → `# Arguments` list, `@return` → `# Returns`, `@throws` → `# Errors` / `# Panics`
+- `<pre>` / `{@code}` examples → `# Examples` with a compiling doctest where practical
+- `{@link Foo}` → intra-doc link ``[`Foo`]``; `@deprecated` → `#[deprecated(since, note)]`;
+  `@since X.Y` → a `*Since Camel X.Y*` line
+- every crate: `#![deny(missing_docs)]` and `#![deny(rustdoc::broken_intra_doc_links)]`
+- also update user-facing docs (`docs/`, component `src/main/docs/*.adoc`) when the module they
+  describe is ported, replacing Java examples with Rust ones.
+
+## 8. Design decisions already taken (do not re-litigate)
+
+| Java | Rust |
+| --- | --- |
+| `java.lang.Object` | `camel_util::value::Value` (+ `Value::Object` for any `Send + Sync` value, downcastable) |
+| JVM system properties | `camel_util::system_properties` (registry + env fallback + built-in `java.io.tmpdir`, `user.dir`, ...) |
+| `java.net.URI`, `URLEncoder`, `URLDecoder` | `camel_util::net` (exact JDK semantics — endpoint URI normalization depends on it) |
+| `java.time.Duration` | `camel_util::time_utils::SignedDuration` |
+| `java.util.Properties` file format | `camel_util::properties::parse_properties` |
+| headers map | `camel_util::case_insensitive_map::CaseInsensitiveMap<Value>` |
+| reflection, class loading, Java serialization | not ported; explicit registration instead |
+| internal locks in collections | `&mut self` APIs; callers wrap in `Mutex` when shared |
+
+Still open (decide when porting `camel-api`): the processing model. Recommended: `async`
+processors on `tokio` (Camel's `AsyncProcessor`/callback model maps naturally to futures),
+`Arc<dyn Processor>` routes, and an `Exchange` owned by the routing engine and passed by
+`&mut`.
+
+## 9. Commits, pushes and quality bar
+
+- Commit message: `Rust port: <module> <what>` + a body listing what was ported and what was
+  dropped as not applicable, ending with the `Co-Authored-By:` trailer of the AI used.
+- Never push with a failing `./etc/rust/check.sh`. Never use `git push --force`.
+- Push to `origin rust` after every finished group.
+
+## 10. Pitfalls found so far
+
+- **Match Java exactly, then test it.** Several "bugs" were wrong expectations about Java:
+  `"2 secs"` is not a valid time pattern; a `.properties` continuation line drops its leading
+  whitespace; `String.split` drops trailing empty strings. When unsure, reproduce the Java
+  algorithm literally (see `lang.rs` for `java_trim`, `java_split`, identifier checks).
+- Java string indices are UTF-16; the port uses `char` indices where Java indexes text, and byte
+  slicing only at ASCII delimiters.
+- Rust runs tests **in parallel**: tests touching global state (sanitize keywords, known header
+  keys, env vars) use a `static Mutex` guard and reset the state on drop.
+- Do not compare `&dyn Error` addresses for identity: a zero-sized cause shares its wrapper's
+  address.
+- `cargo fmt` rewrites files after you edit them; re-read before doing exact-text edits.
+- Generated lists (sensitive keys, important headers, simple functions, mime types) keep their
+  `START`/`END` markers so the future Rust tooling can regenerate them.
+
+## 11. Updating this document
+
+Update §4 (current state) and the backlog in the same commit as every port, so a new session
+can always resume from the latest pushed commit.
