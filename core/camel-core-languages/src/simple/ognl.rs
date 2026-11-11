@@ -5,7 +5,7 @@
 //!
 //! Java finds the methods by reflection. The Rust port knows the common methods of the
 //! Java types behind each [`Value`] kind (`String`, `List`, `Map`, numbers, booleans, byte
-//! arrays) and asks [`Bean`](camel_util::value::Bean) values (wrapped with
+//! arrays) and asks [`Bean`] values (wrapped with
 //! [`Value::bean`]) for their properties and methods.
 //!
 //! A step without parentheses (`${body.name}`) is a method without arguments, else a getter
@@ -20,7 +20,7 @@ use camel_api::exchange::Exchange;
 use camel_util::ognl_helper;
 use camel_util::string_helper::remove_leading_and_ending_quotes;
 use camel_util::string_quote_helper::split_safe_quote_full;
-use camel_util::value::{Value, ValueMap};
+use camel_util::value::{Bean, Value, ValueMap};
 
 /// The Java class name of `org.apache.camel.language.bean.RuntimeBeanExpressionException`.
 pub const RUNTIME_BEAN_EXPRESSION_EXCEPTION: &str =
@@ -42,7 +42,10 @@ pub fn java_class_name(value: &Value) -> String {
         Value::Bytes(_) => "[B".to_string(),
         Value::List(_) => "java.util.ArrayList".to_string(),
         Value::Map(_) => "java.util.HashMap".to_string(),
-        Value::Object(o) => o.type_name().to_string(),
+        Value::Object(o) => match value.downcast_ref::<CamelError>() {
+            Some(e) => camel_api::error::error_type_name(e),
+            None => o.type_name().to_string(),
+        },
     }
 }
 
@@ -78,9 +81,7 @@ fn java_to_string(value: &Value) -> String {
 pub fn invoke_ognl(bean: &Value, ognl: &str, exchange: &Exchange) -> CamelResult<Value> {
     let bean_name = || canonical_class_name(bean);
     let wrap = |method: &str, e: CamelError| {
-        if e.is_subtype(RUNTIME_BEAN_EXPRESSION_EXCEPTION)
-            || e.is(ErrorKind::ExpressionIllegalSyntax)
-        {
+        if e.is_subtype(RUNTIME_BEAN_EXPRESSION_EXCEPTION) {
             return e;
         }
         CamelError::with_cause(
@@ -112,7 +113,7 @@ pub fn invoke_ognl(bean: &Value, ognl: &str, exchange: &Exchange) -> CamelResult
             return Err(CamelError::new(
                 ErrorKind::RuntimeExpression,
                 format!(
-                    "Failed to invoke method: {ognl} on {} due last method returned null and therefore cannot continue to invoke method {name} on a null instance",
+                    "Failed to invoke method: {ognl} on {} due last method returned null and therefore cannot continue to invoke method {part} on a null instance",
                     bean_name()
                 ),
             )
@@ -176,7 +177,8 @@ fn lookup_key(
                             return Err(CamelError::new(
                                 ErrorKind::ExpressionIllegalSyntax,
                                 format!("Illegal syntax: {key}"),
-                            ))
+                            )
+                            .with_detail(key.as_str()))
                         }
                     }
                 }
@@ -359,21 +361,48 @@ fn property_of(value: &Value, name: &str) -> Option<Value> {
     }
 }
 
-/// The Java class of the value, as a map with `name`, `simpleName` and `canonicalName`.
+/// The Java class of a value (Java `java.lang.Class`, the result of `getClass()`).
+struct JavaClass {
+    name: String,
+    simple_name: String,
+    canonical_name: String,
+}
+
+impl Bean for JavaClass {
+    /// `name`, `simpleName` and `canonicalName` (`getName()`, `getSimpleName()`, ...).
+    fn property(&self, name: &str) -> Option<Value> {
+        match name {
+            "name" | "typeName" => Some(Value::from(self.name.as_str())),
+            "simpleName" => Some(Value::from(self.simple_name.as_str())),
+            "canonicalName" => Some(Value::from(self.canonical_name.as_str())),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for JavaClass {
+    /// Java `Class.toString()`: `class java.lang.String`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "class {}", self.name)
+    }
+}
+
+/// The Java class of the value: a bean with `name`, `simpleName` and `canonicalName`.
 fn java_class(value: &Value) -> Value {
     let name = java_class_name(value);
-    let simple = match value {
+    let simple_name = match value {
         Value::Bytes(_) => "byte[]".to_string(),
-        _ => name.rsplit(['.', ':']).next().unwrap_or(&name).to_string(),
+        _ => name
+            .rsplit(['.', ':', '$'])
+            .next()
+            .unwrap_or(&name)
+            .to_string(),
     };
-    let mut m = ValueMap::new();
-    m.insert("name".to_string(), Value::from(name.as_str()));
-    m.insert("simpleName".to_string(), Value::from(simple));
-    m.insert(
-        "canonicalName".to_string(),
-        Value::from(canonical_class_name(value)),
-    );
-    Value::Map(m)
+    Value::bean_display(JavaClass {
+        canonical_name: canonical_class_name(value),
+        name,
+        simple_name,
+    })
 }
 
 fn text_arg(args: &[Value], i: usize) -> Option<String> {
@@ -460,6 +489,10 @@ fn string_method(s: &str, name: &str, args: &[Value]) -> CamelResult<Option<Valu
         ("startsWith", 1) => Value::Bool(s.starts_with(&text(0))),
         ("endsWith", 1) => Value::Bool(s.ends_with(&text(0))),
         ("equalsIgnoreCase", 1) => Value::Bool(s.to_lowercase() == text(0).to_lowercase()),
+        ("compareTo", 1) => Value::Int(java_compare_to(s, &text(0))),
+        ("compareToIgnoreCase", 1) => {
+            Value::Int(java_compare_to(&s.to_lowercase(), &text(0).to_lowercase()))
+        }
         ("matches", 1) => {
             let re = regex(&format!("^(?:{})$", text(0)))?;
             Value::Bool(re.is_match(s))
@@ -519,6 +552,18 @@ fn string_method(s: &str, name: &str, args: &[Value]) -> CamelResult<Option<Valu
         _ => return Ok(None),
     };
     Ok(Some(v))
+}
+
+/// Java `String.compareTo`: the difference of the first different UTF-16 units, else of the
+/// lengths.
+fn java_compare_to(a: &str, b: &str) -> i64 {
+    let (x, y): (Vec<u16>, Vec<u16>) = (a.encode_utf16().collect(), b.encode_utf16().collect());
+    for (c1, c2) in x.iter().zip(y.iter()) {
+        if c1 != c2 {
+            return *c1 as i64 - *c2 as i64;
+        }
+    }
+    x.len() as i64 - y.len() as i64
 }
 
 /// The char index of a byte index (Java indexes are chars), `-1` for none.

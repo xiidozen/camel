@@ -3,6 +3,7 @@
 //! `${exchange.message.body}`): [`Bean`] implementations of [`CamelError`], [`Exchange`] and
 //! [`Message`], and the values that wrap them.
 
+use crate::context::CamelContext;
 use crate::error::{error_type_name, CamelError};
 use crate::exchange::Exchange;
 use crate::message::Message;
@@ -138,6 +139,39 @@ impl Bean for Exchange {
 /// a [`Bean`] displayed as `Exchange[id]`.
 pub fn exchange_value(exchange: &Exchange) -> Value {
     Value::bean_display(exchange.clone())
+}
+
+/// The version of the Rust port of Camel (Java `CamelContext.getVersion()`).
+pub const CAMEL_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// What the simple language can navigate of a CamelContext (`${camelContext.name}`).
+struct ContextBean {
+    name: String,
+}
+
+impl Bean for ContextBean {
+    /// `name` and `version`.
+    fn property(&self, name: &str) -> Option<Value> {
+        match name {
+            "name" => Some(Value::from(self.name.as_str())),
+            "version" => Some(Value::from(CAMEL_VERSION)),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for ContextBean {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "CamelContext({})", self.name)
+    }
+}
+
+/// The CamelContext as a value (Java `${camelContext}`): a [`Bean`] with its `name` and
+/// `version`.
+pub fn context_value(context: &dyn CamelContext) -> Value {
+    Value::bean_display(ContextBean {
+        name: context.name(),
+    })
 }
 
 #[cfg(test)]

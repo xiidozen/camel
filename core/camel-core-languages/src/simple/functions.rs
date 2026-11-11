@@ -113,31 +113,47 @@ fn variable_lookup(e: &Exchange, k: &str) -> Option<Value> {
     e.variable(k).cloned()
 }
 
-fn ognl_expression(kind: &'static str, key: &str, lookup: Lookup) -> SharedExpression {
-    // the first part is the name, the rest navigates into the value
-    let (name, rest) = split_first_ognl(key);
-    let name = name.to_string();
-    let rest = rest.to_string();
-    let description = format!("{kind}({key})");
-    let full = key.to_string();
-    named_expression(description, move |e| {
-        // the full name first (Java KeyedOgnlExpressionAdapter), then the OGNL on the key
-        if let Some(v) = lookup(e, &full) {
-            return Ok(v);
-        }
-        let v = lookup(e, &name).unwrap_or_default();
-        if rest.is_empty() || v.is_null() {
-            Ok(v)
-        } else {
-            invoke_ognl(&v, &rest, e)
-        }
-    })
+/// The key and the OGNL methods of a keyed OGNL expression (Java
+/// `KeyedOgnlExpressionAdapter`): `foo.bar` is the key `foo` and the methods `.bar`, `[a.b].c`
+/// the key `a.b` and the methods `.c`.
+fn split_keyed_ognl(ognl: &str) -> (String, Option<String>) {
+    let methods = ognl_helper::split_ognl(ognl).unwrap_or_default();
+    let first = methods.first().cloned().unwrap_or_else(|| ognl.to_string());
+    let mut key = first.clone();
+    let mut suffix = String::new();
+    // a key inside brackets (eg: [foo.bar]) keeps its dots
+    if key.starts_with('[') && key.ends_with(']') {
+        key = remove_leading_and_ending_quotes(&key[1..key.len() - 1]);
+        suffix = camel_util::string_helper::after(&first, &key).unwrap_or_default();
+    }
+    // remove any OGNL operators so we got the pure key name
+    let key = ognl_helper::remove_operators(&key);
+    let method =
+        camel_util::string_helper::after(ognl, &format!("{key}{suffix}")).filter(|m| !m.is_empty());
+    (key, method)
 }
 
-/// Splits `foo.bar[0]` into `foo` and `.bar[0]`, and `foo[0]` into `foo` and `[0]`.
-fn split_first_ognl(key: &str) -> (&str, &str) {
-    let end = key.find(['.', '[', '?']).unwrap_or(key.len());
-    (&key[..end], &key[end..])
+/// The value of a header, exchange property or variable navigated with OGNL (Java
+/// `KeyedOgnlExpressionAdapter`): the full text (with its nested functions evaluated) is
+/// tried as the name first, then the first part is the name and the rest is invoked on its
+/// value.
+fn ognl_expression(kind: &'static str, ognl: &str, lookup: Lookup) -> SharedExpression {
+    let (key, method) = split_keyed_ognl(ognl);
+    let full = name_expression(ognl);
+    let key = name_expression(&key);
+    named_expression(format!("{kind}Ognl({ognl})"), move |e| {
+        // try with full name first
+        if let Some(v) = lookup(e, &full.evaluate(e)?.to_string()) {
+            return Ok(v);
+        }
+        let Some(v) = lookup(e, &key.evaluate(e)?.to_string()) else {
+            return Ok(Value::Null);
+        };
+        match &method {
+            Some(m) if !v.is_null() => invoke_ognl(&v, m, e),
+            _ => Ok(v),
+        }
+    })
 }
 
 pub use camel_support::type_conversion::convert_to_type;
@@ -440,10 +456,7 @@ fn scoped_function(
             index,
         ));
     }
-    // a key with nested functions is evaluated (Java simpleExpression), not navigated
-    if ognl_helper::is_valid_ognl_expression(&key)
-        && !super::tokenizer::has_function_start_token(&key)
-    {
+    if ognl_helper::is_valid_ognl_expression(&key) {
         Ok(ognl_expression(kind, &key, lookup))
     } else {
         Ok(scoped_expression(kind, &key, lookup))
@@ -550,6 +563,27 @@ fn variable_function(function: &str, index: usize) -> ParseResult<Option<SharedE
 
 /// The exchange property functions (Java `ExchangeFunctionFactory`).
 fn exchange_function(function: &str, index: usize) -> ParseResult<Option<SharedExpression>> {
+    if let Some(r) = if_starts_with_return_remainder("camelContext", function) {
+        if starts_ognl(r) {
+            if ognl_helper::is_invalid_valid_ognl_expression(r) {
+                return Err(ParserError::new(
+                    format!("Valid syntax: ${{camelContext.OGNL}} was: {function}"),
+                    index,
+                ));
+            }
+            let r = r.to_string();
+            return Ok(Some(named_expression(
+                format!("camelContextOgnl({r})"),
+                move |e| {
+                    invoke_ognl(
+                        &camel_api::beans::context_value(e.context().as_ref()),
+                        &r,
+                        e,
+                    )
+                },
+            )));
+        }
+    }
     // ${exception.OGNL} and ${exchange.OGNL} (exchangeProperty is checked before exchange)
     if let Some(r) = if_starts_with_return_remainder("exception", function) {
         if starts_ognl(r) {
@@ -616,7 +650,17 @@ mod tests {
         assert_eq!(Some(":foo"), parse_in_header("headers:foo"));
         assert_eq!(None, parse_in_header("headerX"));
         assert_eq!(Some(".x"), parse_variable("variable.x"));
-        assert_eq!(("foo", ".bar[0]"), split_first_ognl("foo.bar[0]"));
+        let keyed = |s: &str| {
+            let (k, m) = split_keyed_ognl(s);
+            (k, m.unwrap_or_default())
+        };
+        assert_eq!(("foo".into(), ".bar[0]".into()), keyed("foo.bar[0]"));
+        assert_eq!(("a.b".into(), ".c".into()), keyed("[a.b].c"));
+        assert_eq!(("a b".into(), ".c".into()), keyed("['a b'].c"));
+        assert_eq!(
+            ("ITEMS".into(), "[${exchangeProperty.i}]".into()),
+            keyed("ITEMS[${exchangeProperty.i}]")
+        );
         assert_eq!(
             Value::Int(12),
             convert_to_type(&Value::from("12"), "java.lang.Integer").unwrap()

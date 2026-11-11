@@ -59,8 +59,18 @@ impl Message {
     }
 
     /// The timestamp (millis since epoch) the message was created by its consumer, or `0`.
+    ///
+    /// Without a timestamp, the `CamelMessageTimestamp` header is used (Java
+    /// `MessageSupport.getMessageTimestamp`).
     pub fn message_timestamp(&self) -> i64 {
-        self.message_timestamp
+        let ts = if self.message_timestamp == 0 {
+            self.header(crate::exchange_constants::MESSAGE_TIMESTAMP)
+                .and_then(|v| i64::from_value(v).ok().flatten())
+                .unwrap_or(-1)
+        } else {
+            self.message_timestamp
+        };
+        ts.max(0)
     }
 
     /// Sets the message timestamp.

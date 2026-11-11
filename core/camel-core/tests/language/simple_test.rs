@@ -1799,3 +1799,834 @@ fn test_exception() {
         "IllegalArgumentException",
     );
 }
+
+#[test]
+fn test_body_as() {
+    let (_t, mut e) = exchange();
+    for f in ["bodyAs", "mandatoryBodyAs"] {
+        e.message_mut().set_body("<hello id='m123'>world!</hello>");
+        assert_expression(
+            &e,
+            &format!("${{{f}(String)}}"),
+            "<hello id='m123'>world!</hello>",
+        );
+        assert_expression(
+            &e,
+            &format!("${{{f}('String')}}"),
+            "<hello id='m123'>world!</hello>",
+        );
+        e.message_mut().set_body(456);
+        for t in ["Integer", "int", "'int'"] {
+            assert_expression(&e, &format!("${{{f}({t})}}"), 456);
+        }
+        let err = error(&e, &format!("${{{f}(XXX)}}"));
+        assert!(err.to_string().contains("XXX"), "{err}");
+    }
+    e.message_mut().set_body(Value::Null);
+    assert_eq!(Value::Null, evaluate(&e, "${bodyAs('String')}"));
+    let err = error(&e, "${mandatoryBodyAs('String')}");
+    assert!(err.is(ErrorKind::InvalidPayload), "{err}");
+}
+
+#[test]
+fn test_header_empty_body() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_body(Value::Null);
+    for exp in [
+        "${header.foo}",
+        "${header:foo}",
+        "${headers.foo}",
+        "${headers:foo}",
+        "${in.header.foo}",
+        "${in.header:foo}",
+        "${in.headers.foo}",
+        "${in.headers:foo}",
+        "${headers[foo]}",
+        "${in.headers[foo]}",
+    ] {
+        assert_expression(&e, exp, "abc");
+    }
+}
+
+#[test]
+fn test_ognl_on_headers_and_properties_with_bracket() {
+    let (_t, mut e) = exchange();
+    for key in ["order", "purchase.order", "foo.bar.qux", "purchase order"] {
+        e.message_mut()
+            .set_header(key, order_line(123, "Camel in Action"));
+        assert_expression(&e, &format!("${{headers[{key}].name}}"), "Camel in Action");
+        assert_expression(
+            &e,
+            &format!("${{in.headers[{key}].name}}"),
+            "Camel in Action",
+        );
+        assert_expression(
+            &e,
+            &format!("${{in.headers['{key}'].name}}"),
+            "Camel in Action",
+        );
+        e.set_property(key, order_line(123, "Camel in Action"));
+        assert_expression(
+            &e,
+            &format!("${{exchangeProperty[{key}].name}}"),
+            "Camel in Action",
+        );
+        assert_expression(
+            &e,
+            &format!("${{exchangeProperty['{key}'].name}}"),
+            "Camel in Action",
+        );
+    }
+}
+
+#[test]
+fn test_is_instance_of_empty_body() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_body(Value::Null);
+    let simple = e.context().resolve_language("simple").unwrap();
+    let err = simple.create_predicate("${body} is null").err().unwrap();
+    assert!(err.is_subtype("SimpleIllegalSyntaxException"), "{err}");
+    assert!(err.message().unwrap().contains(" at location 11"), "{err}");
+}
+
+#[test]
+fn test_headers_and_variables() {
+    let (_t, mut e) = exchange();
+    let headers: ValueMap = e
+        .message()
+        .headers()
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.clone()))
+        .collect();
+    assert_eq!(2, headers.len());
+    assert_eq!(Value::Map(headers.clone()), evaluate(&e, "${headers}"));
+    assert_eq!(Value::Map(headers.clone()), evaluate(&e, "${in.headers}"));
+    assert_expression(&e, "${headers.size}", 2);
+    for (k, v) in &headers {
+        e.set_variable(k, v.clone());
+    }
+    e.message_mut().remove_headers("*");
+    assert_eq!(3, e.variables().len());
+    assert_eq!(
+        Value::Map(e.variables().clone()),
+        evaluate(&e, "${variables}")
+    );
+    assert_expression(&e, "${variables.size}", 3);
+}
+
+#[test]
+fn test_header_and_variable_key_with_space_and_as() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_header("some key", "Some Value");
+    // the variables are the headers (Java putAll) for the variable cases
+    let mut v = e.clone();
+    for (k, x) in e.message().headers().iter() {
+        v.set_variable(k, x.clone());
+    }
+    for (x, scope, plural) in [(&e, "header", "headers"), (&v, "variable", "variables")] {
+        assert_expression(x, &format!("${{{scope}As(foo,String)}}"), "abc");
+        assert_expression(x, &format!("${{{scope}As(some key,String)}}"), "Some Value");
+        assert_expression(
+            x,
+            &format!("${{{scope}As('some key',String)}}"),
+            "Some Value",
+        );
+        for s in [scope, plural] {
+            assert_expression(x, &format!("${{{s}[foo]}}"), "abc");
+            assert_expression(x, &format!("${{{s}[some key]}}"), "Some Value");
+            assert_expression(x, &format!("${{{s}['some key']}}"), "Some Value");
+        }
+        for args in [
+            "bar,int",
+            "bar, int",
+            "'bar', int",
+            "'bar','int'",
+            "'bar','Integer'",
+            "'bar',\"int\"",
+        ] {
+            assert_expression(x, &format!("${{{scope}As({args})}}"), 123);
+        }
+        assert_expression(x, &format!("${{{scope}As(bar,String)}}"), "123");
+        assert_eq!(
+            Value::Null,
+            evaluate(x, &format!("${{{scope}As(unknown,String)}}"))
+        );
+        let err = error(x, &format!("${{{scope}As(unknown String)}}"));
+        assert!(
+            err.message().unwrap().starts_with(&format!(
+                "Valid syntax: ${{{scope}As(key, type)}} was: {scope}As(unknown String)"
+            )),
+            "{err}"
+        );
+        let err = error(x, &format!("${{{scope}As(fool,String).test}}"));
+        assert!(
+            err.message().unwrap().starts_with(&format!(
+                "Valid syntax: ${{{scope}As(key, type)}} was: {scope}As(fool,String).test"
+            )),
+            "{err}"
+        );
+        let err = error(x, &format!("${{{scope}As(bar,XXX)}}"));
+        assert!(err.to_string().contains("XXX"), "{err}");
+    }
+    assert_expression(&v, "${variable[cheese]}", "gauda");
+    assert_expression(&v, "${variables[cheese]}", "gauda");
+}
+
+#[test]
+fn test_illegal_syntax() {
+    let (_t, e) = exchange();
+    for exp in ["hey ${xxx} how are you?", "${xxx}"] {
+        assert!(error(&e, exp)
+            .message()
+            .unwrap()
+            .starts_with("Unknown function: xxx"));
+    }
+    assert!(error(&e, "${bodyAs(xxx}")
+        .message()
+        .unwrap()
+        .starts_with("Valid syntax: ${bodyAs(type)} was: bodyAs(xxx"));
+}
+
+#[test]
+fn test_ognl_header_list_and_map() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_header(
+        "wicket",
+        Value::List(vec![
+            Value::from("Camel in Action"),
+            Value::from("ActiveMQ in Action"),
+        ]),
+    );
+    assert_expression(&e, "${header.wicket[0]}", "Camel in Action");
+    assert_expression(&e, "${header.wicket[1]}", "ActiveMQ in Action");
+    assert_index_out_of_bounds(&e, "${header.wicket[2]}");
+    assert_eq!(Value::Null, evaluate(&e, "${header.unknown[cool]}"));
+
+    e.message_mut().set_header(
+        "wicket",
+        Value::List(vec![
+            order_line(123, "Camel in Action"),
+            order_line(456, "ActiveMQ in Action"),
+        ]),
+    );
+    assert_expression(&e, "${header.wicket[0].getId}", 123);
+    assert_expression(&e, "${header.wicket[1].getName}", "ActiveMQ in Action");
+    assert_index_out_of_bounds(&e, "${header.wicket[2]}");
+
+    e.message_mut().set_header("wicket", Value::Map(cool_map()));
+    assert_expression(&e, "${header.wicket[cool]}", "Camel rocks");
+    assert_expression(&e, "${header.wicket[dude]}", "Hey dude");
+    assert_eq!(Value::Null, evaluate(&e, "${header.wicket[unknown]}"));
+    assert_expression(&e, "${header.wicket[code]}", 4321);
+    assert_eq!(Value::Null, evaluate(&e, "${header?.unknown[cool]}"));
+    assert_eq!(Value::Null, evaluate(&e, "${header.unknown[cool]}"));
+
+    let mut map = ValueMap::new();
+    map.insert("this.code".into(), Value::from("This code"));
+    e.message_mut().set_header("wicket", Value::Map(map));
+    assert_expression(&e, "${header.wicket[this.code]}", "This code");
+
+    let err = error(&e, "${header.foo[bar]}");
+    assert!(err.is_subtype("RuntimeBeanExpressionException"), "{err}");
+    assert_eq!(
+        Some("Key: bar not found in bean: abc of type: java.lang.String using OGNL path [[bar]]"),
+        cause(&err).message()
+    );
+    assert!(error(&e, "${header.foo[bar}")
+        .message()
+        .unwrap()
+        .starts_with("Valid syntax: ${header.name[key]} was: header.foo[bar"));
+}
+
+#[test]
+fn test_body_ognl_as_map() {
+    let (_t, mut e) = exchange();
+    let mut map = ValueMap::new();
+    map.insert("foo".into(), Value::from("Camel"));
+    map.insert("bar".into(), Value::Int(6));
+    map.insert("foo.bar".into(), Value::from("Camel"));
+    e.message_mut().set_body(Value::Map(map));
+    for b in ["in.body", "body"] {
+        assert_expression(&e, &format!("${{{b}[foo]}}"), "Camel");
+        assert_expression(&e, &format!("${{{b}[bar]}}"), 6);
+        assert_expression(&e, &format!("${{{b}[foo.bar]}}"), "Camel");
+    }
+}
+
+/// Java `Animal`.
+struct Animal {
+    name: &'static str,
+    age: i64,
+    friend: std::sync::Mutex<Option<Value>>,
+}
+
+impl Animal {
+    fn new(name: &'static str, age: i64) -> std::sync::Arc<Animal> {
+        std::sync::Arc::new(Animal {
+            name,
+            age,
+            friend: std::sync::Mutex::new(None),
+        })
+    }
+
+    fn set_friend(&self, friend: &std::sync::Arc<Animal>) {
+        *self.friend.lock().unwrap() = Some(animal_value(friend));
+    }
+}
+
+impl std::fmt::Display for Animal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name)
+    }
+}
+
+impl camel_core::util::value::Bean for Animal {
+    fn property(&self, name: &str) -> Option<Value> {
+        match name {
+            "name" => Some(Value::from(self.name)),
+            "age" => Some(Value::Int(self.age)),
+            "friend" => Some(self.friend.lock().unwrap().clone().unwrap_or_default()),
+            "dangerous" => Some(Value::Bool(self.name.contains("Tiger"))),
+            _ => None,
+        }
+    }
+
+    fn invoke(&self, method: &str, args: &[Value]) -> Option<Result<Value, String>> {
+        match (method, args) {
+            ("setFriend", [friend]) => {
+                *self.friend.lock().unwrap() = Some(friend.clone());
+                Some(Ok(Value::Null))
+            }
+            _ => None,
+        }
+    }
+}
+
+fn animal_value(a: &std::sync::Arc<Animal>) -> Value {
+    Value::Object(
+        camel_core::util::value::ObjectRef::from_arc(a.clone())
+            .with_bean::<Animal>()
+            .with_display(|a: &Animal, f| std::fmt::Display::fmt(a, f)),
+    )
+}
+
+#[test]
+fn test_body_ognl_simple() {
+    let (_t, mut e) = exchange();
+    e.message_mut()
+        .set_body(animal_value(&Animal::new("Camel", 6)));
+    assert_expression(&e, "${in.body.getName}", "Camel");
+    assert_expression(&e, "${in.body.getAge}", 6);
+    assert_expression(&e, "${in.body.name}", "Camel");
+    assert_expression(&e, "${in.body.age}", 6);
+}
+
+#[test]
+fn test_body_ognl_simple_operator_and_nested() {
+    let (_t, mut e) = exchange();
+    let tiger = Animal::new("Tony the Tiger", 13);
+    let camel = Animal::new("Camel", 6);
+    camel.set_friend(&tiger);
+    e.message_mut().set_body(animal_value(&camel));
+    for (name, age, friend, dangerous) in [
+        ("getName", "getAge", "getFriend", "isDangerous"),
+        ("name", "age", "friend", "dangerous"),
+    ] {
+        assert!(predicate(
+            &e,
+            &format!("${{in.body.{name}}} contains 'Camel'")
+        ));
+        assert!(!predicate(
+            &e,
+            &format!("${{in.body.{name}}} contains 'Tiger'")
+        ));
+        assert!(predicate(&e, &format!("${{in.body.{age}}} < 10")));
+        assert!(!predicate(&e, &format!("${{in.body.{age}}} > 10")));
+        assert!(predicate(&e, &format!("${{in.body.{age}}} <= '6'")));
+        assert!(!predicate(&e, &format!("${{in.body.{age}}} > '6'")));
+        assert!(predicate(
+            &e,
+            &format!("${{in.body.{age}}} < ${{body.{friend}.{age}}}")
+        ));
+        assert!(predicate(
+            &e,
+            &format!("${{in.body.{friend}.{dangerous}}} == true")
+        ));
+        assert_expression(
+            &e,
+            &format!("${{in.body.{friend}.{name}}}"),
+            "Tony the Tiger",
+        );
+        assert_expression(&e, &format!("${{in.body.{friend}.{age}}}"), "13");
+        // using null safe to avoid the NPE
+        assert_eq!(
+            Value::Null,
+            evaluate(&e, &format!("${{in.body.{friend}?.{friend}.{name}}}"))
+        );
+        // without null safe we get an NPE
+        let err = error(&e, &format!("${{in.body.{friend}.{friend}.{name}}}"));
+        assert_eq!(
+            Some(
+                format!(
+                    "Failed to invoke method: .{friend}.{friend}.{name} on {} due last method returned null and therefore cannot continue to invoke method .{name} on a null instance",
+                    std::any::type_name::<Animal>()
+                )
+                .as_str()
+            ),
+            err.message()
+        );
+    }
+    // just to mix it a bit
+    assert_expression(&e, "${in.body.friend.getName}", "Tony the Tiger");
+    assert_expression(&e, "${in.body.getFriend.age}", "13");
+}
+
+#[test]
+fn test_body_ognl_reentrant_and_boolean() {
+    let (_t, mut e) = exchange();
+    let camel = Animal::new("Camel", 6);
+    let tiger = Animal::new("Tony the Tiger", 13);
+    let elephant = Animal::new("Big Ella", 48);
+    camel.set_friend(&tiger);
+    tiger.set_friend(&elephant);
+    elephant.set_friend(&camel);
+    e.message_mut().set_body(animal_value(&camel));
+    for f in ["getFriend", "friend"] {
+        let n = if f == "friend" { "name" } else { "getName" };
+        assert_expression(&e, &format!("${{body.{f}.{f}.{f}.{n}}}"), "Camel");
+        assert_expression(
+            &e,
+            &format!("${{body.{f}.{f}.{f}.{f}.{n}}}"),
+            "Tony the Tiger",
+        );
+        assert_expression(
+            &e,
+            &format!("${{body.{f}.{f}.{f}.{f}.{f}.{n}}}"),
+            "Big Ella",
+        );
+    }
+    e.message_mut().set_body(animal_value(&tiger));
+    assert_expression(&e, "${body.isDangerous}", "true");
+    assert_expression(&e, "${body.dangerous}", "true");
+    e.message_mut().set_body(animal_value(&camel));
+    assert_expression(&e, "${body.isDangerous}", "false");
+    assert_expression(&e, "${body.dangerous}", "false");
+    // the cycle of friends is broken so the Arcs are freed
+    *elephant.friend.lock().unwrap() = None;
+}
+
+/// Java `Order`.
+struct Order(Vec<Value>);
+
+impl camel_core::util::value::Bean for Order {
+    fn property(&self, name: &str) -> Option<Value> {
+        (name == "lines").then(|| Value::List(self.0.clone()))
+    }
+}
+
+fn order() -> Value {
+    Value::bean(Order(vec![
+        order_line(123, "Camel in Action"),
+        order_line(456, "ActiveMQ in Action"),
+    ]))
+}
+
+#[test]
+fn test_body_ognl_order_list() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_body(order());
+    for (lines, id, name) in [("getLines", "getId", "getName"), ("lines", "id", "name")] {
+        for (index, expected_id, expected_name) in [
+            ("0", 123, "Camel in Action"),
+            ("1", 456, "ActiveMQ in Action"),
+            ("last", 456, "ActiveMQ in Action"),
+            ("last-1", 123, "Camel in Action"),
+        ] {
+            assert_expression(
+                &e,
+                &format!("${{in.body.{lines}[{index}].{id}}}"),
+                expected_id,
+            );
+            assert_expression(
+                &e,
+                &format!("${{in.body.{lines}[{index}].{name}}}"),
+                expected_name,
+            );
+        }
+        for (index, message) in [
+            ("3", "Index: 3, Size: 2 out of bounds with List from bean"),
+            (
+                "last - 2",
+                "Index: -1, Size: 2 out of bounds with List from bean",
+            ),
+            ("2", "Index: 2, Size: 2 out of bounds with List from bean"),
+        ] {
+            let err = error(&e, &format!("${{in.body.{lines}[{index}].{id}}}"));
+            assert!(err.is_subtype("RuntimeBeanExpressionException"), "{err}");
+            let c = cause(&err);
+            assert!(c.is_subtype("IndexOutOfBoundsException"), "{c}");
+            assert!(c.message().unwrap().starts_with(message), "{c}");
+        }
+        let err = error(&e, &format!("${{in.body.{lines}[last - XXX].{id}}}"));
+        assert!(err.is_subtype("RuntimeBeanExpressionException"), "{err}");
+        let c = cause(&err);
+        assert!(c.is(ErrorKind::ExpressionIllegalSyntax), "{c}");
+        assert_eq!(Some("last - XXX"), c.detail());
+        for index in ["3", "2"] {
+            assert_eq!(
+                Value::Null,
+                evaluate(&e, &format!("${{in.body?.{lines}[{index}].{id}}}"))
+            );
+        }
+        let rating = if lines == "lines" {
+            "rating"
+        } else {
+            "getRating"
+        };
+        let err = error(&e, &format!("${{in.body.{lines}[0]?.{rating}}}"));
+        assert!(err.is_subtype("RuntimeBeanExpressionException"), "{err}");
+        let c = cause(&err);
+        assert!(c.is_subtype("MethodNotFoundException"), "{c}");
+        assert!(c
+            .message()
+            .unwrap()
+            .starts_with(&format!("Method with name: {rating} not found")));
+    }
+    assert_expression(&e, "${in.body.lines.size}", 2);
+}
+
+#[test]
+fn test_body_ognl_list_map_and_array() {
+    let (_t, mut e) = exchange();
+    let mut cells = ValueMap::new();
+    cells.insert("ABC".into(), Value::from("123"));
+    cells.insert("DEF".into(), Value::from("456"));
+    let mut cells2 = ValueMap::new();
+    cells2.insert("HIJ".into(), Value::from("789"));
+    e.message_mut()
+        .set_body(Value::List(vec![Value::Map(cells), Value::Map(cells2)]));
+    for (exp, expected) in [
+        ("${in.body[0][ABC]}", "123"),
+        ("${in.body[0][DEF]}", "456"),
+        ("${in.body[0]['ABC']}", "123"),
+        ("${in.body[0]['DEF']}", "456"),
+        ("${in.body[1][HIJ]}", "789"),
+        ("${in.body[1]['HIJ']}", "789"),
+    ] {
+        assert_expression(&e, exp, expected);
+    }
+    // Java lists and arrays are both a Value::List
+    e.message_mut().set_body(Value::List(vec![
+        order_line(123, "Camel in Action"),
+        order_line(456, "ActiveMQ in Action"),
+    ]));
+    for (id, name) in [("getId", "getName"), ("id", "name")] {
+        assert_expression(&e, &format!("${{in.body[0].{id}}}"), 123);
+        assert_expression(&e, &format!("${{in.body[0].{name}}}"), "Camel in Action");
+        assert_expression(&e, &format!("${{in.body[1].{id}}}"), 456);
+        assert_expression(&e, &format!("${{in.body[1].{name}}}"), "ActiveMQ in Action");
+    }
+}
+
+#[test]
+fn test_body_ognl_on_string() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_body("Camel");
+    assert_expression(&e, "${body.substring(2)}", "mel");
+    assert_expression(&e, "${body.substring(2, 4)}", "me");
+    assert_expression(&e, "${body.length()}", 5);
+    assert_expression(&e, "${body.toUpperCase()}", "CAMEL");
+    assert_expression(&e, "${body.toUpperCase().substring(2)}", "MEL");
+    assert_expression(&e, "${body.toLowerCase().length()}", 5);
+    e.message_mut().set_header("max", 4);
+    e.message_mut().set_header("min", 2);
+    assert_expression(&e, "${body.substring(${header.min}, ${header.max})}", "me");
+    e.message_mut().set_body(Value::Null);
+    e.message_mut().set_header("name", "Camel");
+    assert_expression(
+        &e,
+        "${header.name.substring(${header.min}, ${header.max})}",
+        "me",
+    );
+}
+
+#[test]
+fn test_body_ognl_replace() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_body("Kamel is a cool Kamel");
+    assert_expression(
+        &e,
+        "${body.replace(\"Kamel\", \"Camel\")}",
+        "Camel is a cool Camel",
+    );
+    e.message_mut().set_body("foo$bar$baz");
+    assert_expression(&e, "${body.replace('$', '-')}", "foo-bar-baz");
+    e.message_mut().set_body("foo\\bar\\baz");
+    assert_expression(&e, "${body.replace('\\', '\\\\')}", "foo\\\\bar\\\\baz");
+    e.message_mut().set_body("http:camel.apache.org");
+    assert_expression(
+        &e,
+        "${body.replaceFirst('http:', 'https:')}",
+        "https:camel.apache.org",
+    );
+    assert_expression(&e, "${body.replaceFirst('http:', '')}", "camel.apache.org");
+    for exp in [
+        "${body.replaceFirst('http:', ' ')}",
+        "${body.replaceFirst('http:',    ' ')}",
+        "${body.replaceFirst('http:',' ')}",
+    ] {
+        assert_expression(&e, exp, " camel.apache.org");
+    }
+    e.message_mut().set_body("Hello O'Conner");
+    for (exp, expected) in [
+        ("${body.replace(\"O'C\", \"OC\")}", "Hello OConner"),
+        ("${body.replace(\"O'C\", \"O C\")}", "Hello O Conner"),
+        ("${body.replace(\"O'C\", \"O-C\")}", "Hello O-Conner"),
+        ("${body.replace(\"O'C\", \"O''C\")}", "Hello O''Conner"),
+        ("${body.replace(\"O'C\", \"O\n'C\")}", "Hello O\n'Conner"),
+    ] {
+        assert_expression(&e, exp, expected);
+    }
+    e.message_mut().set_body("Bik (Ru)");
+    assert_expression(
+        &e,
+        "${body.replaceAll(\"Bik \\(Ru\\)\",\"bik_ru\").replaceAll(\"b\",\"c\")}",
+        "cik_ru",
+    );
+    e.message_mut().set_body("Hello (( World (((( Again");
+    assert_expression(
+        &e,
+        "${body.replace(\"((\", \"--\").replace(\"((((\", \"----\")}",
+        "Hello -- World ---- Again",
+    );
+}
+
+#[test]
+fn test_body_ognl_spaces() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_body("Hello World");
+    // "Hello World".compareTo("foo") in Java
+    let foo = ('H' as i64) - ('f' as i64);
+    for (exp, expected) in [
+        // no quotes, which is discouraged to use
+        ("${body.compareTo(Hello World)}", 0),
+        ("${body.compareTo('Hello World')}", 0),
+        ("${body.compareTo(${body})}", 0),
+        ("${body.compareTo('foo')}", foo),
+        ("${body.compareTo( 'Hello World' )}", 0),
+        ("${body.compareTo( ${body} )}", 0),
+        ("${body.compareTo( 'foo' )}", foo),
+    ] {
+        assert_expression(&e, exp, expected);
+    }
+}
+
+#[test]
+fn test_class_simple_name() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_body("Hello");
+    for exp in [
+        "${body.getClass().getSimpleName()}",
+        "${body.getClass.getSimpleName}",
+        "${body.class.simpleName}",
+    ] {
+        assert_expression(&e, exp, "String");
+    }
+    e.set_exception(Some(CamelError::illegal_argument("Forced")));
+    for exp in [
+        "${exception.getClass().getSimpleName()}",
+        "${exception.getClass.getSimpleName}",
+        "${exception.class.simpleName}",
+    ] {
+        assert_expression(&e, exp, "IllegalArgumentException");
+    }
+}
+
+#[test]
+fn test_slash_json_like_and_function_ends() {
+    let (_t, mut e) = exchange();
+    assert_expression(&e, "foo/${header.foo}", "foo/abc");
+    assert_expression(&e, "foo\\${header.foo}", "foo\\abc");
+    e.message_mut().set_body("Something");
+    assert_expression(
+        &e,
+        "{\n\"data\": \"${body}\"\n}",
+        "{\n\"data\": \"Something\"\n}",
+    );
+    for (exp, expected) in [
+        ("{{", "{{"),
+        ("}}", "}}"),
+        ("{{}}", "{{}}"),
+        ("{{foo}}", "{{foo}}"),
+        ("{{${body}}}", "{{Something}}"),
+        ("{{${body}-${body}}}", "{{Something-Something}}"),
+    ] {
+        assert_expression(&e, exp, expected);
+    }
+}
+
+#[test]
+fn test_camel_context_ognl() {
+    let (_t, e) = exchange();
+    let name = e.context().name().to_string();
+    assert_expression(&e, "${camelContext.getName()}", name.as_str());
+    assert_expression(
+        &e,
+        "${camelContext.version}",
+        camel_core::api::beans::CAMEL_VERSION,
+    );
+}
+
+#[test]
+fn test_array_length() {
+    let (_t, mut e) = exchange();
+    e.message_mut()
+        .set_body(Value::List(vec![Value::from("foo"), Value::from("bar")]));
+    assert_expression(&e, "${body[0]}", "foo");
+    assert_expression(&e, "${body[1]}", "bar");
+    assert_expression(&e, "${body.length}", 2);
+    e.message_mut().set_body(Value::List(vec![
+        Value::from("foo"),
+        Value::from("bar"),
+        Value::from("beer"),
+    ]));
+    assert_expression(&e, "${body.length}", 3);
+    e.message_mut().set_body(Value::List(vec![
+        Value::Int(1),
+        Value::Int(20),
+        Value::Int(300),
+    ]));
+    assert_expression(&e, "${body[0]}", 1);
+    assert_expression(&e, "${body[1]}", 20);
+    assert_expression(&e, "${body[2]}", 300);
+    assert_expression(&e, "${body.length}", 3);
+    e.message_mut().set_body(vec![65u8, 66, 67]);
+    assert_expression(&e, "${body.length}", 3);
+}
+
+#[test]
+fn test_simple_map_boolean() {
+    let (_t, mut e) = exchange();
+    for credit in [true, false] {
+        let mut map = ValueMap::new();
+        map.insert("isCredit".into(), Value::Bool(credit));
+        e.message_mut().set_body(Value::Map(map));
+        assert_eq!(credit, predicate(&e, "${body[isCredit]} == true"));
+        assert_eq!(!credit, predicate(&e, "${body[isCredit]} == false"));
+        assert_eq!(credit, predicate(&e, "${body['isCredit']} == true"));
+        assert_eq!(!credit, predicate(&e, "${body['isCredit']} == false"));
+        // wrong case
+        assert!(!predicate(&e, "${body['IsCredit']} == true"));
+    }
+}
+
+#[test]
+fn test_simple_regexp() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_body("12345678");
+    assert!(predicate(&e, "${body} regex '\\d+'"));
+    assert!(!predicate(&e, "${body} regex '\\w{1,4}'"));
+    let re = "${body} regex '^(tel:\\+)(974)(44)(\\d+)|^(974)(44)(\\d+)'";
+    for (body, expected) in [
+        ("tel:+97444549697", true),
+        ("97444549697", true),
+        ("tel:+87444549697", false),
+        ("87444549697", false),
+    ] {
+        e.message_mut().set_body(body);
+        assert_eq!(expected, predicate(&e, re), "{body}");
+    }
+}
+
+#[test]
+fn test_body_ognl_on_animal_with_ognl_params() {
+    let (_t, mut e) = exchange();
+    let tiger = Animal::new("tiger", 13);
+    e.message_mut().set_body(animal_value(&tiger));
+    e.message_mut()
+        .set_header("friend", animal_value(&Animal::new("donkey", 4)));
+    assert_eq!(
+        Value::Null,
+        evaluate(&e, "${body.setFriend(${header.friend})}")
+    );
+    assert_eq!("tiger", tiger.name);
+    assert_eq!(13, tiger.age);
+    let friend = tiger
+        .friend
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("Should have a friend");
+    let f = friend.downcast_ref::<Animal>().unwrap();
+    assert_eq!(("donkey", 4), (f.name, f.age));
+}
+
+#[test]
+fn test_body_as_one_line_and_body_type() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_body("Hello\nGreat\nWorld");
+    assert_expression(&e, "${bodyOneLine}", "HelloGreatWorld");
+    assert_expression(&e, "Hi ${bodyOneLine}", "Hi HelloGreatWorld");
+    assert_expression(&e, "Hi ${bodyOneLine} Again", "Hi HelloGreatWorld Again");
+    e.message_mut().set_body("Hello World");
+    assert_expression(&e, "${bodyType}", "String");
+}
+
+#[test]
+fn test_list_index_by_nested_function() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_header(
+        "ITEMS",
+        Value::List(vec![Value::from("1"), Value::from("99")]),
+    );
+    e.message_mut().set_header("TOTAL_LOOPS", 2);
+    let exp = "${header.ITEMS[${exchangeProperty.CamelLoopIndex}]}";
+    e.set_property("CamelLoopIndex", 0);
+    assert_expression(&e, exp, "1");
+    e.set_property("CamelLoopIndex", 1);
+    assert_expression(&e, exp, "99");
+}
+
+#[test]
+fn test_message_timestamp_and_inlined_result_type() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_header("CamelMessageTimestamp", 1234);
+    assert_expression(&e, "${messageTimestamp}", 1234);
+    e.message_mut().set_body("123");
+    for exp in ["${int:body}", "${integer:body}", "${long:body}"] {
+        assert_eq!(Value::Int(123), evaluate(&e, exp));
+    }
+    e.message_mut().set_body("true");
+    assert_eq!(Value::Bool(true), evaluate(&e, "${boolean:body}"));
+    e.message_mut().set_body("Hello World");
+    assert_eq!(Value::from("Hello World"), evaluate(&e, "${string:body}"));
+}
+
+#[test]
+fn test_contains_function() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_body("Hello Camel");
+    assert!(predicate(&e, "${contains(Camel)}"));
+    assert!(predicate(&e, "${contains(camel)}"));
+    assert!(!predicate(&e, "${contains(world)}"));
+    e.set_variable("myVar", "Cat");
+    assert!(!predicate(&e, "${contains(${variable.myVar})}"));
+    e.set_variable("myVar", "Camel");
+    assert!(predicate(&e, "${contains(${variable.myVar})}"));
+    e.message_mut()
+        .set_body(texts(&["Hello", "Dog", "Cat", "Camel", "Bye", "World"]));
+    assert!(predicate(&e, "${contains(camel)}"));
+    assert!(predicate(&e, "${contains(world)}"));
+    assert!(!predicate(&e, "${contains(fish)}"));
+}
+
+#[test]
+fn test_assert_expression() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_body("Hello");
+    evaluate(&e, "${assert(${body} == 'Hello', 'Must be Hello')}");
+    e.message_mut().set_body("Bye");
+    let err = error(&e, "${assert(${body} == 'Hello', 'Must be Hello')}");
+    assert!(err.is_subtype("SimpleAssertionException"), "{err}");
+    assert_eq!(Some("Must be Hello"), err.message());
+}
