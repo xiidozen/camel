@@ -33,6 +33,10 @@ pub struct ExceptionPolicy {
     pub on_redelivery: Option<SharedProcessor>,
     /// A processor called when the error occurs.
     pub on_exception_occurred: Option<SharedProcessor>,
+    /// Whether the failure processor gets the original in message.
+    pub use_original_message: bool,
+    /// Whether the failure processor gets the original in message body.
+    pub use_original_body: bool,
 }
 
 impl std::fmt::Debug for ExceptionPolicy {

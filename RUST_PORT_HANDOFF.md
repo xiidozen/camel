@@ -110,8 +110,8 @@ Crates live **in the directory of the Maven module they replace** (`core/camel-a
   route builder scoped, onCompleteOnly/onFailureOnly, onWhen, useOriginalMessage, modes
   before/after consumer, parallelProcessing) is ported. Pending: onCompletion with intercept,
   custom executor, shutdown awareness, seda handover tests.
-- **Next:** useOriginalMessage/Body in the error handler (the unit of work now exists), the
-  remaining onCompletion tests, parallel processing for multicast/split/recipient list, the
+- The error handler and `onException` support `use_original_message`/`use_original_body`.
+- **Next:** the remaining onCompletion tests, parallel processing for multicast/split/recipient list, the
   rest of the simple functions, then camel-main and the YAML/XML DSLs.
 - Java files still present in `core/camel-api/src/main/java` are the ones not ported yet.
 - Everything else in the repository: **not started** (status `todo` in the backlog).

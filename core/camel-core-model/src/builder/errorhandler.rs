@@ -44,6 +44,11 @@ pub trait RedeliveryOptions: Sized {
         self
     }
 
+    /// Disables redelivery (Java `disableRedelivery()`: sets the maximum redeliveries to 0).
+    fn disable_redelivery(self) -> Self {
+        self.maximum_redeliveries(0)
+    }
+
     /// The delay (millis) before the first redelivery.
     fn redelivery_delay(mut self, millis: u64) -> Self {
         self.redelivery_mut().redelivery_delay = Some(millis);
@@ -189,6 +194,29 @@ impl ErrorHandlerBuilder {
         self
     }
 
+    /// Will use the original input message when an exchange is moved to the dead letter queue (Java
+    /// `useOriginalMessage()`).
+    ///
+    /// The original input message is the message as it was when the exchange entered its
+    /// first route (its unit of work started). Useful to move the incoming message to a dead
+    /// letter queue as it was received, instead of what the route changed it to. Notice that
+    /// it replaces the whole message, including its headers; see
+    /// [`use_original_body`](ErrorHandlerBuilder::use_original_body) to keep the current headers.
+    ///
+    /// The original message is not used if routing continues (an `onException` with [`OnExceptionDsl::continued`]).
+    pub fn use_original_message(mut self) -> Self {
+        self.def.use_original_message = true;
+        self
+    }
+
+    /// Will use the original input message body when an exchange is moved to the dead letter queue,
+    /// keeping the current headers (Java `useOriginalBody()`); see
+    /// [`use_original_message`](ErrorHandlerBuilder::use_original_message).
+    pub fn use_original_body(mut self) -> Self {
+        self.def.use_original_body = true;
+        self
+    }
+
     /// The definition.
     pub fn build(self) -> ErrorHandlerDefinition {
         self.def
@@ -269,6 +297,29 @@ impl OnExceptionDsl {
     /// A processor called when the error occurs.
     pub fn on_exception_occurred(mut self, processor: SharedProcessor) -> Self {
         self.def.on_exception_occurred = Some(ProcessRef::Processor(processor));
+        self
+    }
+
+    /// Will use the original input message when an exchange is moved to the steps of the clause (Java
+    /// `useOriginalMessage()`).
+    ///
+    /// The original input message is the message as it was when the exchange entered its
+    /// first route (its unit of work started). Useful to move the incoming message to a dead
+    /// letter queue as it was received, instead of what the route changed it to. Notice that
+    /// it replaces the whole message, including its headers; see
+    /// [`use_original_body`](OnExceptionDsl::use_original_body) to keep the current headers.
+    ///
+    /// The original message is not used if routing [continues](OnExceptionDsl::continued).
+    pub fn use_original_message(mut self) -> Self {
+        self.def.use_original_message = true;
+        self
+    }
+
+    /// Will use the original input message body when an exchange is moved to the steps of the clause,
+    /// keeping the current headers (Java `useOriginalBody()`); see
+    /// [`use_original_message`](OnExceptionDsl::use_original_message).
+    pub fn use_original_body(mut self) -> Self {
+        self.def.use_original_body = true;
         self
     }
 

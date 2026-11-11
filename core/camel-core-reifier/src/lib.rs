@@ -597,6 +597,8 @@ pub fn reify_error_handler(
     if let Some(n) = &eh.log_name {
         config.logger_name = n.clone();
     }
+    config.use_original_message = eh.use_original_message;
+    config.use_original_body = eh.use_original_body;
     let inner = RouteReifier::new(context, route_id);
     let scoped = def
         .on_exceptions
@@ -621,6 +623,8 @@ pub fn reify_error_handler(
             processor,
             on_redelivery: optional_ref(context, &o.on_redelivery)?,
             on_exception_occurred: optional_ref(context, &o.on_exception_occurred)?,
+            use_original_message: o.use_original_message,
+            use_original_body: o.use_original_body,
         }));
     }
     Ok(Some(Arc::new(config)))

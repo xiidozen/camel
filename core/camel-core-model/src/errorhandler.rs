@@ -69,6 +69,12 @@ pub struct ErrorHandlerDefinition {
     pub retry_while: Option<ExpressionDefinition>,
     /// The logger name.
     pub log_name: Option<String>,
+    /// Whether the failure processor gets the original in message (as it was when the unit of
+    /// work started) instead of the current message (Java `useOriginalMessage`).
+    pub use_original_message: bool,
+    /// Whether the failure processor gets the original in message body, keeping the current
+    /// headers (Java `useOriginalBody`).
+    pub use_original_body: bool,
 }
 
 impl ErrorHandlerDefinition {
@@ -82,6 +88,8 @@ impl ErrorHandlerDefinition {
             on_prepare_failure: None,
             retry_while: None,
             log_name: None,
+            use_original_message: false,
+            use_original_body: false,
         }
     }
 }
@@ -119,6 +127,12 @@ pub struct OnExceptionDefinition {
     pub on_redelivery: Option<ProcessRef>,
     /// A processor called when the error occurs.
     pub on_exception_occurred: Option<ProcessRef>,
+    /// Whether the failure processor gets the original in message (as it was when the unit of
+    /// work started) instead of the current message (Java `useOriginalMessage`).
+    pub use_original_message: bool,
+    /// Whether the failure processor gets the original in message body, keeping the current
+    /// headers (Java `useOriginalBody`).
+    pub use_original_body: bool,
     /// The steps of the clause.
     pub steps: Vec<ProcessorDefinition>,
 }

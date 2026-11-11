@@ -60,6 +60,11 @@ pub struct ErrorHandlerConfig {
     pub logger_name: String,
     /// The level of the logger (`OFF` disables the logging).
     pub logger_level: LoggingLevel,
+    /// Whether the failure processor gets the original in message (as it was when the unit
+    /// of work started) instead of the current one.
+    pub use_original_message: bool,
+    /// Whether the failure processor gets the original in message body.
+    pub use_original_body: bool,
 }
 
 impl Default for ErrorHandlerConfig {
@@ -74,6 +79,8 @@ impl Default for ErrorHandlerConfig {
             on_prepare_failure: None,
             logger_name: "org.apache.camel.processor.errorhandler.DefaultErrorHandler".to_string(),
             logger_level: LoggingLevel::ERROR,
+            use_original_message: false,
+            use_original_body: false,
         }
     }
 }
@@ -136,6 +143,8 @@ struct Task<'a> {
     continued: Option<SharedPredicate>,
     on_redelivery: Option<SharedProcessor>,
     on_exception_occurred: Option<SharedProcessor>,
+    use_original_message: bool,
+    use_original_body: bool,
 }
 
 impl<'a> Task<'a> {
@@ -156,6 +165,8 @@ impl<'a> Task<'a> {
             continued: None,
             on_redelivery: None,
             on_exception_occurred: None,
+            use_original_message: false,
+            use_original_body: false,
         };
         t.use_error_handler_defaults();
         t
@@ -169,6 +180,8 @@ impl<'a> Task<'a> {
         self.continued = None;
         self.on_redelivery = self.config.on_redelivery.clone();
         self.on_exception_occurred = self.config.on_exception_occurred.clone();
+        self.use_original_message = self.config.use_original_message;
+        self.use_original_body = self.config.use_original_body;
     }
 
     fn is_dead_letter_channel(&self) -> bool {
@@ -187,6 +200,8 @@ impl<'a> Task<'a> {
             self.policy = p.redelivery.apply(&self.policy);
             self.handled = p.handled.clone();
             self.continued = p.continued.clone();
+            self.use_original_message = p.use_original_message;
+            self.use_original_body = p.use_original_body;
             if p.retry_while.is_some() {
                 self.retry_while = p.retry_while.clone();
             }
@@ -336,6 +351,7 @@ impl<'a> Task<'a> {
         let mut suffix = String::new();
         match (&processor, allow_failure_processor) {
             (Some(p), true) => {
+                self.prepare_original(exchange);
                 if let Some(prepare) = &self.config.on_prepare_failure {
                     if let Err(e) = prepare.process(exchange).await {
                         exchange.set_exception(Some(e));
@@ -374,6 +390,27 @@ impl<'a> Task<'a> {
             &msg,
             None,
         );
+    }
+
+    /// Moves the original in message (or only its body) to the exchange for the failure
+    /// processor, if configured (Java `useOriginalInMessage`/`useOriginalInBody`).
+    fn prepare_original(&self, exchange: &mut Exchange) {
+        if !self.use_original_message && !self.use_original_body {
+            return;
+        }
+        if let Some(original) = exchange.original_message().cloned() {
+            if self.use_original_message {
+                log::trace!("Using the original IN message instead of current");
+                exchange.set_in(original);
+            } else {
+                log::trace!("Using the original IN message body instead of current");
+                exchange.in_message_mut().set_body(original.body().clone());
+            }
+        }
+        if exchange.has_out() {
+            log::trace!("Removing the out message to avoid some uncertain behavior");
+            exchange.set_out(None);
+        }
     }
 
     /// Java `prepareExchangeAfterFailure`.
