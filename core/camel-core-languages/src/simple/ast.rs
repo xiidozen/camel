@@ -134,8 +134,37 @@ pub enum Node {
         /// The token.
         token: SimpleToken,
     },
-    /// An operator that the Rust port does not support yet (chain `~>`, other `?:`, ternary,
-    /// init blocks).
+    /// The chain operator `~>` or `?~>` with its left hand side and the right hand sides of
+    /// the chain.
+    Chain {
+        /// The token of the first operator of the chain.
+        token: SimpleToken,
+        /// The left hand side.
+        left: Option<Box<Node>>,
+        /// The right hand sides.
+        right: Vec<Node>,
+    },
+    /// The other operator `?:` (elvis).
+    Other {
+        /// The token.
+        token: SimpleToken,
+        /// The left operand.
+        left: Option<Box<Node>>,
+        /// The right operand.
+        right: Option<Box<Node>>,
+    },
+    /// The ternary operator of a predicate (`?`, linked to its parts, or `:`).
+    Ternary {
+        /// The token.
+        token: SimpleToken,
+        /// The condition.
+        condition: Option<Box<Node>>,
+        /// The value when the condition is true.
+        when_true: Option<Box<Node>>,
+        /// The value when the condition is false.
+        when_false: Option<Box<Node>>,
+    },
+    /// An operator that the Rust port does not support yet (init blocks).
     Unsupported {
         /// The token.
         token: SimpleToken,
@@ -156,6 +185,9 @@ impl Node {
             | Node::Unary { token, .. }
             | Node::Binary { token, .. }
             | Node::Logical { token, .. }
+            | Node::Chain { token, .. }
+            | Node::Other { token, .. }
+            | Node::Ternary { token, .. }
             | Node::Numeric { token, .. }
             | Node::Boolean { token }
             | Node::Null { token }
@@ -260,6 +292,27 @@ impl Node {
                 let (l, r) = operands(token, left, right, "Logical")?;
                 super::predicate_parser::create_logical(token, l, r, expression)
             }
+            Node::Chain { token, left, right } => {
+                super::other_operators::create_chain(token, left.as_deref(), right, expression)
+            }
+            Node::Other { token, left, right } => super::other_operators::create_other(
+                token,
+                left.as_deref(),
+                right.as_deref(),
+                expression,
+            ),
+            Node::Ternary {
+                token,
+                condition,
+                when_true,
+                when_false,
+            } => super::other_operators::create_ternary(
+                token,
+                condition.as_deref(),
+                when_true.as_deref(),
+                when_false.as_deref(),
+                expression,
+            ),
         }
     }
 }
@@ -326,6 +379,23 @@ impl fmt::Display for Node {
                 write!(f, "{l} {} {r}", token.text())
             }
             Node::Numeric { text, .. } => f.write_str(text),
+            Node::Chain { token, left, right } => {
+                let op = format!(" {} ", token.text());
+                let l = left.as_ref().map(|n| n.to_string()).unwrap_or_default();
+                let r: Vec<String> = right.iter().map(|n| n.to_string()).collect();
+                write!(f, "{l}{op}{}", r.join(&op))
+            }
+            Node::Other { token, left, right } => {
+                let l = left.as_ref().map(|n| n.to_string()).unwrap_or_default();
+                let r = right.as_ref().map(|n| n.to_string()).unwrap_or_default();
+                write!(f, "{l} {} {r}", token.text())
+            }
+            Node::Ternary {
+                token,
+                condition: Some(c),
+                when_true: Some(t),
+                when_false: Some(e),
+            } if token.text() == "?" => write!(f, "{c} ? {t} : {e}"),
             other => f.write_str(other.token().text()),
         }
     }

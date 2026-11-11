@@ -4,6 +4,9 @@
 
 use super::ast::{numeric_value, unary_node, Node};
 use super::expression_parser::BaseParser;
+use super::other_operators::{
+    prepare_chain_expressions, prepare_other_expressions, prepare_ternary_expressions,
+};
 use super::tokenizer::{SimpleToken, SimpleTokenizer, TokenType};
 use super::{ParseResult, ParserError};
 use camel_api::exchange::Exchange;
@@ -397,7 +400,10 @@ impl SimplePredicateParser {
         self.parse_tokens_and_create_nodes()?;
         self.b.prepare_blocks()?;
         self.b.prepare_unary_expressions()?;
+        self.b.nodes = prepare_chain_expressions(std::mem::take(&mut self.b.nodes))?;
         self.prepare_binary_expressions(false)?;
+        self.b.nodes = prepare_ternary_expressions(std::mem::take(&mut self.b.nodes))?;
+        self.b.nodes = prepare_other_expressions(std::mem::take(&mut self.b.nodes))?;
         self.prepare_binary_expressions(true)?;
         Ok(())
     }
@@ -492,10 +498,21 @@ impl SimplePredicateParser {
                         left: None,
                         right: None,
                     }),
-                    TokenType::TernaryOperator
-                    | TokenType::OtherOperator
-                    | TokenType::ChainOperator => Some(Node::Unsupported {
+                    TokenType::TernaryOperator => Some(Node::Ternary {
                         token: token.clone(),
+                        condition: None,
+                        when_true: None,
+                        when_false: None,
+                    }),
+                    TokenType::OtherOperator => Some(Node::Other {
+                        token: token.clone(),
+                        left: None,
+                        right: None,
+                    }),
+                    TokenType::ChainOperator => Some(Node::Chain {
+                        token: token.clone(),
+                        left: None,
+                        right: vec![],
                     }),
                     TokenType::NullValue => Some(Node::Null {
                         token: token.clone(),

@@ -5,6 +5,8 @@
 mod support;
 
 mod date_function_factory_test;
+mod simple_operator_test;
+mod simple_parser_edge_cases_test;
 mod simple_parser_expression_test;
 mod simple_parser_predicate_test;
 mod simple_predicate_in_braces_test;

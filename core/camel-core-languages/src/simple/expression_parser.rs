@@ -3,6 +3,7 @@
 //! the expression concatenating them.
 
 use super::ast::{concat, unary_node, Node};
+use super::other_operators::{prepare_chain_expressions, prepare_other_expressions};
 use super::tokenizer::{SimpleToken, SimpleTokenType, SimpleTokenizer, TokenType};
 use super::{ParseResult, ParserError};
 use camel_api::processor::SharedExpression;
@@ -155,6 +156,53 @@ impl BaseParser {
         Ok(())
     }
 
+    /// Removes the ignorable tokens, and the whitespace before and after the chain, other and
+    /// init operators (Java `SimpleExpressionParser.removeIgnorableWhiteSpaceTokens`).
+    pub fn remove_ignorable_white_space_tokens(&mut self) {
+        self.tokens.retain(|t| !t.ty.is_ignore());
+        let mut remove = vec![false; self.tokens.len()];
+        for i in 1..self.tokens.len().saturating_sub(1) {
+            let ty = &self.tokens[i].ty;
+            if ty.is_other() || ty.is_chain() || ty.is_init() {
+                if self.tokens[i - 1].ty.is_whitespace() {
+                    remove[i - 1] = true;
+                }
+                if self.tokens[i + 1].ty.is_whitespace() {
+                    remove[i + 1] = true;
+                }
+            }
+        }
+        let mut i = 0;
+        self.tokens.retain(|_| {
+            i += 1;
+            !remove[i - 1]
+        });
+    }
+
+    /// A quoted literal that may contain functions (Java
+    /// `singleQuotedLiteralWithFunctionsText` / `doubleQuotedLiteralWithFunctionsText`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the closing quote is missing.
+    pub fn quoted_with_functions(&mut self, quote: TokenType) -> ParseResult<bool> {
+        if !self.accept(quote) {
+            return Ok(false);
+        }
+        let filter = [
+            quote,
+            TokenType::Eol,
+            TokenType::FunctionStart,
+            TokenType::FunctionEnd,
+        ];
+        self.next_token_filtered(&filter);
+        while self.ty().ty != quote && !self.ty().is_eol() {
+            self.next_token_filtered(&filter);
+        }
+        self.expect(quote)?;
+        Ok(true)
+    }
+
     /// Nests the nodes between block start and end nodes into the blocks (Java
     /// `prepareBlocks`).
     ///
@@ -296,19 +344,52 @@ impl SimpleExpressionParser {
             Self::template_text(b);
             Self::function_text(b)?;
             Self::unary_operator(b)?;
-            if b.ty().is_chain() || b.ty().is_other() {
-                // the chain (~>) and other (?:) operators are not ported yet: they are reported
-                // when the expression is created
-                b.next_token();
-                continue;
-            }
+            Self::other_operator(b, TokenType::ChainOperator, "Chain")?;
+            Self::other_operator(b, TokenType::OtherOperator, "Other")?;
             b.next_token();
         }
-        b.tokens.retain(|t| !t.ty.is_ignore());
+        b.remove_ignorable_white_space_tokens();
         self.parse_and_create_ast_model();
         self.base.prepare_blocks()?;
         self.base.prepare_unary_expressions()?;
+        let nodes = std::mem::take(&mut self.base.nodes);
+        let nodes = prepare_chain_expressions(nodes)?;
+        self.base.nodes = prepare_other_expressions(nodes)?;
         Ok(())
+    }
+
+    /// The chain (`~>`, `?~>`) and other (`?:`) operators (Java `chainOperator` and
+    /// `otherOperator`): whitespace, then a quoted literal, a function, a number, a boolean or
+    /// `null`.
+    fn other_operator(b: &mut BaseParser, ty: TokenType, kind: &str) -> ParseResult<bool> {
+        if !b.accept(ty) {
+            return Ok(false);
+        }
+        let operator = b.ty().text().to_string();
+        b.next_token();
+        b.expect_and_accept_more(TokenType::WhiteSpace)?;
+        if b.quoted_with_functions(TokenType::SingleQuote)?
+            || b.quoted_with_functions(TokenType::DoubleQuote)?
+            || Self::function_text(b)?
+            || b.accept(TokenType::NumericValue)
+            || b.accept(TokenType::BooleanValue)
+            || b.accept(TokenType::NullValue)
+        {
+            b.next_token();
+            if !b.ty().is_eol() {
+                if ty == TokenType::ChainOperator {
+                    b.expect_and_accept_more(TokenType::WhiteSpace)?;
+                } else {
+                    b.expect(TokenType::WhiteSpace)?;
+                }
+            }
+            return Ok(true);
+        }
+        let index = b.token.as_ref().map(|t| t.index).unwrap_or(0);
+        Err(ParserError::new(
+            super::syntax_hints::unsupported_operand(kind, &operator, &b.text, index),
+            index,
+        ))
     }
 
     fn parse_and_create_ast_model(&mut self) {
@@ -336,7 +417,19 @@ impl SimpleExpressionParser {
                 } else {
                     None
                 }
-            } else if token.ty.is_chain() || token.ty.is_other() || token.ty.is_init() {
+            } else if token.ty.is_chain() {
+                Some(Node::Chain {
+                    token: token.clone(),
+                    left: None,
+                    right: vec![],
+                })
+            } else if token.ty.is_other() {
+                Some(Node::Other {
+                    token: token.clone(),
+                    left: None,
+                    right: None,
+                })
+            } else if token.ty.is_init() {
                 Some(Node::Unsupported {
                     token: token.clone(),
                 })

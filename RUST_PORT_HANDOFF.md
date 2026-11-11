@@ -238,6 +238,8 @@ functions and `ValueBuilder` forward it too). A mutating function evaluated with
 fails with an `IllegalStateException` naming `evaluate_mut`. Java changes lists and maps in
 place; Rust values are not shared, so the list and map functions write the changed value back
 when their source is `${body}`, `${header.x}`, `${variable.x}` or `${exchangeProperty.x}`.
+The simple chain operator (`${a} ~> ${b}`) sets the message body while it evaluates and restores
+it afterwards: `evaluate_mut` does so on the exchange (Java), `evaluate` on a clone of it.
 
 ## 9. Commits, pushes and quality bar
 

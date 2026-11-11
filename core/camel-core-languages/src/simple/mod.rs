@@ -13,6 +13,7 @@ pub mod math_functions;
 pub mod misc_functions;
 pub mod ognl;
 pub mod other_functions;
+pub mod other_operators;
 pub mod predicate_parser;
 pub mod string_functions;
 pub mod syntax_hints;

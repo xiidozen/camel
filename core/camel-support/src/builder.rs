@@ -481,9 +481,14 @@ impl ValueBuilder {
         )
     }
 
-    /// The value is one of the values (with type coercion).
+    /// The value is one of the values (with type coercion). When the value is a number, a
+    /// value given as text is compared as the number it holds, keeping its decimals (Java
+    /// `ExpressionBuilder.inValueExpression`): `2` is in `["2.0"]`, not in `["2.9"]`.
     pub fn is_in(&self, values: Vec<Value>) -> SharedPredicate {
-        let preds = values.into_iter().map(|v| self.is_equal_to(v)).collect();
+        let preds = values
+            .into_iter()
+            .map(|v| self.is_equal_to(in_value_expression(v, self.expression.clone())))
+            .collect();
         in_predicates(preds)
     }
 
@@ -612,8 +617,69 @@ impl Expression for ValueBuilder {
     }
 }
 
+/// A value of the `in` predicate: as a number when the left value is a number and the value is
+/// text holding a decimal number (Java `ExpressionBuilder.inValueExpression`).
+fn in_value_expression(value: Value, left: SharedExpression) -> SharedExpression {
+    let constant = constant_expression(value.clone());
+    named_expression(constant.describe(), move |e| {
+        if let Value::Text(text) = &value {
+            if matches!(left.evaluate(e)?, Value::Int(_) | Value::Float(_)) {
+                if let Some(number) = decimal_or_none(text) {
+                    return Ok(number);
+                }
+            }
+        }
+        Ok(value.clone())
+    })
+}
+
+/// The number of a decimal text (Java `new BigDecimal(text.trim())`): an integer when it fits,
+/// else a floating point number; `None` when the text is not a decimal number.
+fn decimal_or_none(text: &str) -> Option<Value> {
+    let number = text.trim();
+    let digits = number.strip_prefix(['+', '-']).unwrap_or(number);
+    let (mantissa, exponent) = match digits.split_once(['e', 'E']) {
+        Some((m, x)) => (m, Some(x)),
+        None => (digits, None),
+    };
+    let (int_part, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    let valid_mantissa = !(int_part.is_empty() && fraction.is_empty())
+        && int_part.chars().all(|c| c.is_ascii_digit())
+        && fraction.chars().all(|c| c.is_ascii_digit());
+    let valid_exponent = match exponent {
+        None => true,
+        Some(x) => {
+            let x = x.strip_prefix(['+', '-']).unwrap_or(x);
+            !x.is_empty() && x.chars().all(|c| c.is_ascii_digit())
+        }
+    };
+    if !valid_mantissa || !valid_exponent {
+        return None;
+    }
+    if !mantissa.contains('.') && exponent.is_none() {
+        if let Ok(i) = number.parse::<i64>() {
+            return Some(Value::Int(i));
+        }
+    }
+    number.parse::<f64>().ok().map(Value::Float)
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn decimal_or_none_parses_decimals() {
+        use super::decimal_or_none;
+        assert_eq!(Some(Value::Int(2)), decimal_or_none(" 2 "));
+        assert_eq!(Some(Value::Float(2.0)), decimal_or_none("2.0"));
+        assert_eq!(Some(Value::Float(-0.5)), decimal_or_none("-.5"));
+        assert_eq!(Some(Value::Float(1000.0)), decimal_or_none("1e3"));
+        assert_eq!(None, decimal_or_none("NaN"));
+        assert_eq!(None, decimal_or_none("inf"));
+        assert_eq!(None, decimal_or_none("1,5"));
+        assert_eq!(None, decimal_or_none("."));
+        assert_eq!(None, decimal_or_none(""));
+    }
+
     use super::*;
     use camel_api::context::StandaloneContext;
 
