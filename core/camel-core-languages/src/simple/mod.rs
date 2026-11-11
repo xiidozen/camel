@@ -13,6 +13,7 @@ pub mod ognl;
 pub mod other_functions;
 pub mod predicate_parser;
 pub mod string_functions;
+pub mod syntax_hints;
 pub mod tokenizer;
 
 use camel_api::error::{CamelError, ErrorKind};

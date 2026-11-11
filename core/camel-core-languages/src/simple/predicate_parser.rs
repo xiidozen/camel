@@ -12,61 +12,17 @@ use camel_support::builder::{and, named_expression, named_predicate, not, ValueB
 use camel_util::value::Value;
 use std::sync::Arc;
 
-/// The comparison operators, as written in simple.
-const OPERATORS: &str = "==, =~, !=, <, <=, >, >=, contains, !contains, ~~, !~~, regex, !regex, in, !in, is, !is, range, !range, startsWith, endsWith, && and ||";
-
-/// The value forms an operator accepts on its right hand side.
-const VALUE_FORMS: &str = "a quoted literal 'x', a number, true, false, null, or a function ${...}";
-
-/// The word around the position (Java `SimpleSyntaxHints.wordAt`).
-fn word_at(expression: &[char], index: usize) -> String {
-    let mut start = index.min(expression.len());
-    let mut end = start;
-    while start > 0 && !expression[start - 1].is_whitespace() {
-        start -= 1;
-    }
-    while end < expression.len() && !expression[end].is_whitespace() {
-        end += 1;
-    }
-    expression[start..end].iter().collect()
-}
-
-/// The message of an unexpected token (Java `SimpleSyntaxHints.unexpectedToken`).
 fn unexpected_token(expression: &[char], index: usize) -> String {
-    let word = word_at(expression, index);
-    if word.is_empty() {
-        return format!("Unexpected token at location {index}");
-    }
-    match word.to_lowercase().as_str() {
-        "=" | "===" | "=<" | "=>" => format!("Unknown operator {word}: did you mean ==? Operators are {OPERATORS}"),
-        "<>" | "=!=" | "!==" | "~=" => format!("Unknown operator {word}: did you mean !=? Operators are {OPERATORS}"),
-        "and" | "&" => format!("Unknown operator {word}: use && for and, and || for or"),
-        "or" | "|" => format!("Unknown operator {word}: use || for or, and && for and"),
-        "not" | "!" => format!(
-            "Unknown operator {word}: ! negates a function and is written directly in front of it, e.g. !${{body.isEmpty()}}; a comparison negates its operator instead, e.g. != or !contains"
-        ),
-        _ => format!("Unexpected token {word}: text outside ${{...}} must be {VALUE_FORMS}, or an operator ({OPERATORS})"),
-    }
+    super::syntax_hints::unexpected_token(&expression.iter().collect::<String>(), index)
 }
 
-/// The message of an operator without a usable operand (Java
-/// `SimpleSyntaxHints.unsupportedOperand`).
 fn unsupported_operand(kind: &str, operator: &str, expression: &[char], index: usize) -> String {
-    let word = word_at(expression, index);
-    if kind == "Logical" {
-        let was = if word.is_empty() {
-            String::new()
-        } else {
-            format!("; was: {word}")
-        };
-        return format!("{kind} operator {operator} needs a predicate on the right hand side, e.g. ${{header.foo}} == 'bar'{was}");
-    }
-    if word.is_empty() || word == operator {
-        return format!(
-            "{kind} operator {operator} needs a value on the right hand side: {VALUE_FORMS}"
-        );
-    }
-    format!("{kind} operator {operator} does not accept {word} on the right hand side: write it as {VALUE_FORMS}, e.g. '{word}'")
+    super::syntax_hints::unsupported_operand(
+        kind,
+        operator,
+        &expression.iter().collect::<String>(),
+        index,
+    )
 }
 
 /// The binary operators (Java `BinaryOperatorType`).

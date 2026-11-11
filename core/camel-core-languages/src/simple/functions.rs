@@ -190,7 +190,34 @@ pub fn create_function(function: &str, index: usize) -> ParseResult<SharedExpres
     })
 }
 
+/// A predicate written inside the braces (`${body != null && body.size() > 0}`), as an
+/// expression that answers whether it matches; `None` when the text is not a predicate but a
+/// plain function (Java `SimpleFunctionExpression.createPredicateExpression`, CAMEL-24921).
+///
+/// An operator counts only when whitespace surrounds it outside quotes, so
+/// `${header.Content-Length}` and `${date:now:yyyy-MM-dd}` are names, not arithmetic.
+fn predicate_expression(function: &str) -> ParseResult<Option<SharedExpression>> {
+    if super::syntax_hints::operators_outside(function).is_none() {
+        return Ok(None);
+    }
+    let text = super::syntax_hints::wrap_functions(function);
+    let predicate = super::predicate_parser::SimplePredicateParser::new(&text, true)
+        .parse_predicate()
+        .map_err(|e| super::ast::nested_error(&text, &e))?;
+    Ok(Some(named_expression(text, move |e| {
+        Ok(Value::Bool(predicate.matches(e)?))
+    })))
+}
+
 fn do_create(function: &str, index: usize) -> ParseResult<SharedExpression> {
+    // ${body != null && body.size() > 0}: the braces hold a predicate, which is what they hold
+    // in EL, Groovy and a JavaScript template, so read it as one (CAMEL-24921)
+    if let Some(p) = predicate_expression(function)? {
+        return Ok(p);
+    }
+    // ${!body.isEmpty()}: a ! in front of a single function negates what it answers. It is
+    // read after the predicate above, so a ! in ${!a && b} negates a and not the whole
+    // predicate (CAMEL-24984)
     if function.len() > 1 && function.starts_with('!') {
         let name = function[1..].trim().to_string();
         let exp = do_create(&name, index)?;
@@ -219,8 +246,11 @@ fn do_create(function: &str, index: usize) -> ParseResult<SharedExpression> {
             return Ok(e);
         }
     }
+    let hint = super::syntax_hints::unknown_function(function)
+        .map(|h| format!(" ({h})"))
+        .unwrap_or_default();
     Err(ParserError::new(
-        format!("Unknown function: {function}"),
+        format!("Unknown function: {function}{hint}"),
         index,
     ))
 }

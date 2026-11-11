@@ -7,7 +7,7 @@ use camel_core::util::value::ValueMap;
 
 /// The Java `ExchangeTestSupport` exchange: headers foo=abc, bar=123, a body, a property and a
 /// variable.
-fn exchange() -> (ContextTestSupport, Exchange) {
+pub(crate) fn exchange() -> (ContextTestSupport, Exchange) {
     let t = ContextTestSupport::new();
     let mut e = Exchange::new(t.context.as_shared());
     e.message_mut().set_header("foo", "abc");
@@ -18,13 +18,13 @@ fn exchange() -> (ContextTestSupport, Exchange) {
     (t, e)
 }
 
-fn evaluate(e: &Exchange, text: &str) -> Value {
+pub(crate) fn evaluate(e: &Exchange, text: &str) -> Value {
     let simple = e.context().resolve_language("simple").unwrap();
     simple.create_expression(text).unwrap().evaluate(e).unwrap()
 }
 
 /// Java `assertExpression`: the value converted to the type of the expected value.
-fn assert_expression(e: &Exchange, text: &str, expected: impl Into<Value>) {
+pub(crate) fn assert_expression(e: &Exchange, text: &str, expected: impl Into<Value>) {
     let expected = expected.into();
     let v = evaluate(e, text);
     let v = match &expected {
@@ -44,6 +44,13 @@ fn assert_expression(e: &Exchange, text: &str, expected: impl Into<Value>) {
         _ => v,
     };
     assert_eq!(expected, v, "Expression: {text}");
+}
+
+/// Java `assertPredicate`.
+pub(crate) fn assert_predicate(e: &Exchange, text: &str, expected: bool) {
+    let simple = e.context().resolve_language("simple").unwrap();
+    let p = simple.create_predicate(text).unwrap();
+    assert_eq!(expected, p.matches(e).unwrap(), "Predicate: {text}");
 }
 
 fn string(e: &Exchange, text: &str) -> Option<String> {
@@ -2629,4 +2636,95 @@ fn test_assert_expression() {
     let err = error(&e, "${assert(${body} == 'Hello', 'Must be Hello')}");
     assert!(err.is_subtype("SimpleAssertionException"), "{err}");
     assert_eq!(Some("Must be Hello"), err.message());
+}
+
+#[test]
+fn test_ternary_operator() {
+    let (_t, mut e) = exchange();
+    // the same expression object evaluates correctly with different header values
+    e.message_mut().set_header("foo", 44);
+    let simple = e.context().resolve_language("simple").unwrap();
+    let exp = simple
+        .create_expression("${header.foo > 0 ? 'positive' : 'negative'}")
+        .unwrap();
+    assert_eq!(Value::from("positive"), exp.evaluate(&e).unwrap());
+    e.message_mut().set_header("foo", -123);
+    assert_eq!(Value::from("negative"), exp.evaluate(&e).unwrap());
+    // a ternary with a constant condition
+    assert_expression(&e, "${true ? 'yes' : 'no'}", "yes");
+    assert_expression(&e, "${false ? 'yes' : 'no'}", "no");
+    // with the body
+    e.message_mut().set_body("Hello World");
+    e.message_mut().set_header("foo", 44);
+    assert_expression(
+        &e,
+        "${header.foo > 0 ? ${body} : 'Bye World'}",
+        "Hello World",
+    );
+    e.message_mut().set_header("foo", -123);
+    assert_expression(&e, "${header.foo > 0 ? ${body} : 'Bye World'}", "Bye World");
+    assert_expression(&e, "${header.foo > 0 ? ${body} : ${null}}", Value::Null);
+    // the ${file:name} part of the Java test waits for the file functions (see the backlog)
+}
+
+#[test]
+fn test_ternary_operator_with_numbers() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_header("score", 85);
+    assert_expression(&e, "${header.score >= 90 ? 'A' : 'B'}", "B");
+    e.message_mut().set_header("score", 95);
+    assert_expression(&e, "${header.score >= 90 ? 'A' : 'B'}", "A");
+    e.message_mut().set_header("age", 25);
+    assert_expression(&e, "${header.age >= 18 ? 'adult' : 'minor'}", "adult");
+    e.message_mut().set_header("age", 15);
+    assert_expression(&e, "${header.age >= 18 ? 'adult' : 'minor'}", "minor");
+}
+
+#[test]
+fn test_ternary_operator_with_booleans() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_header("enabled", true);
+    assert_expression(&e, "${header.enabled == true ? 'yes' : 'no'}", "yes");
+    e.message_mut().set_header("enabled", false);
+    assert_expression(&e, "${header.enabled == true ? 'yes' : 'no'}", "no");
+}
+
+#[test]
+fn test_ternary_operator_with_null() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_header("value", Value::Null);
+    assert_expression(&e, "${header.value == null ? 'empty' : 'full'}", "empty");
+    e.message_mut().set_header("value", "something");
+    assert_expression(&e, "${header.value == null ? 'empty' : 'full'}", "full");
+}
+
+#[test]
+fn test_ternary_operator_nested() {
+    let (_t, mut e) = exchange();
+    let exp = "${header.score >= 90 ? 'A' : ${header.score} >= 80 ? 'B' : 'C'}";
+    for (score, grade) in [(95, "A"), (85, "B"), (75, "C")] {
+        e.message_mut().set_header("score", score);
+        assert_expression(&e, exp, grade);
+    }
+}
+
+#[test]
+fn test_ternary_operator_with_strings() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_body("Hello");
+    assert_expression(&e, "${body == 'Hello' ? 'greeting' : 'other'}", "greeting");
+    e.message_mut().set_body("Goodbye");
+    assert_expression(&e, "${body == 'Hello' ? 'greeting' : 'other'}", "other");
+    e.message_mut().set_header("name", "John");
+    assert_expression(
+        &e,
+        "${header.name contains 'John' ? 'found' : 'not found'}",
+        "found",
+    );
+    e.message_mut().set_header("name", "Jane");
+    assert_expression(
+        &e,
+        "${header.name contains 'John' ? 'found' : 'not found'}",
+        "not found",
+    );
 }

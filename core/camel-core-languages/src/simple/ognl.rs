@@ -126,7 +126,7 @@ pub fn invoke_ognl(bean: &Value, ognl: &str, exchange: &Exchange) -> CamelResult
         };
         let current = result.clone();
         if let Some(m) = &method {
-            result = invoke(&current, m, exchange).map_err(|e| wrap(m, e))?;
+            result = invoke(&current, m, exchange).map_err(|e| wrap_method(&current, m, e))?;
         }
         if let Some(k) = key {
             let owner = result.clone();
@@ -138,6 +138,136 @@ pub fn invoke_ognl(bean: &Value, ognl: &str, exchange: &Exchange) -> CamelResult
         }
     }
     Ok(result)
+}
+
+/// The error of a failed method call on the value (Java `BeanExpression.invokeMethodIfPresent`):
+/// a `RuntimeBeanExpressionException` naming what the value is (`the message body of type
+/// java.lang.String`, so the message does not say "on null"), with the hints of a method
+/// called without parentheses and of a map without the key.
+fn wrap_method(value: &Value, method: &str, e: CamelError) -> CamelError {
+    if e.is_subtype(RUNTIME_BEAN_EXPRESSION_EXCEPTION) {
+        return e;
+    }
+    let plain = !method.contains('(') && !method.contains('[');
+    let mut hint = method.to_string();
+    if plain && e.is(ErrorKind::NoTypeConversionAvailable) {
+        hint = format!("{method} (a method call needs parentheses: {method}())");
+    }
+    if plain {
+        if let Value::Map(m) = value {
+            // ${body.type} on a Map reads the key type (CAMEL-24916), so getting here means
+            // the Map has no such key: say that and list its keys (CAMEL-25322)
+            let keys: Vec<&str> = m.keys().take(MAX_KEYS_LISTED).map(String::as_str).collect();
+            let more = if m.len() > MAX_KEYS_LISTED {
+                format!(", ... ({} keys)", m.len())
+            } else {
+                String::new()
+            };
+            hint = if m.is_empty() {
+                format!("{hint} (the Map has no key {method}; it is empty)")
+            } else {
+                format!(
+                    "{hint} (the Map has no key {method}; its keys are: {}{more})",
+                    keys.join(", ")
+                )
+            };
+        }
+    }
+    let describe = if value.is_null() {
+        "the message body".to_string()
+    } else {
+        format!("the message body of type {}", java_class_name(value))
+    };
+    CamelError::with_cause(
+        ErrorKind::RuntimeExpression,
+        format!("Failed to invoke method: {hint} on {describe} due to: {e}"),
+        e,
+    )
+    .with_subtype(RUNTIME_BEAN_EXPRESSION_EXCEPTION)
+}
+
+/// At most this many keys are listed when a Map has no key of the name asked for.
+const MAX_KEYS_LISTED: usize = 20;
+
+/// The Java methods of the values (for the did-you-mean of an unknown method).
+fn method_names(value: &Value) -> &'static [&'static str] {
+    match value {
+        Value::Text(_) => &[
+            "charAt",
+            "compareTo",
+            "compareToIgnoreCase",
+            "concat",
+            "contains",
+            "endsWith",
+            "equals",
+            "equalsIgnoreCase",
+            "getBytes",
+            "getClass",
+            "hashCode",
+            "indexOf",
+            "intern",
+            "isBlank",
+            "isEmpty",
+            "lastIndexOf",
+            "length",
+            "matches",
+            "replace",
+            "replaceAll",
+            "replaceFirst",
+            "split",
+            "startsWith",
+            "strip",
+            "stripLeading",
+            "stripTrailing",
+            "substring",
+            "toCharArray",
+            "toLowerCase",
+            "toString",
+            "toUpperCase",
+            "trim",
+        ],
+        Value::List(_) => &[
+            "contains", "equals", "get", "getClass", "getFirst", "getLast", "hashCode", "indexOf",
+            "isEmpty", "size", "toString",
+        ],
+        Value::Map(_) => &[
+            "containsKey",
+            "containsValue",
+            "equals",
+            "get",
+            "getClass",
+            "hashCode",
+            "isEmpty",
+            "keySet",
+            "size",
+            "toString",
+            "values",
+        ],
+        _ => &["equals", "getClass", "hashCode", "toString"],
+    }
+}
+
+/// The method closest to the name (Java `BeanInfo.closestMethodName`).
+fn closest_method_name(value: &Value, name: &str) -> Option<&'static str> {
+    if name.chars().count() < 3 {
+        return None;
+    }
+    let threshold = 2.max(name.chars().count() / 3);
+    let lower = name.to_lowercase();
+    let mut best: Option<&'static str> = None;
+    let mut best_distance = usize::MAX;
+    for candidate in method_names(value) {
+        let d = super::syntax_hints::distance(&lower, &candidate.to_lowercase());
+        if d > 0
+            && d <= threshold
+            && (d < best_distance
+                || (d == best_distance && best.is_some_and(|b| candidate.len() < b.len())))
+        {
+            best = Some(candidate);
+            best_distance = d;
+        }
+    }
+    best
 }
 
 /// Java `BeanExpression.lookupResult`: the key of a map, or the index (`0`, `last`,
@@ -263,10 +393,14 @@ fn argument(text: &str, exchange: &Exchange) -> CamelResult<Value> {
 }
 
 fn not_found(value: &Value, method: &str) -> CamelError {
+    let name = method.split('(').next().unwrap_or(method).trim();
+    let postfix = closest_method_name(value, name)
+        .map(|c| format!(" (did you mean {c}()?)"))
+        .unwrap_or_default();
     CamelError::new(
         ErrorKind::RuntimeExchange,
         format!(
-            "Method with name: {method} not found on bean: {} of type: {}",
+            "Method with name: {method}{postfix} not found on bean: {} of type: {}",
             java_to_string(value),
             java_class_name(value)
         ),
@@ -299,6 +433,18 @@ fn invoke(value: &Value, step: &str, exchange: &Exchange) -> CamelResult<Value> 
             call(value, &name, a)?.ok_or_else(|| not_found(value, &display()))
         }
         _ => {
+            if args.is_none() {
+                if let Value::Text(s) = value {
+                    if matches!(name.as_str(), "toUpperCase" | "toLowerCase") {
+                        // Java binds the body to the overload with a Locale parameter, which
+                        // fails on the conversion
+                        return Err(CamelError::new(
+                            ErrorKind::NoTypeConversionAvailable,
+                            format!("No type converter available to convert from type: java.lang.String to the required type: java.util.Locale with value {s}"),
+                        ));
+                    }
+                }
+            }
             // a method without arguments, a getter, a bean property, else a map key
             if let Some(v) = call(value, &name, &[])? {
                 return Ok(v);

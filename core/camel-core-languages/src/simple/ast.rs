@@ -461,6 +461,9 @@ fn create_function_block(
 ) -> ParseResult<SharedExpression> {
     if children.len() == 1 {
         if let Node::Literal { text, .. } = &children[0] {
+            if let Some(t) = try_parse_ternary(text, token.index)? {
+                return Ok(t);
+            }
             return create_function(text, token.index);
         }
     }
@@ -506,8 +509,179 @@ impl CompositeFunction {
                 }
             }
         }
-        create_function(&sb, self.index)
-            .map_err(|err| super::illegal_syntax(&self.expression, &err))
+        let syntax = |err: ParserError| super::illegal_syntax(&self.expression, &err);
+        if let Some(t) = try_parse_ternary(&sb, self.index).map_err(syntax)? {
+            return Ok(t);
+        }
+        create_function(&sb, self.index).map_err(syntax)
+    }
+}
+
+/// The error of a nested parser (the condition or a value of a ternary, a predicate in
+/// braces): its full message, without a position in the outer expression (Java rethrows the
+/// nested `SimpleIllegalSyntaxException`).
+pub(crate) fn nested_error(text: &str, err: &ParserError) -> ParserError {
+    ParserError {
+        message: super::illegal_syntax(text, err)
+            .message()
+            .unwrap_or_default()
+            .to_string(),
+        index: None,
+    }
+}
+
+/// Whether the character at the byte index has whitespace on both sides.
+fn surrounded_by_whitespace(text: &str, index: usize) -> bool {
+    index > 0
+        && text[..index]
+            .chars()
+            .next_back()
+            .is_some_and(char::is_whitespace)
+        && text[index + 1..]
+            .chars()
+            .next()
+            .is_some_and(char::is_whitespace)
+}
+
+/// The byte index of the ternary operator character, skipping nested `${}` and quotes; the
+/// operator must have whitespace around it, so `${bean:svc?method=at(10:30)}` is not a
+/// ternary.
+fn find_ternary_operator(text: &str, operator: char) -> Option<usize> {
+    let mut depth = 0;
+    let (mut single, mut double) = (false, false);
+    let mut chars = text.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        if !single && !double {
+            if c == '$' && chars.peek().is_some_and(|&(_, n)| n == '{') {
+                depth += 1;
+                chars.next();
+                continue;
+            }
+            if c == '}' && depth > 0 {
+                depth -= 1;
+                continue;
+            }
+            if c == '\'' && depth == 0 {
+                single = true;
+                continue;
+            }
+            if c == '"' && depth == 0 {
+                double = true;
+                continue;
+            }
+            if c == operator && depth == 0 && surrounded_by_whitespace(text, i) {
+                return Some(i);
+            }
+        } else if single && c == '\'' {
+            single = false;
+        } else if double && c == '"' {
+            double = false;
+        }
+    }
+    None
+}
+
+/// The ternary operator in a function, `${header.foo > 0 ? 'positive' : 'negative'}` (Java
+/// `SimpleFunctionStart.tryParseTernaryExpression`), or `None` when the text is not one.
+///
+/// The condition is a predicate (its function references are wrapped with `${ }` as for a
+/// predicate in braces), the values are quoted literals, numbers, booleans, `null`, nested
+/// ternaries or functions.
+///
+/// # Errors
+///
+/// A syntax error of the condition or of a value.
+pub fn try_parse_ternary(text: &str, index: usize) -> ParseResult<Option<SharedExpression>> {
+    let Some(question) = find_ternary_operator(text, '?') else {
+        return Ok(None);
+    };
+    let Some(colon) = find_ternary_operator(&text[question + 1..], ':') else {
+        return Ok(None);
+    };
+    let colon = question + 1 + colon;
+    let condition = text[..question].trim();
+    let true_text = text[question + 1..colon].trim();
+    let false_text = text[colon + 1..].trim();
+    if condition.is_empty() || true_text.is_empty() || false_text.is_empty() {
+        return Ok(None);
+    }
+    let predicate_text = if condition.contains("${") {
+        condition.to_string()
+    } else {
+        super::syntax_hints::wrap_functions(condition)
+    };
+    let predicate = super::predicate_parser::SimplePredicateParser::new(&predicate_text, true)
+        .parse_predicate()
+        .map_err(|e| nested_error(&predicate_text, &e))?;
+    let when_true = parse_value_expression(true_text, index)?;
+    let when_false = parse_value_expression(false_text, index)?;
+    let description = format!("{condition} ? {true_text} : {false_text}");
+    Ok(Some(Arc::new(Ternary {
+        predicate,
+        when_true,
+        when_false,
+        description,
+    })))
+}
+
+/// A value of a ternary (Java `SimpleFunctionStart.parseValueExpression`).
+fn parse_value_expression(text: &str, index: usize) -> ParseResult<SharedExpression> {
+    let quoted = text.len() >= 2
+        && ((text.starts_with('\'') && text.ends_with('\''))
+            || (text.starts_with('"') && text.ends_with('"')));
+    if quoted {
+        return Ok(constant_expression(&text[1..text.len() - 1]));
+    }
+    if text == "null" || text == "${null}" {
+        return Ok(constant_expression(Value::Null));
+    }
+    // a number or boolean on its own, not a function (CAMEL-24826)
+    if super::predicate_parser::is_numeric_value(text) {
+        return Ok(constant_expression(numeric_value(text)));
+    }
+    if text == "true" || text == "false" {
+        return Ok(constant_expression(text == "true"));
+    }
+    if let Some(t) = try_parse_ternary(text, index)? {
+        return Ok(t);
+    }
+    let exp = if text.starts_with("${") {
+        text.to_string()
+    } else {
+        format!("${{{text}}}")
+    };
+    super::expression_parser::SimpleExpressionParser::new(&exp, true)
+        .parse_expression()
+        .map_err(|e| nested_error(&exp, &e))
+}
+
+/// `condition ? whenTrue : whenFalse`.
+struct Ternary {
+    predicate: camel_api::processor::SharedPredicate,
+    when_true: SharedExpression,
+    when_false: SharedExpression,
+    description: String,
+}
+
+impl Expression for Ternary {
+    fn evaluate(&self, exchange: &Exchange) -> CamelResult<Value> {
+        if self.predicate.matches(exchange)? {
+            self.when_true.evaluate(exchange)
+        } else {
+            self.when_false.evaluate(exchange)
+        }
+    }
+
+    fn evaluate_mut(&self, exchange: &mut Exchange) -> CamelResult<Value> {
+        if self.predicate.matches(exchange)? {
+            self.when_true.evaluate_mut(exchange)
+        } else {
+            self.when_false.evaluate_mut(exchange)
+        }
+    }
+
+    fn describe(&self) -> String {
+        self.description.clone()
     }
 }
 
