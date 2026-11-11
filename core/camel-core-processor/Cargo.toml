@@ -12,7 +12,7 @@ camel-api = { workspace = true }
 camel-util = { workspace = true }
 camel-support = { workspace = true }
 log = "0.4"
-tokio = { version = "1", features = ["time", "rt"] }
+tokio = { version = "1", features = ["time", "rt", "sync"] }
 
 [dev-dependencies]
 camel-util = { workspace = true }

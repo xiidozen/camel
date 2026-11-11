@@ -71,15 +71,16 @@ Crates live **in the directory of the Maven module they replace** (`core/camel-a
   so no trait is ported without a user and a test.
 - `core/camel-support`: **in progress** (registry, header filter strategy, pattern helper).
 - `core/camel-core-processor`: **in progress** — pipeline, filter, choice, message translators,
-  stop, throw exception, log and send processors (`tests/processors.rs`); `multicast` (sequential
-  multicast, split, delay), `dynamic` (toD, recipient list, wire tap, convertBodyTo,
+  stop, throw exception, log and send processors (`tests/processors.rs`); `multicast` (multicast, split, delay;
+  sequential or parallel on tokio tasks with streaming/timeout, see `MulticastConfig`), `dynamic` (toD, recipient list, wire tap, convertBodyTo,
   setExchangePattern, `ProducerCache`), `aggregate` (the aggregate EIP, strategies, memory
   repository; spi `AggregationRepository` in camel-api). Processor lifecycle:
   `Processor::start_processor`/`stop_processor` (default no-op, idempotent; named so to not
   clash with `Service::start` on producers); composites forward to their children and the
   route starts its processors before the consumer and stops them after it. The aggregator's
-  timeout/interval checkers are tokio tasks started with the route and aborted on stop. Parallel processing,
-  streaming and timeouts of multicast/split/recipient list are pending.
+  timeout/interval checkers are tokio tasks started with the route and aborted on stop. Pending for
+  multicast/split/recipient list: lazy streaming iteration, share unit of work, custom thread
+  pools, onPrepare.
 - `core/camel-base-engine`: **in progress** — `DefaultCamelContext`, `DefaultRoute`, `RouteSpec`,
   `ProducerTemplate` on tokio (`tests/context.rs`).
 - `components/camel-direct`: **done** (first component; use it as the template for porting
@@ -112,8 +113,7 @@ Crates live **in the directory of the Maven module they replace** (`core/camel-a
   custom executor, shutdown awareness. The seda producer hands the on completions over to
   the copy it queues (InOnly) and the seda consumer marks the exchange as from its route.
 - The error handler and `onException` support `use_original_message`/`use_original_body`.
-- **Next:** the remaining onCompletion tests, parallel processing for multicast/split/recipient list, the
-  rest of the simple functions, then camel-main and the YAML/XML DSLs.
+- **Next:** the rest of the simple functions, then camel-main and the YAML/XML DSLs.
 - Java files still present in `core/camel-api/src/main/java` are the ones not ported yet.
 - Everything else in the repository: **not started** (status `todo` in the backlog).
 

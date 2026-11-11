@@ -2,7 +2,7 @@
 //! recipient list (Java `RecipientList`), the wire tap (Java `WireTapProcessor`), and
 //! `convertBodyTo` (Java `ConvertBodyProcessor`).
 
-use crate::multicast::{process_sequential, split_items, Aggregation};
+use crate::multicast::{multicast_pairs, process_pairs, split_items, Aggregation, MulticastConfig};
 use camel_api::endpoint::SharedProducer;
 use camel_api::enums::ExchangePattern;
 use camel_api::error::{CamelError, CamelResult, ErrorKind};
@@ -193,7 +193,7 @@ pub struct RecipientListProcessor {
     expression: SharedExpression,
     delimiter: String,
     strategy: Option<SharedAggregationStrategy>,
-    stop_on_exception: bool,
+    config: MulticastConfig,
     ignore_invalid_endpoints: bool,
     cache: Arc<ProducerCache>,
 }
@@ -203,14 +203,14 @@ impl RecipientListProcessor {
     pub fn new(
         expression: SharedExpression,
         strategy: Option<SharedAggregationStrategy>,
-        stop_on_exception: bool,
+        config: MulticastConfig,
         ignore_invalid_endpoints: bool,
     ) -> Self {
         RecipientListProcessor {
             expression,
             delimiter: ",".to_string(),
             strategy,
-            stop_on_exception,
+            config,
             ignore_invalid_endpoints,
             cache: Arc::new(ProducerCache::default()),
         }
@@ -246,13 +246,10 @@ impl Processor for RecipientListProcessor {
             } else {
                 split_items(value, &self.delimiter)
             };
-            let mut pairs: Vec<(SharedProcessor, Exchange)> = Vec::new();
+            let mut targets: Vec<SharedProcessor> = Vec::new();
             for uri in items.iter().filter_map(recipient) {
                 match self.cache.acquire(exchange, &uri).await {
-                    Ok(target) => pairs.push((
-                        Arc::new(SendToTarget(target)),
-                        create_correlated_copy(exchange),
-                    )),
+                    Ok(target) => targets.push(Arc::new(SendToTarget(target))),
                     Err(e) if self.ignore_invalid_endpoints => {
                         log::debug!(
                             "Endpoint uri is invalid: {uri}. This exception will be ignored. {e}"
@@ -265,11 +262,12 @@ impl Processor for RecipientListProcessor {
                     }
                 }
             }
-            process_sequential(
+            let pairs = multicast_pairs(exchange, targets);
+            process_pairs(
                 exchange,
                 pairs,
                 &Aggregation::Strategy(self.strategy.clone()),
-                self.stop_on_exception,
+                &self.config,
             )
             .await
         })

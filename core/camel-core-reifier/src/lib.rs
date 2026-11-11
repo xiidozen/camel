@@ -19,7 +19,8 @@ use camel_core_model::errorhandler::{
 };
 use camel_core_model::expression::ExpressionDefinition;
 use camel_core_model::processor::{
-    AggregationRef, Eip, OnCompletionDefinition, ProcessRef, ProcessorDefinition, Steps,
+    AggregationRef, Eip, MulticastOptions, OnCompletionDefinition, ProcessRef, ProcessorDefinition,
+    Steps,
 };
 use camel_core_model::route::RouteDefinition;
 use camel_core_processor::aggregate::{AggregateOptions, AggregateProcessor};
@@ -33,7 +34,9 @@ use camel_core_processor::errorhandler::redelivery_policy::RedeliveryPolicyOverr
 use camel_core_processor::errorhandler::{ErrorHandlerConfig, RedeliveryErrorHandler};
 use camel_core_processor::filter::FilterProcessor;
 use camel_core_processor::log_processor::LogProcessor;
-use camel_core_processor::multicast::{DelayProcessor, MulticastProcessor, SplitProcessor};
+use camel_core_processor::multicast::{
+    DelayProcessor, MulticastConfig, MulticastProcessor, SplitProcessor,
+};
 use camel_core_processor::on_completion::{OnCompletionOptions, OnCompletionProcessor};
 use camel_core_processor::pipeline::Pipeline;
 use camel_core_processor::send::SendProcessor;
@@ -44,6 +47,7 @@ use camel_core_processor::transform::{
 use camel_core_processor::try_catch::{CatchProcessor, FinallyProcessor, TryProcessor};
 use camel_util::value::Value;
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Creates the expression of the definition: a language expression is created by its language
 /// from the context.
@@ -277,7 +281,7 @@ impl<'a> RouteReifier<'a> {
                 expression,
                 steps,
                 strategy,
-                stop_on_exception,
+                options,
                 delimiter,
             } => {
                 let strategy = resolve_aggregation(self.context, strategy)?;
@@ -285,7 +289,7 @@ impl<'a> RouteReifier<'a> {
                     self.expr(expression)?,
                     Arc::new(Pipeline::new(self.step_list(steps)?)),
                     strategy,
-                    *stop_on_exception,
+                    multicast_config(options),
                 );
                 if let Some(d) = delimiter {
                     p = p.with_delimiter(d);
@@ -295,13 +299,13 @@ impl<'a> RouteReifier<'a> {
             Eip::Multicast {
                 steps,
                 strategy,
-                stop_on_exception,
+                options,
             } => {
                 let strategy = resolve_aggregation(self.context, strategy)?;
                 Arc::new(MulticastProcessor::new(
                     self.step_list(steps)?,
                     strategy,
-                    *stop_on_exception,
+                    multicast_config(options),
                 ))
             }
             Eip::Delay(e) => Arc::new(DelayProcessor::new(self.expr(e)?)),
@@ -371,14 +375,14 @@ impl<'a> RouteReifier<'a> {
                 expression,
                 delimiter,
                 strategy,
-                stop_on_exception,
+                options,
                 ignore_invalid_endpoints,
             } => {
                 let strategy = resolve_aggregation(self.context, strategy)?;
                 let mut p = RecipientListProcessor::new(
                     self.expr(expression)?,
                     strategy,
-                    *stop_on_exception,
+                    multicast_config(options),
                     *ignore_invalid_endpoints,
                 );
                 if let Some(d) = delimiter {
@@ -651,6 +655,16 @@ pub fn resolve_aggregation(
                 .map(|s| Some((*s).clone()))
                 .ok_or_else(not_found)
         }
+    }
+}
+
+/// The processing options of a multicast, split or recipient list.
+fn multicast_config(o: &MulticastOptions) -> MulticastConfig {
+    MulticastConfig {
+        stop_on_exception: o.stop_on_exception,
+        parallel_processing: o.parallel_processing,
+        streaming: o.streaming,
+        timeout: o.timeout.filter(|t| *t > 0).map(Duration::from_millis),
     }
 }
 

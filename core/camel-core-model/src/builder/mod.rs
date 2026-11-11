@@ -43,8 +43,8 @@ pub use errorhandler::*;
 use crate::errorhandler::{ErrorHandlerDefinition, OnExceptionDefinition};
 use crate::expression::ExpressionDefinition;
 use crate::processor::{
-    AggregateDefinition, AggregationRef, CatchDefinition, Eip, OnCompletionDefinition, ProcessRef,
-    ProcessorDefinition, RepositoryRef, WhenDefinition,
+    AggregateDefinition, AggregationRef, CatchDefinition, Eip, MulticastOptions,
+    OnCompletionDefinition, ProcessRef, ProcessorDefinition, RepositoryRef, WhenDefinition,
 };
 use crate::route::RouteDefinition;
 use camel_api::enums::{ExchangePattern, LoggingLevel};
@@ -206,7 +206,7 @@ pub trait Dsl: Sized {
             expression: expression.into(),
             steps,
             strategy: None,
-            stop_on_exception: false,
+            options: MulticastOptions::default(),
             delimiter: None,
         })
     }
@@ -220,7 +220,7 @@ pub trait Dsl: Sized {
         self.eip(Eip::Multicast {
             steps,
             strategy: None,
-            stop_on_exception: false,
+            options: MulticastOptions::default(),
         })
     }
 
@@ -243,7 +243,7 @@ pub trait Dsl: Sized {
             expression: expression.into(),
             delimiter: None,
             strategy: None,
-            stop_on_exception: false,
+            options: MulticastOptions::default(),
             ignore_invalid_endpoints: false,
         })
     }
@@ -511,21 +511,62 @@ pub trait Dsl: Sized {
         self
     }
 
-    /// The last step (split or multicast) stops on the first failure.
+    /// The options of the last step, if it is a split, multicast or recipient list.
+    #[doc(hidden)]
+    fn last_multicast_options(&mut self) -> Option<&mut MulticastOptions> {
+        match self.last_mut().map(|l| &mut l.eip) {
+            Some(
+                Eip::Split { options, .. }
+                | Eip::Multicast { options, .. }
+                | Eip::RecipientList { options, .. },
+            ) => Some(options),
+            _ => None,
+        }
+    }
+
+    /// The last step (split, multicast or recipient list) stops on the first failure (Java
+    /// `.stopOnException()`).
     fn stop_on_exception(mut self) -> Self {
-        if let Some(
-            Eip::Split {
-                stop_on_exception, ..
-            }
-            | Eip::Multicast {
-                stop_on_exception, ..
-            }
-            | Eip::RecipientList {
-                stop_on_exception, ..
-            },
-        ) = self.last_mut().map(|l| &mut l.eip)
-        {
-            *stop_on_exception = true;
+        if let Some(o) = self.last_multicast_options() {
+            o.stop_on_exception = true;
+        }
+        self
+    }
+
+    /// The last step (split, multicast or recipient list) processes its copies concurrently
+    /// (Java `.parallelProcessing()`).
+    fn parallel_processing(mut self) -> Self {
+        if let Some(o) = self.last_multicast_options() {
+            o.parallel_processing = true;
+        }
+        self
+    }
+
+    /// The last step (split, multicast or recipient list) aggregates the results in the order
+    /// they complete instead of the order of the copies (Java `.streaming()`).
+    fn streaming(mut self) -> Self {
+        if let Some(o) = self.last_multicast_options() {
+            o.streaming = true;
+        }
+        self
+    }
+
+    /// The aggregation strategy of the last step (split, multicast or recipient list) may be
+    /// called concurrently (Java `.parallelAggregate()`).
+    fn parallel_aggregate(mut self) -> Self {
+        if let Some(o) = self.last_multicast_options() {
+            o.parallel_aggregate = true;
+        }
+        self
+    }
+
+    /// The total timeout in millis of the parallel processing of the last step (split,
+    /// multicast or recipient list; Java `.timeout(millis)`): the copies not done in time are
+    /// given to the `timeout` method of the aggregation strategy, and the exchange continues
+    /// with what was aggregated.
+    fn timeout(mut self, millis: u64) -> Self {
+        if let Some(o) = self.last_multicast_options() {
+            o.timeout = Some(millis);
         }
         self
     }

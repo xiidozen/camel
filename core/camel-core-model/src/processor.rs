@@ -195,6 +195,24 @@ impl AggregateDefinition {
     }
 }
 
+/// The options of the processing of the copies of multicast, split and recipient list (Java
+/// `MulticastDefinition`, `SplitDefinition` and `RecipientListDefinition` options).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MulticastOptions {
+    /// Whether to stop on the first failed copy (`stopOnException`).
+    pub stop_on_exception: bool,
+    /// Whether the copies are processed concurrently (`parallelProcessing`).
+    pub parallel_processing: bool,
+    /// Whether the results are aggregated in the order they complete instead of the order
+    /// of the copies (`streaming`).
+    pub streaming: bool,
+    /// Whether the aggregation strategy may be called concurrently (`parallelAggregate`; the
+    /// Rust port always aggregates from one task, so this only documents the strategy).
+    pub parallel_aggregate: bool,
+    /// The total timeout in millis of the parallel processing (`timeout`).
+    pub timeout: Option<u64>,
+}
+
 /// The onCompletion EIP (Java `OnCompletionDefinition`): steps routing a copy of the exchange
 /// when it is done.
 #[derive(Debug, Clone, Default)]
@@ -331,8 +349,8 @@ pub enum Eip {
         steps: Vec<ProcessorDefinition>,
         /// The aggregation of the parts (default: the original exchange).
         strategy: Option<AggregationRef>,
-        /// Whether to stop on the first failed part.
-        stop_on_exception: bool,
+        /// How the parts are processed.
+        options: MulticastOptions,
         /// The delimiter of texts (default `,`).
         delimiter: Option<String>,
     },
@@ -342,8 +360,8 @@ pub enum Eip {
         steps: Vec<ProcessorDefinition>,
         /// The aggregation of the replies (default: the last reply).
         strategy: Option<AggregationRef>,
-        /// Whether to stop on the first failed copy.
-        stop_on_exception: bool,
+        /// How the copies are processed.
+        options: MulticastOptions,
     },
     /// Routes a copy of the exchange when it is done (`onCompletion`; only directly in a
     /// route, where it applies to that route wherever it is).
@@ -369,8 +387,8 @@ pub enum Eip {
         delimiter: Option<String>,
         /// The aggregation of the replies (default: the last reply).
         strategy: Option<AggregationRef>,
-        /// Whether to stop on the first failure.
-        stop_on_exception: bool,
+        /// How the copies are processed.
+        options: MulticastOptions,
         /// Whether invalid endpoint uris are ignored.
         ignore_invalid_endpoints: bool,
     },

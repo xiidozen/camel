@@ -87,6 +87,23 @@ pub fn body_in_aggregating_strategy() -> camel_core::api::processor::SharedAggre
     ))
 }
 
+/// The aggregation strategy many Java tests define inline: appends the body of the new
+/// exchange to the body of the old one (no separator).
+#[allow(dead_code)]
+pub fn concat_strategy() -> camel_core::api::processor::SharedAggregationStrategy {
+    Arc::new(camel_core::api::processor::aggregation_fn(
+        |old: Option<Exchange>, new: Option<Exchange>| {
+            let Some(new) = new else { return Ok(old) };
+            let Some(mut old) = old else {
+                return Ok(Some(new));
+            };
+            let body = format!("{}{}", old.message().body(), new.message().body());
+            old.message_mut().set_body(body);
+            Ok(Some(old))
+        },
+    ))
+}
+
 /// Waits until the condition holds, polling every 10 millis, and panics after the timeout
 /// (Java Awaitility `await().atMost(timeout).until(condition)`).
 #[allow(dead_code)]
