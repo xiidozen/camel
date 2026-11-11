@@ -12,6 +12,15 @@ pub fn create_correlated_copy(exchange: &Exchange) -> Exchange {
     copy
 }
 
+/// A correlated copy (see [`create_correlated_copy`]) that takes over the on completions of
+/// the exchange that allow it (Java `ExchangeHelper.createCorrelatedCopy(exchange, true)`), so
+/// the copy runs them when it is done, for example when it is routed asynchronously.
+pub fn create_correlated_copy_with_handover(exchange: &mut Exchange) -> Exchange {
+    let mut copy = create_correlated_copy(exchange);
+    exchange.handover_completions(&mut copy);
+    copy
+}
+
 /// Copies the results of the source exchange to the target (Java `ExchangeHelper.copyResults`):
 /// the out message (or the in message, as the out of an out capable target), the exception, the
 /// properties, the variables and the routing state.

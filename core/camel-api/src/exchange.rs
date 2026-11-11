@@ -209,6 +209,13 @@ impl Exchange {
         self.on_completions.push(synchronization);
     }
 
+    /// Whether the callback (this very instance) was added (Java `containsOnCompletion`).
+    pub fn contains_on_completion(&self, synchronization: &SharedSynchronization) -> bool {
+        self.on_completions
+            .iter()
+            .any(|s| Arc::ptr_eq(s, synchronization))
+    }
+
     /// The callbacks run when the unit of work is done.
     pub fn on_completions(&self) -> &[SharedSynchronization] {
         &self.on_completions
@@ -527,6 +534,12 @@ impl Exchange {
     /// Sets the id of the route the exchange was created by.
     pub fn set_from_route_id(&mut self, route_id: impl Into<String>) {
         self.from_route_id = Some(route_id.into());
+    }
+
+    /// Clears the id of the route the exchange was created by, so the next route that routes
+    /// it sets its own (used by consumers that take over an exchange created elsewhere).
+    pub fn clear_from_route_id(&mut self) {
+        self.from_route_id = None;
     }
 
     /// The group of the route the exchange was created by, if any.

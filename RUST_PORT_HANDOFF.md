@@ -109,7 +109,8 @@ Crates live **in the directory of the Maven module they replace** (`core/camel-a
   `SynchronizationRouteAware`. The onCompletion EIP (`on_completion` processor; route scoped and
   route builder scoped, onCompleteOnly/onFailureOnly, onWhen, useOriginalMessage, modes
   before/after consumer, parallelProcessing) is ported. Pending: onCompletion with intercept,
-  custom executor, shutdown awareness, seda handover tests.
+  custom executor, shutdown awareness. The seda producer hands the on completions over to
+  the copy it queues (InOnly) and the seda consumer marks the exchange as from its route.
 - The error handler and `onException` support `use_original_message`/`use_original_body`.
 - **Next:** the remaining onCompletion tests, parallel processing for multicast/split/recipient list, the
   rest of the simple functions, then camel-main and the YAML/XML DSLs.

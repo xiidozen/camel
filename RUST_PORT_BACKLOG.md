@@ -539,7 +539,7 @@ progress and what is still to do. Update it in the same commit as each port.
 | `components/camel-saxon` | 9 | 49 | todo | |
 | `components/camel-scheduler` | 4 | 0 | todo | |
 | `components/camel-schematron` | 10 | 7 | todo | |
-| `components/camel-seda` | 13 | 0 | wip | Rust crate `camel-seda`: shared per-uri queues with size, concurrent consumer tasks (tokio), waitForTaskToComplete with timeout (ExchangeTimedOutException) and the results copied back, blockWhenFull/offerTimeout/discardWhenFull/failIfNoConsumers/discardIfNoConsumers/purgeWhenStopping, Java messages. Tests in camel-core `tests/component/seda`. Java kept until done: multipleConsumers, custom queues/factories, polling consumer, pollTimeout, browse, virtual threads; Java tests left: those needing delay, the unit of work, suspend/resume of consumers, multicast, ... |
+| `components/camel-seda` | 13 | 0 | wip | Rust crate `camel-seda`: shared per-uri queues with size, concurrent consumer tasks (tokio), waitForTaskToComplete with timeout (ExchangeTimedOutException) and the results copied back, blockWhenFull/offerTimeout/discardWhenFull/failIfNoConsumers/discardIfNoConsumers/purgeWhenStopping, handover of the on completions to the queued copy (InOnly), Java messages. Tests in camel-core `tests/component/seda`. Java kept until done: multipleConsumers, custom queues/factories, polling consumer, pollTimeout, browse, virtual threads; Java tests left: those needing delay, the unit of work, suspend/resume of consumers, multicast, ... |
 | `components/camel-servicenow` | 0 | 0 | todo | |
 | `components/camel-servicenow/camel-servicenow-component` | 41 | 12 | todo | |
 | `components/camel-servicenow/camel-servicenow-maven-plugin` | 1 | 2 | todo | |

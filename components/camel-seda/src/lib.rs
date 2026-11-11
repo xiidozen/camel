@@ -38,7 +38,9 @@ use camel_api::exchange::Exchange;
 use camel_api::processor::{BoxFuture, Processor, SharedProcessor};
 use camel_api::service::Service;
 use camel_support::component_support::get_and_remove_parameter;
-use camel_support::exchange_helper::{copy_results, create_correlated_copy};
+use camel_support::exchange_helper::{
+    copy_results, create_correlated_copy, create_correlated_copy_with_handover,
+};
 use camel_util::uri_support::{sanitize_uri, Parameters};
 use std::any::Any;
 use std::collections::{HashMap, VecDeque};
@@ -339,6 +341,9 @@ struct SedaProducer {
     endpoint: Arc<SedaEndpoint>,
 }
 
+/// An item that was not queued, with the error (`None` when discarded).
+type NotQueued = Box<(Item, Option<CamelError>)>;
+
 impl SedaProducer {
     fn not_available(&self, message: &str, exchange: &Exchange) -> CamelError {
         CamelError::camel_exchange(
@@ -348,35 +353,45 @@ impl SedaProducer {
         .with_subtype(SEDA_CONSUMER_NOT_AVAILABLE)
     }
 
-    /// Java `addToQueue` / `offerToQueue`: `Ok(false)` when discarded.
-    async fn add_to_queue(&self, item: Item) -> CamelResult<bool> {
+    /// Java `addToQueue` / `offerToQueue`.
+    ///
+    /// # Errors
+    ///
+    /// When the item is not queued: it is given back, with the error, or `None` when it is
+    /// discarded (`discardIfNoConsumers`, `discardWhenFull`).
+    async fn add_to_queue(&self, item: Item) -> Result<(), NotQueued> {
         let e = &self.endpoint;
         if e.queue.consumer_count() == 0 {
             if e.fail_if_no_consumers {
-                return Err(
-                    self.not_available("No consumers available on endpoint", &item.exchange)
-                );
+                let err = self.not_available("No consumers available on endpoint", &item.exchange);
+                return Err(Box::new((item, Some(err))));
             } else if e.discard_if_no_consumers {
-                return Ok(false);
+                log::debug!(
+                    "Discard message as no active consumers on endpoint: {}",
+                    sanitize_uri(&e.uri)
+                );
+                return Err(Box::new((item, None)));
             }
         }
         if e.discard_when_full {
-            return Ok(e.queue.try_offer(item).is_ok());
+            return e
+                .queue
+                .try_offer(item)
+                .map_err(|item| Box::new((item, None)));
         }
         if e.block_when_full {
             let timeout = (e.offer_timeout > 0).then(|| Duration::from_millis(e.offer_timeout));
-            return match e.queue.offer_wait(item, timeout).await {
-                Ok(()) => Ok(true),
-                Err(_) => Err(CamelError::illegal_state(format!(
+            return e.queue.offer_wait(item, timeout).await.map_err(|item| {
+                let err = CamelError::illegal_state(format!(
                     "Fails to insert element into queue, after timeout of {} milliseconds",
                     e.offer_timeout
-                ))),
-            };
+                ));
+                Box::new((item, Some(err)))
+            });
         }
-        match e.queue.try_offer(item) {
-            Ok(()) => Ok(true),
-            Err(_) => Err(CamelError::illegal_state("Queue full")),
-        }
+        e.queue
+            .try_offer(item)
+            .map_err(|item| Box::new((item, Some(CamelError::illegal_state("Queue full")))))
     }
 }
 
@@ -389,29 +404,37 @@ impl Processor for SedaProducer {
             let wait = e.wait == WaitForTaskToComplete::Always
                 || e.wait == WaitForTaskToComplete::IfReplyExpected
                     && exchange.pattern().is_out_capable();
-            let copy = create_correlated_copy(exchange);
             if !wait {
-                if let Err(err) = self
-                    .add_to_queue(Item {
-                        exchange: Box::new(copy),
-                        reply: None,
-                    })
-                    .await
-                {
-                    exchange.set_exception(Some(err));
+                // hand over the on completions, so it is the copy that runs them, as we do
+                // not wait
+                let copy = create_correlated_copy_with_handover(exchange);
+                let item = Item {
+                    exchange: Box::new(copy),
+                    reply: None,
+                };
+                if let Err(not_queued) = self.add_to_queue(item).await {
+                    let (mut item, err) = *not_queued;
+                    // the copy is not queued, so the exchange takes back its on completions
+                    item.exchange.handover_completions(exchange);
+                    if let Some(err) = err {
+                        exchange.set_exception(Some(err));
+                    }
                 }
                 return Ok(());
             }
+            // do not hand over the on completions as we wait for the copy to complete, and
+            // copy its result back when done
+            let copy = create_correlated_copy(exchange);
             let copy_id = copy.exchange_id().to_string();
             let (tx, rx) = oneshot::channel();
-            if let Err(err) = self
-                .add_to_queue(Item {
-                    exchange: Box::new(copy),
-                    reply: Some(tx),
-                })
-                .await
-            {
-                exchange.set_exception(Some(err));
+            let item = Item {
+                exchange: Box::new(copy),
+                reply: Some(tx),
+            };
+            if let Err(not_queued) = self.add_to_queue(item).await {
+                if let (_, Some(err)) = *not_queued {
+                    exchange.set_exception(Some(err));
+                }
                 return Ok(());
             }
             let result = if e.timeout > 0 {
@@ -474,6 +497,10 @@ impl Service for SedaConsumer {
                 tasks.push(tokio::spawn(async move {
                     while let Some(item) = queue.take(&stopped).await {
                         let mut exchange = *item.exchange;
+                        // this consumer grabbed the exchange so mark it is from this
+                        // route/endpoint (Java prepareExchange; the route sets its id)
+                        exchange.set_from_endpoint(uri.clone());
+                        exchange.clear_from_route_id();
                         if let Err(e) = processor.process(&mut exchange).await {
                             exchange.set_exception(Some(e));
                         }
