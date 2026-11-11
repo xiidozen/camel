@@ -43,8 +43,8 @@ pub use errorhandler::*;
 use crate::errorhandler::{ErrorHandlerDefinition, OnExceptionDefinition};
 use crate::expression::ExpressionDefinition;
 use crate::processor::{
-    AggregateDefinition, AggregationRef, CatchDefinition, Eip, ProcessRef, ProcessorDefinition,
-    RepositoryRef, WhenDefinition,
+    AggregateDefinition, AggregationRef, CatchDefinition, Eip, OnCompletionDefinition, ProcessRef,
+    ProcessorDefinition, RepositoryRef, WhenDefinition,
 };
 use crate::route::RouteDefinition;
 use camel_api::enums::{ExchangePattern, LoggingLevel};
@@ -469,6 +469,17 @@ pub trait Dsl: Sized {
         self
     }
 
+    /// Routes a copy of the exchange through the steps when the exchange is done (Java
+    /// `.onCompletion()` in a route; it applies to the whole route wherever it is). The block
+    /// sets the options, such as [`OnCompletionDsl::on_failure_only`], and the steps.
+    fn on_completion<F>(self, block: F) -> Self
+    where
+        F: FnOnce(OnCompletionDsl) -> OnCompletionDsl,
+    {
+        let def = block(OnCompletionDsl::default()).def;
+        self.eip(Eip::OnCompletion(Box::new(def)))
+    }
+
     /// Delays by the millis of the expression (Java `.delay(..)`).
     fn delay(self, millis: impl Into<ExpressionDefinition>) -> Self {
         self.eip(Eip::Delay(millis.into()))
@@ -862,13 +873,83 @@ impl From<RouteDsl> for RouteDefinition {
     }
 }
 
-/// The routes collected by a [`RouteBuilder`], with the error handler and `onException`
-/// clauses that apply to all of them.
+/// The options and steps of an onCompletion (see [`Dsl::on_completion`] and
+/// [`Routes::on_completion`]).
+#[derive(Default)]
+pub struct OnCompletionDsl {
+    def: OnCompletionDefinition,
+}
+
+impl OnCompletionDsl {
+    /// Only when the exchange completed successfully (Java `.onCompleteOnly()`).
+    pub fn on_complete_only(mut self) -> Self {
+        self.def.on_complete_only = true;
+        self
+    }
+
+    /// Only when the exchange failed (Java `.onFailureOnly()`).
+    pub fn on_failure_only(mut self) -> Self {
+        self.def.on_failure_only = true;
+        self
+    }
+
+    /// Only when the exchange matches (Java `.onWhen(..)`).
+    pub fn on_when(mut self, predicate: impl Into<ExpressionDefinition>) -> Self {
+        self.def.on_when = Some(predicate.into());
+        self
+    }
+
+    /// Routes the original in message (Java `.useOriginalMessage()`).
+    pub fn use_original_message(mut self) -> Self {
+        self.def.use_original_message = true;
+        self
+    }
+
+    /// Runs when the route is done, before its consumer continues, for example before an
+    /// HTTP reply is sent (Java `.modeBeforeConsumer()`).
+    pub fn mode_before_consumer(mut self) -> Self {
+        self.def.before_consumer = true;
+        self
+    }
+
+    /// Runs when the unit of work is done, after the consumer (the default; Java
+    /// `.modeAfterConsumer()`).
+    pub fn mode_after_consumer(mut self) -> Self {
+        self.def.before_consumer = false;
+        self
+    }
+
+    /// Routes the copy in the background (Java `.parallelProcessing()`).
+    pub fn parallel_processing(mut self) -> Self {
+        self.def.parallel_processing = true;
+        self
+    }
+
+    /// The definition.
+    pub fn build(self) -> OnCompletionDefinition {
+        self.def
+    }
+}
+
+impl Dsl for OnCompletionDsl {
+    fn push(mut self, step: ProcessorDefinition) -> Self {
+        self.def.steps.push(step);
+        self
+    }
+
+    fn last_mut(&mut self) -> Option<&mut ProcessorDefinition> {
+        self.def.steps.last_mut()
+    }
+}
+
+/// The routes collected by a [`RouteBuilder`], with the error handler, `onException` and
+/// `onCompletion` clauses that apply to all of them.
 #[derive(Default)]
 pub struct Routes {
     definitions: Vec<RouteDefinition>,
     error_handler: Option<ErrorHandlerDefinition>,
     on_exceptions: Vec<OnExceptionDefinition>,
+    on_completions: Vec<OnCompletionDefinition>,
 }
 
 impl Routes {
@@ -891,6 +972,17 @@ impl Routes {
         self
     }
 
+    /// Adds an `onCompletion` for the routes of this builder (Java `onCompletion()` in
+    /// `configure()`); a route with its own `onCompletion` does not use these.
+    pub fn on_completion<F>(&mut self, block: F) -> &mut Self
+    where
+        F: FnOnce(OnCompletionDsl) -> OnCompletionDsl,
+    {
+        self.on_completions
+            .push(block(OnCompletionDsl::default()).def);
+        self
+    }
+
     /// The route definitions.
     pub fn definitions(&self) -> &[RouteDefinition] {
         &self.definitions
@@ -899,7 +991,8 @@ impl Routes {
     /// Takes the route definitions, with the error handler and `onException` clauses of the
     /// builder applied.
     pub fn into_definitions(self) -> Vec<RouteDefinition> {
-        let (error_handler, on_exceptions) = (self.error_handler, self.on_exceptions);
+        let (error_handler, on_exceptions, on_completions) =
+            (self.error_handler, self.on_exceptions, self.on_completions);
         self.definitions
             .into_iter()
             .map(|mut d| {
@@ -907,6 +1000,7 @@ impl Routes {
                     d.error_handler = error_handler.clone();
                 }
                 d.builder_on_exceptions = on_exceptions.clone();
+                d.builder_on_completions = on_completions.clone();
                 d
             })
             .collect()

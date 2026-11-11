@@ -19,10 +19,12 @@ pub mod errorhandler;
 pub mod filter;
 pub mod log_processor;
 pub mod multicast;
+pub mod on_completion;
 pub mod pipeline;
 pub mod send;
 pub mod transform;
 pub mod try_catch;
+pub mod unit_of_work;
 
 use camel_api::exchange::Exchange;
 use camel_api::processor::Processor;

@@ -100,3 +100,14 @@ pub async fn await_until(timeout: std::time::Duration, condition: impl Fn() -> b
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
 }
+
+/// The predicate: the `CamelExceptionCaught` property is an error of the kind (Java
+/// `exchangeProperty(Exchange.EXCEPTION_CAUGHT).isInstanceOf(..)`).
+#[allow(dead_code)]
+pub fn caught_is(kind: ErrorKind) -> Arc<dyn Predicate> {
+    Arc::new(camel_core::api::processor::predicate_fn(
+        move |e: &Exchange| {
+            Ok(camel_core::processor::try_catch::exception_caught(e).is_some_and(|c| c.is(kind)))
+        },
+    ))
+}

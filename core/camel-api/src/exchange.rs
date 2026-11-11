@@ -7,6 +7,7 @@ use crate::enums::ExchangePattern;
 use crate::error::{CamelError, CamelResult, ExchangeRef};
 use crate::exchange_constants::ExchangePropertyKey;
 use crate::message::{header_matches, Message};
+use crate::spi::synchronization::SharedSynchronization;
 use camel_util::value::{Value, ValueMap};
 use std::collections::HashMap;
 use std::fmt;
@@ -70,6 +71,12 @@ pub struct Exchange {
     error_handler_handled: Option<bool>,
     stream_cache_disabled: bool,
     notify_event: bool,
+    /// Whether a unit of work is active (a route created it).
+    unit_of_work: bool,
+    /// The in message when the unit of work started (Java `UnitOfWork.getOriginalInMessage`).
+    original_message: Option<Box<Message>>,
+    /// The callbacks run when the unit of work is done (Java `addOnCompletion`).
+    on_completions: Vec<SharedSynchronization>,
 }
 
 impl fmt::Debug for Exchange {
@@ -138,6 +145,9 @@ impl Exchange {
             error_handler_handled: None,
             stream_cache_disabled: false,
             notify_event: false,
+            unit_of_work: false,
+            original_message: None,
+            on_completions: Vec::new(),
         }
     }
 
@@ -150,11 +160,73 @@ impl Exchange {
 
     /// Creates a copy of the exchange, so it can be forwarded to another destination. The copy
     /// has its own exchange id, and copies the messages, error, properties, variables and
-    /// routing state.
+    /// routing state; not the unit of work and its on completions (Java: a copy has no unit
+    /// of work, see [`handover_completions`](Exchange::handover_completions)).
     pub fn copy(&self) -> Exchange {
         let mut copy = self.clone();
         copy.exchange_id = self.context.uuid_generator().generate_exchange_uuid();
+        copy.unit_of_work = false;
+        copy.original_message = None;
+        copy.on_completions = Vec::new();
         copy
+    }
+
+    /// Whether a unit of work is active: the exchange is routed by a route, which runs the
+    /// on completions when it is done with the exchange.
+    pub fn has_unit_of_work(&self) -> bool {
+        self.unit_of_work
+    }
+
+    /// Starts the unit of work, remembering the in message as the original message (done by
+    /// the first route the exchange enters).
+    pub fn begin_unit_of_work(&mut self) {
+        self.unit_of_work = true;
+        self.original_message = Some(Box::new(self.in_message.clone()));
+    }
+
+    /// Takes the on completions to run when the unit of work is done (see
+    /// [`done_synchronizations`](crate::spi::synchronization::done_synchronizations)); the
+    /// unit of work stays active, so they still see the
+    /// [`original_message`](Exchange::original_message).
+    pub fn take_on_completions(&mut self) -> Vec<SharedSynchronization> {
+        std::mem::take(&mut self.on_completions)
+    }
+
+    /// Ends the unit of work, once its on completions ran (Java `UnitOfWork.done`).
+    pub fn end_unit_of_work(&mut self) {
+        self.unit_of_work = false;
+        self.original_message = None;
+    }
+
+    /// The in message as it was when the unit of work started (Java
+    /// `ExchangeHelper.getOriginalInMessage`), if any.
+    pub fn original_message(&self) -> Option<&Message> {
+        self.original_message.as_deref()
+    }
+
+    /// Adds a callback run when the unit of work is done (Java `addOnCompletion`).
+    pub fn add_on_completion(&mut self, synchronization: SharedSynchronization) {
+        self.on_completions.push(synchronization);
+    }
+
+    /// The callbacks run when the unit of work is done.
+    pub fn on_completions(&self) -> &[SharedSynchronization] {
+        &self.on_completions
+    }
+
+    /// Hands the on completions that allow it over to the target exchange (Java
+    /// `UnitOfWork.handoverSynchronization`), for example when the target continues the
+    /// routing asynchronously.
+    pub fn handover_completions(&mut self, target: &mut Exchange) {
+        let all = std::mem::take(&mut self.on_completions);
+        for s in all {
+            if s.allow_handover() {
+                s.before_handover(target);
+                target.on_completions.push(s);
+            } else {
+                self.on_completions.push(s);
+            }
+        }
     }
 
     /// The CamelContext.

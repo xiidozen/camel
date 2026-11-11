@@ -18,7 +18,9 @@ use camel_core_model::errorhandler::{
     ErrorHandlerDefinition, ErrorHandlerKind, RedeliveryPolicyDefinition,
 };
 use camel_core_model::expression::ExpressionDefinition;
-use camel_core_model::processor::{AggregationRef, Eip, ProcessRef, ProcessorDefinition};
+use camel_core_model::processor::{
+    AggregationRef, Eip, OnCompletionDefinition, ProcessRef, ProcessorDefinition, Steps,
+};
 use camel_core_model::route::RouteDefinition;
 use camel_core_processor::aggregate::{AggregateOptions, AggregateProcessor};
 use camel_core_processor::choice::ChoiceProcessor;
@@ -32,6 +34,7 @@ use camel_core_processor::errorhandler::{ErrorHandlerConfig, RedeliveryErrorHand
 use camel_core_processor::filter::FilterProcessor;
 use camel_core_processor::log_processor::LogProcessor;
 use camel_core_processor::multicast::{DelayProcessor, MulticastProcessor, SplitProcessor};
+use camel_core_processor::on_completion::{OnCompletionOptions, OnCompletionProcessor};
 use camel_core_processor::pipeline::Pipeline;
 use camel_core_processor::send::SendProcessor;
 use camel_core_processor::transform::{
@@ -302,6 +305,11 @@ impl<'a> RouteReifier<'a> {
                 ))
             }
             Eip::Delay(e) => Arc::new(DelayProcessor::new(self.expr(e)?)),
+            Eip::OnCompletion(_) => {
+                return Err(CamelError::illegal_argument(
+                    "onCompletion must be defined directly in a route or in the route builder",
+                ))
+            }
             Eip::Aggregate(a) => {
                 let strategy =
                     resolve_aggregation(self.context, &a.strategy)?.ok_or_else(|| {
@@ -446,7 +454,40 @@ pub fn reify_route(
     })?;
     let reifier = RouteReifier::with_error_handler(context, route_id, error_handler);
     let mut processors = Vec::new();
-    for step in def.steps.iter().filter(|s| !s.disabled) {
+    // the onCompletions first (Java RouteDefinitionHelper.initOnCompletions): the ones of the
+    // route, else the ones of the route builder
+    let scoped: Vec<&OnCompletionDefinition> = def
+        .steps
+        .iter()
+        .filter(|s| !s.disabled)
+        .filter_map(|s| match &s.eip {
+            Eip::OnCompletion(c) => Some(c.as_ref()),
+            _ => None,
+        })
+        .collect();
+    let (completions, route_scoped) = if scoped.is_empty() {
+        (def.builder_on_completions.iter().collect(), false)
+    } else {
+        (scoped, true)
+    };
+    for c in completions {
+        let p = reify_on_completion(&reifier, route_id, c, route_scoped).map_err(|e| {
+            let mut route = def.clone();
+            route.id = Some(route_id.to_string());
+            CamelError::failed_to_create_route(
+                route_id,
+                def.source_location.as_deref(),
+                &route.to_string(),
+                e,
+            )
+        })?;
+        processors.push(p);
+    }
+    for step in def
+        .steps
+        .iter()
+        .filter(|s| !s.disabled && !matches!(s.eip, Eip::OnCompletion(_)))
+    {
         let p = reifier.step(step).map_err(|e| {
             let mut route = def.clone();
             route.id = Some(route_id.to_string());
@@ -607,4 +648,38 @@ pub fn resolve_aggregation(
                 .ok_or_else(not_found)
         }
     }
+}
+
+/// The processor of an onCompletion (Java `OnCompletionReifier`).
+fn reify_on_completion(
+    reifier: &RouteReifier<'_>,
+    route_id: &str,
+    c: &OnCompletionDefinition,
+    route_scoped: bool,
+) -> CamelResult<SharedProcessor> {
+    if c.on_complete_only && c.on_failure_only {
+        return Err(CamelError::illegal_argument(format!(
+            "Both onCompleteOnly and onFailureOnly cannot be true. Only one of them can be true. On node: onCompletion[{}]",
+            Steps(&c.steps)
+        )));
+    }
+    let on_when = c
+        .on_when
+        .as_ref()
+        .map(|p| reify_predicate(reifier.context, p))
+        .transpose()?;
+    let options = OnCompletionOptions {
+        on_complete_only: c.on_complete_only,
+        on_failure_only: c.on_failure_only,
+        on_when,
+        use_original_message: c.use_original_message,
+        before_consumer: c.before_consumer,
+        route_scoped,
+        parallel_processing: c.parallel_processing,
+    };
+    Ok(Arc::new(OnCompletionProcessor::new(
+        route_id,
+        reifier.steps(&c.steps)?,
+        options,
+    )))
 }

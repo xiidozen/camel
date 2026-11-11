@@ -48,6 +48,7 @@ impl ProcessorDefinition {
             | Eip::Split { steps, .. }
             | Eip::Multicast { steps, .. } => steps.iter().collect(),
             Eip::Aggregate(a) => a.steps.iter().collect(),
+            Eip::OnCompletion(c) => c.steps.iter().collect(),
             Eip::DoTry {
                 steps,
                 catches,
@@ -194,6 +195,27 @@ impl AggregateDefinition {
     }
 }
 
+/// The onCompletion EIP (Java `OnCompletionDefinition`): steps routing a copy of the exchange
+/// when it is done.
+#[derive(Debug, Clone, Default)]
+pub struct OnCompletionDefinition {
+    /// The steps.
+    pub steps: Vec<ProcessorDefinition>,
+    /// Only when the exchange completed successfully.
+    pub on_complete_only: bool,
+    /// Only when the exchange failed.
+    pub on_failure_only: bool,
+    /// Only when the exchange matches (a predicate).
+    pub on_when: Option<ExpressionDefinition>,
+    /// Routes the original in message.
+    pub use_original_message: bool,
+    /// Runs when the route is done, before its consumer continues (Java mode
+    /// `BeforeConsumer`; default `AfterConsumer`).
+    pub before_consumer: bool,
+    /// Routes the copy in the background.
+    pub parallel_processing: bool,
+}
+
 /// A `when` clause of a choice.
 #[derive(Clone, Debug)]
 pub struct WhenDefinition {
@@ -323,6 +345,9 @@ pub enum Eip {
         /// Whether to stop on the first failed copy.
         stop_on_exception: bool,
     },
+    /// Routes a copy of the exchange when it is done (`onCompletion`; only directly in a
+    /// route, where it applies to that route wherever it is).
+    OnCompletion(Box<OnCompletionDefinition>),
     /// Aggregates exchanges by correlation key (`aggregate`).
     Aggregate(Box<AggregateDefinition>),
     /// Delays the exchange by the millis of the expression (`delay`).
@@ -400,6 +425,7 @@ impl Eip {
             Eip::Multicast { .. } => "multicast",
             Eip::Delay(_) => "delay",
             Eip::Aggregate(_) => "aggregate",
+            Eip::OnCompletion(_) => "onCompletion",
             Eip::ToD { .. } => "toD",
             Eip::RecipientList { .. } => "recipientList",
             Eip::WireTap { .. } => "wireTap",
@@ -410,7 +436,7 @@ impl Eip {
 }
 
 /// Formats the steps like a Java list: `[a, b]`.
-pub(crate) struct Steps<'a>(pub &'a [ProcessorDefinition]);
+pub struct Steps<'a>(pub &'a [ProcessorDefinition]);
 
 impl fmt::Display for Steps<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -479,6 +505,7 @@ impl fmt::Display for ProcessorDefinition {
             Eip::Multicast { steps, .. } => write!(f, "Multicast[{}]", Steps(steps)),
             Eip::Delay(e) => write!(f, "Delay[{e} -> []]"),
             Eip::Aggregate(a) => write!(f, "Aggregate[{} -> {}]", a.correlation, Steps(&a.steps)),
+            Eip::OnCompletion(c) => write!(f, "onCompletion[{}]", Steps(&c.steps)),
             Eip::ToD { uri, .. } => write!(f, "DynamicTo[toD[{uri}]]"),
             Eip::RecipientList { expression, .. } => write!(f, "RecipientList[{expression}]"),
             Eip::WireTap { uri, .. } => write!(f, "WireTap[{uri}]"),

@@ -1,6 +1,6 @@
 //! Port of `OnExceptionHandledTest`.
 
-use super::caught_is;
+use crate::support::caught_is;
 use crate::support::ContextTestSupport;
 use camel_core::api::exchange_constants::EXCEPTION_CAUGHT;
 use camel_core::prelude::*;

@@ -11,6 +11,7 @@ use camel_api::processor::{
 use camel_api::route::Route;
 use camel_api::service::ServiceState;
 use camel_api::service::{Service, StatefulService, SuspendableService};
+use camel_core_processor::unit_of_work::UnitOfWorkProcessor;
 use camel_util::value::ValueMap;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -129,7 +130,7 @@ impl DefaultRoute {
     pub fn new(id: String, custom_id: bool, endpoint: SharedEndpoint, spec: RouteSpec) -> Self {
         let processor: SharedProcessor = Arc::new(RouteProcessor {
             route_id: id.clone(),
-            processor: spec.processor,
+            processor: Arc::new(UnitOfWorkProcessor::new(Some(id.clone()), spec.processor)),
         });
         DefaultRoute {
             id,

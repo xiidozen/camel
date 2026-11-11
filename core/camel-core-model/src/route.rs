@@ -1,7 +1,7 @@
 //! Routes of the model (Java `RouteDefinition` and `FromDefinition`).
 
 use crate::errorhandler::{ErrorHandlerDefinition, OnExceptionDefinition};
-use crate::processor::{ProcessorDefinition, Steps};
+use crate::processor::{OnCompletionDefinition, ProcessorDefinition, Steps};
 use camel_util::uri_support::sanitize_uri;
 use camel_util::value::ValueMap;
 use std::fmt;
@@ -34,6 +34,8 @@ pub struct RouteDefinition {
     pub on_exceptions: Vec<OnExceptionDefinition>,
     /// The `onException` clauses of the route builder (they apply to all its routes).
     pub builder_on_exceptions: Vec<OnExceptionDefinition>,
+    /// The `onCompletion`s of the route builder (they apply to its routes without their own).
+    pub builder_on_completions: Vec<OnCompletionDefinition>,
 }
 
 impl RouteDefinition {
@@ -52,6 +54,7 @@ impl RouteDefinition {
             error_handler: None,
             on_exceptions: Vec::new(),
             builder_on_exceptions: Vec::new(),
+            builder_on_completions: Vec::new(),
         }
     }
 }

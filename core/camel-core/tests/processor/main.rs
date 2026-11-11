@@ -12,6 +12,7 @@ mod default_error_handler_redelivery_test;
 mod delayer_test;
 mod filter_test;
 mod multicast_test;
+mod on_completion_test;
 mod onexception;
 mod pipeline_test;
 mod recipient_list_test;

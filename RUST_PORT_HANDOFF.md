@@ -102,9 +102,17 @@ Crates live **in the directory of the Maven module they replace** (`core/camel-a
 - `components/camel-seda`: **in progress** (queues, concurrent consumers, InOut waiting).
 - Test helpers in `core/camel-core/tests/support`: `ContextTestSupport`, `cause_of` (Java
   `getCause()`), `await_until` (Awaitility; never a bare sleep loop), `body_in_aggregating_strategy`.
-- **Next:** the unit of work (useOriginalMessage, onCompletion), parallel processing for
-  multicast/split/recipient list, the rest of the simple functions, then camel-main and the
-  YAML/XML DSLs.
+- Unit of work: the exchange carries it (`Exchange::begin_unit_of_work`, `original_message`,
+  `add_on_completion`, `handover_completions`); `camel_core_processor::unit_of_work::UnitOfWorkProcessor`
+  wraps every route (on before/after route callbacks, done synchronizations FILO + by order).
+  `Synchronization` is async and merges Java `SynchronizationVetoable` and
+  `SynchronizationRouteAware`. The onCompletion EIP (`on_completion` processor; route scoped and
+  route builder scoped, onCompleteOnly/onFailureOnly, onWhen, useOriginalMessage, modes
+  before/after consumer, parallelProcessing) is ported. Pending: onCompletion with intercept,
+  custom executor, shutdown awareness, seda handover tests.
+- **Next:** useOriginalMessage/Body in the error handler (the unit of work now exists), the
+  remaining onCompletion tests, parallel processing for multicast/split/recipient list, the
+  rest of the simple functions, then camel-main and the YAML/XML DSLs.
 - Java files still present in `core/camel-api/src/main/java` are the ones not ported yet.
 - Everything else in the repository: **not started** (status `todo` in the backlog).
 
