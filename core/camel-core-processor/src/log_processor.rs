@@ -47,7 +47,7 @@ impl Processor for LogProcessor {
         let r = (|| {
             if let Some(level) = to_log_level(self.level) {
                 if log::log_enabled!(target: "camel", level) || log::max_level() >= level {
-                    let msg = self.expression.evaluate(exchange)?;
+                    let msg = self.expression.evaluate_mut(exchange)?;
                     log::log!(target: &self.log_name, level, "{msg}");
                 }
             }

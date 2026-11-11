@@ -386,7 +386,7 @@ impl Processor for SplitProcessor {
 
     fn process<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>> {
         Box::pin(async move {
-            let value = match self.expression.evaluate(exchange) {
+            let value = match self.expression.evaluate_mut(exchange) {
                 Ok(v) => v,
                 Err(e) => {
                     exchange.set_exception(Some(e));
@@ -437,7 +437,7 @@ impl DelayProcessor {
 impl Processor for DelayProcessor {
     fn process<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>> {
         Box::pin(async move {
-            let v = self.expression.evaluate(exchange)?;
+            let v = self.expression.evaluate_mut(exchange)?;
             let delay = <i64 as camel_api::convert::FromValue>::from_value(&v)?.unwrap_or(0);
             if delay > 0 {
                 tokio::time::sleep(std::time::Duration::from_millis(delay as u64)).await;

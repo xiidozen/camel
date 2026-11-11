@@ -1,11 +1,17 @@
 //! The collection functions of the simple language (Java `CollectionFunctionFactory` and
 //! `CollectionExpressionBuilder`): `${range(..)}`, `${distinct(..)}`, `${reverse(..)}`,
 //! `${shuffle(..)}`, `${split(..)}`, `${sort(..)}`, `${forEach(..)}`, `${filter(..)}`,
-//! `${list(..)}` and `${map(..)}`.
+//! `${list(..)}` and `${map(..)}`, and the functions changing the exchange: `${setHeader(..)}`,
+//! `${setVariable(..)}`, `${listAdd(..)}`, `${listRemove(..)}`, `${mapAdd(..)}` and
+//! `${mapRemove(..)}`.
 //!
-//! Not ported yet: the functions changing the exchange while evaluating (`setHeader`,
-//! `setVariable`, `listAdd`, `listRemove`, `mapAdd`, `mapRemove`), as expressions evaluate on a
-//! shared exchange in Rust (see the handoff).
+//! The functions changing the exchange only work with
+//! [`Expression::evaluate_mut`] (processors
+//! owning the exchange use it). Java changes the list or map of the exchange in place; Rust
+//! values are not shared, so the list and map functions write the changed value back when
+//! their source is the body, a header, a variable or an exchange property (`${body}`,
+//! `${header.name}`, `${variable.name}`, `${exchangeProperty.name}`), and otherwise only return
+//! it.
 
 use super::functions::if_starts_with_return_remainder;
 use super::math_functions::iterate;
@@ -14,7 +20,7 @@ use super::{ParseResult, ParserError};
 use camel_api::convert::FromValue;
 use camel_api::error::{CamelError, CamelResult};
 use camel_api::exchange::Exchange;
-use camel_api::processor::{SharedExpression, SharedPredicate};
+use camel_api::processor::{Expression, SharedExpression, SharedPredicate};
 use camel_support::builder::named_expression;
 use camel_util::string_helper::{before_last, remove_leading_and_ending_quotes};
 use camel_util::string_quote_helper::split_safe_quote_full;
@@ -80,20 +86,8 @@ impl LazyPredicate {
 /// Returns a syntax error for invalid arguments.
 pub fn collection_function(function: &str, index: usize) -> ParseResult<Option<SharedExpression>> {
     let err = |m: &str| ParserError::new(format!("Valid syntax: {m} was: {function}"), index);
-    for name in [
-        "setHeader(",
-        "setVariable(",
-        "listAdd(",
-        "listRemove(",
-        "mapAdd(",
-        "mapRemove(",
-    ] {
-        if if_starts_with_return_remainder(name, function).is_some() {
-            return Err(ParserError::new(
-                format!("The function {} changes the exchange and is not supported yet by the Rust port: {function}", &name[..name.len() - 1]),
-                index,
-            ));
-        }
+    if let Some(e) = mutating_function(function, index)? {
+        return Ok(Some(e));
     }
     if let Some(r) = if_starts_with_return_remainder("range(", function) {
         let values = before_last(r, ")")
@@ -323,6 +317,330 @@ pub fn collection_function(function: &str, index: usize) -> ParseResult<Option<S
                 Ok(Value::Map(m))
             },
         )));
+    }
+    Ok(None)
+}
+
+/// Where a list or map function changes the exchange.
+#[derive(Clone, Debug, PartialEq)]
+enum Place {
+    Body,
+    Header(String),
+    Variable(String),
+    Property(String),
+    /// Another expression: the changed value is only returned.
+    Other,
+}
+
+impl Place {
+    /// The place of a source expression such as `${header.name}`.
+    fn of(source: &str) -> Place {
+        let Some(inner) = source
+            .trim()
+            .strip_prefix("${")
+            .and_then(|s| s.strip_suffix('}'))
+        else {
+            return Place::Other;
+        };
+        let simple_name =
+            |n: &str| !n.is_empty() && !n.contains(['.', '[', ']', '$', '{', '}', '(']);
+        if inner == "body" || inner == "in.body" {
+            return Place::Body;
+        }
+        for (prefix, make) in [
+            ("header.", Place::Header as fn(String) -> Place),
+            ("headers.", Place::Header),
+            ("in.header.", Place::Header),
+            ("in.headers.", Place::Header),
+            ("variable.", Place::Variable),
+            ("exchangeProperty.", Place::Property),
+        ] {
+            if let Some(n) = inner.strip_prefix(prefix) {
+                if simple_name(n) {
+                    return make(n.to_string());
+                }
+            }
+        }
+        Place::Other
+    }
+
+    fn write(&self, e: &mut Exchange, value: Value) {
+        match self {
+            Place::Body => e.message_mut().set_body(value),
+            Place::Header(n) => e.message_mut().set_header(n, value),
+            Place::Variable(n) => e.set_variable(n, value),
+            Place::Property(n) => e.set_property(n.as_str(), value),
+            Place::Other => {}
+        }
+    }
+}
+
+/// What a function changing the exchange does.
+enum Change {
+    SetHeader {
+        name: String,
+        type_name: Option<String>,
+        exp: Lazy,
+    },
+    SetVariable {
+        name: String,
+        type_name: Option<String>,
+        exp: Lazy,
+    },
+    ListAdd {
+        source: Lazy,
+        exp: Lazy,
+    },
+    ListRemove {
+        source: Lazy,
+        exp: Lazy,
+    },
+    MapAdd {
+        source: Lazy,
+        key: String,
+        exp: Lazy,
+    },
+    MapRemove {
+        source: Lazy,
+        key: String,
+    },
+}
+
+/// A function changing the exchange (Java `CollectionExpressionBuilder.setHeaderExpression`,
+/// `setVariableExpression`, `listAddExpression`, `listRemoveExpression`, `mapAddExpression`
+/// and `mapRemoveExpression`).
+struct MutatingExpression {
+    change: Change,
+    description: String,
+}
+
+impl MutatingExpression {
+    fn name(&self) -> &'static str {
+        match self.change {
+            Change::SetHeader { .. } => "setHeader",
+            Change::SetVariable { .. } => "setVariable",
+            Change::ListAdd { .. } => "listAdd",
+            Change::ListRemove { .. } => "listRemove",
+            Change::MapAdd { .. } => "mapAdd",
+            Change::MapRemove { .. } => "mapRemove",
+        }
+    }
+}
+
+fn typed_value(exp: &Lazy, type_name: &Option<String>, e: &Exchange) -> CamelResult<Value> {
+    let v = exp.evaluate(e)?;
+    match type_name {
+        Some(t) if !v.is_null() => super::functions::convert_to_type(&v, t),
+        _ => Ok(v),
+    }
+}
+
+impl Expression for MutatingExpression {
+    fn evaluate(&self, _exchange: &Exchange) -> CamelResult<Value> {
+        Err(CamelError::illegal_state(format!(
+            "The simple function {} changes the exchange, so it must be evaluated with Expression::evaluate_mut: {}",
+            self.name(),
+            self.description
+        )))
+    }
+
+    fn evaluate_mut(&self, e: &mut Exchange) -> CamelResult<Value> {
+        match &self.change {
+            Change::SetHeader {
+                name,
+                type_name,
+                exp,
+            } => {
+                let v = typed_value(exp, type_name, e)?;
+                if v.is_null() {
+                    e.message_mut().remove_header(name);
+                } else {
+                    e.message_mut().set_header(name, v);
+                }
+                // does not return anything
+                Ok(Value::Null)
+            }
+            Change::SetVariable {
+                name,
+                type_name,
+                exp,
+            } => {
+                let v = typed_value(exp, type_name, e)?;
+                if v.is_null() {
+                    e.remove_variable(name);
+                } else {
+                    e.set_variable(name, v);
+                }
+                Ok(Value::Null)
+            }
+            Change::ListAdd { source, exp } => {
+                let Value::List(mut list) = source.evaluate(e)? else {
+                    return Ok(Value::Null);
+                };
+                let v = exp.evaluate(e)?;
+                if !v.is_null() {
+                    list.push(v);
+                }
+                let list = Value::List(list);
+                Place::of(source.text()).write(e, list.clone());
+                Ok(list)
+            }
+            Change::ListRemove { source, exp } => {
+                let Value::List(mut list) = source.evaluate(e)? else {
+                    return Ok(Value::Null);
+                };
+                let v = exp.evaluate(e)?;
+                if !v.is_null() {
+                    match list.iter().position(|x| *x == v) {
+                        Some(i) => {
+                            list.remove(i);
+                        }
+                        None => {
+                            // the special name to remove the last, or an index
+                            let pos = if v == "last" {
+                                Some(list.len() as i64 - 1)
+                            } else {
+                                i64::from_value(&v).ok().flatten()
+                            };
+                            if let Some(pos) = pos {
+                                if pos >= 0 && (pos as usize) < list.len() {
+                                    list.remove(pos as usize);
+                                }
+                            }
+                        }
+                    }
+                }
+                let list = Value::List(list);
+                Place::of(source.text()).write(e, list.clone());
+                Ok(list)
+            }
+            Change::MapAdd { source, key, exp } => {
+                let Value::Map(mut map) = source.evaluate(e)? else {
+                    return Ok(Value::Null);
+                };
+                let v = exp.evaluate(e)?;
+                if !v.is_null() {
+                    map.insert(key.clone(), v);
+                }
+                let map = Value::Map(map);
+                Place::of(source.text()).write(e, map.clone());
+                Ok(map)
+            }
+            Change::MapRemove { source, key } => {
+                let Value::Map(mut map) = source.evaluate(e)? else {
+                    return Ok(Value::Null);
+                };
+                map.shift_remove(key);
+                let map = Value::Map(map);
+                Place::of(source.text()).write(e, map.clone());
+                Ok(map)
+            }
+        }
+    }
+
+    fn describe(&self) -> String {
+        self.description.clone()
+    }
+}
+
+/// The functions changing the exchange (Java `CollectionFunctionFactory`).
+fn mutating_function(function: &str, index: usize) -> ParseResult<Option<SharedExpression>> {
+    let err = |m: &str| ParserError::new(format!("Valid syntax: {m} was: {function}"), index);
+    let values = |remainder: &str| before_last(remainder, ")").filter(|v| !v.is_empty());
+    let joined = |tokens: &[String], skip: usize| tokens[skip..].join(",");
+    let make = |change: Change, description: String| -> ParseResult<Option<SharedExpression>> {
+        Ok(Some(Arc::new(MutatingExpression {
+            change,
+            description,
+        })))
+    };
+    for (prefix, header) in [("setHeader(", true), ("setVariable(", false)] {
+        if let Some(r) = if_starts_with_return_remainder(prefix, function) {
+            let fname = &prefix[..prefix.len() - 1];
+            let syntax = format!("${{{fname}(name,exp)}} or ${{{fname}(name,type,exp)}}");
+            let tokens = split_arguments(&values(r).ok_or_else(|| err(&syntax))?);
+            if tokens.len() < 2 || tokens.len() > 3 {
+                return Err(err(&syntax));
+            }
+            let name = tokens[0].clone();
+            let (type_name, exp) = if tokens.len() == 3 {
+                (
+                    Some(camel_util::string_helper::remove_quotes(&tokens[1])),
+                    tokens[2].clone(),
+                )
+            } else {
+                (None, tokens[1].clone())
+            };
+            let description = format!("{fname}({name},{exp})");
+            let exp = Lazy::new(&exp);
+            let change = if header {
+                Change::SetHeader {
+                    name,
+                    type_name,
+                    exp,
+                }
+            } else {
+                Change::SetVariable {
+                    name,
+                    type_name,
+                    exp,
+                }
+            };
+            return make(change, description);
+        }
+    }
+    for (prefix, add) in [("listAdd(", true), ("listRemove(", false)] {
+        if let Some(r) = if_starts_with_return_remainder(prefix, function) {
+            let fname = &prefix[..prefix.len() - 1];
+            let syntax = format!("${{{fname}(exp)}} or ${{{fname}(exp,exp)}}");
+            let tokens = split_arguments(&values(r).ok_or_else(|| err(&syntax))?);
+            let (source, skip) = if tokens.len() > 1 {
+                (tokens[0].clone(), 1)
+            } else {
+                ("${body}".to_string(), 0)
+            };
+            let exp = joined(&tokens, skip);
+            let description = format!("{fname}({source}, {exp})");
+            let (source, exp) = (Lazy::new(&source), Lazy::new(&exp));
+            let change = if add {
+                Change::ListAdd { source, exp }
+            } else {
+                Change::ListRemove { source, exp }
+            };
+            return make(change, description);
+        }
+    }
+    if let Some(r) = if_starts_with_return_remainder("mapAdd(", function) {
+        let syntax = "${mapAdd(key,exp)} or ${mapAdd(exp,key,exp)}";
+        let tokens = split_arguments(&values(r).ok_or_else(|| err(syntax))?);
+        let (source, key, skip) = match tokens.len() {
+            n if n > 2 => (tokens[0].clone(), tokens[1].clone(), 2),
+            2 => ("${body}".to_string(), tokens[0].clone(), 1),
+            _ => return Err(err(syntax)),
+        };
+        let exp = joined(&tokens, skip);
+        let description = format!("mapAdd({source}, {key}, {exp})");
+        let change = Change::MapAdd {
+            source: Lazy::new(&source),
+            key,
+            exp: Lazy::new(&exp),
+        };
+        return make(change, description);
+    }
+    if let Some(r) = if_starts_with_return_remainder("mapRemove(", function) {
+        let syntax = "${mapRemove(key)} or ${mapRemove(exp,key)}";
+        let tokens = split_arguments(&values(r).ok_or_else(|| err(syntax))?);
+        let (source, key) = match tokens.len() {
+            2 => (tokens[0].clone(), tokens[1].clone()),
+            1 => ("${body}".to_string(), tokens[0].clone()),
+            _ => return Err(err(syntax)),
+        };
+        let description = format!("mapRemove({source}, {key})");
+        let change = Change::MapRemove {
+            source: Lazy::new(&source),
+            key,
+        };
+        return make(change, description);
     }
     Ok(None)
 }

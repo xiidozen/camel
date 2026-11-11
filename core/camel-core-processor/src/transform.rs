@@ -28,7 +28,7 @@ impl Processor for SetBodyProcessor {
     fn process<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>> {
         ready(
             self.expression
-                .evaluate(exchange)
+                .evaluate_mut(exchange)
                 .map(|v| exchange.message_mut().set_body(v)),
         )
     }
@@ -54,7 +54,7 @@ impl Processor for SetHeaderProcessor {
     fn process<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>> {
         ready(
             self.expression
-                .evaluate(exchange)
+                .evaluate_mut(exchange)
                 .map(|v| exchange.message_mut().set_header(&self.name, v)),
         )
     }
@@ -80,7 +80,7 @@ impl Processor for SetPropertyProcessor {
     fn process<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>> {
         ready(
             self.expression
-                .evaluate(exchange)
+                .evaluate_mut(exchange)
                 .map(|v| exchange.set_property(&self.name, v)),
         )
     }
@@ -106,7 +106,7 @@ impl Processor for SetVariableProcessor {
     fn process<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>> {
         ready(
             self.expression
-                .evaluate(exchange)
+                .evaluate_mut(exchange)
                 .map(|v| exchange.set_variable(&self.name, v)),
         )
     }

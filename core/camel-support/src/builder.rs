@@ -599,6 +599,10 @@ impl Expression for ValueBuilder {
         self.expression.evaluate(exchange)
     }
 
+    fn evaluate_mut(&self, exchange: &mut Exchange) -> CamelResult<Value> {
+        self.expression.evaluate_mut(exchange)
+    }
+
     fn init(&self, context: &Arc<dyn CamelContext>) -> CamelResult<()> {
         self.expression.init(context)
     }

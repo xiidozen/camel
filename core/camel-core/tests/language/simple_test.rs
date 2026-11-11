@@ -1102,3 +1102,190 @@ fn test_join_collate_skip_random_sys_env() {
     assert_expression(&e, "${env.PATH}", path.clone());
     assert_expression(&e, "${sysenv:PATH}", path);
 }
+
+// the functions changing the exchange: evaluated with Expression::evaluate_mut
+
+fn evaluate_mut(e: &mut Exchange, text: &str) -> Value {
+    let simple = e.context().resolve_language("simple").unwrap();
+    simple
+        .create_expression(text)
+        .unwrap()
+        .evaluate_mut(e)
+        .unwrap()
+}
+
+fn texts(v: &[&str]) -> Value {
+    Value::List(v.iter().map(|s| Value::from(*s)).collect())
+}
+
+fn text_map(v: &[(&str, &str)]) -> Value {
+    let mut m = ValueMap::new();
+    for (k, x) in v {
+        m.insert(k.to_string(), Value::from(*x));
+    }
+    Value::Map(m)
+}
+
+#[test]
+fn test_set_header() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_body("Hello World");
+    assert_eq!(
+        Value::Null,
+        evaluate_mut(&mut e, "${setHeader(foo,${body})}")
+    );
+    assert_eq!(Some(&Value::from("Hello World")), e.message().header("foo"));
+
+    e.message_mut().set_body("123");
+    assert_eq!(
+        Value::Null,
+        evaluate_mut(&mut e, "${setHeader(bar,int,${body})}")
+    );
+    assert_eq!(Some(&Value::Int(123)), e.message().header("bar"));
+
+    // null should remove the header
+    assert_eq!(
+        Value::Null,
+        evaluate_mut(&mut e, "${setHeader(bar,${null})}")
+    );
+    assert_eq!(None, e.message().header("bar"));
+}
+
+#[test]
+fn test_set_variable() {
+    let (_t, mut e) = exchange();
+    e.remove_variable("cheese");
+    e.message_mut().set_body("Hello World");
+    assert_eq!(
+        Value::Null,
+        evaluate_mut(&mut e, "${setVariable(foo,${body})}")
+    );
+    assert_eq!(Some(&Value::from("Hello World")), e.variable("foo"));
+
+    e.message_mut().set_body("123");
+    assert_eq!(
+        Value::Null,
+        evaluate_mut(&mut e, "${setVariable(bar,int,${body})}")
+    );
+    assert_eq!(Some(&Value::Int(123)), e.variable("bar"));
+
+    // null should remove the variable
+    assert_eq!(
+        Value::Null,
+        evaluate_mut(&mut e, "${setVariable(bar,${null})}")
+    );
+    assert_eq!(None, e.variable("bar"));
+    assert_eq!(Some(&Value::from("Hello World")), e.variable("foo"));
+}
+
+#[test]
+fn test_set_variable_mapping() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_body("Hello World");
+    let map = "${setVariable(count,${body.length})}\nInput: ${body}\nBytes: ${variable.count}\n";
+    let expected = "\nInput: Hello World\nBytes: 11\n";
+    assert_eq!(Value::from(expected), evaluate_mut(&mut e, map));
+}
+
+#[test]
+fn test_set_header_needs_evaluate_mut() {
+    let (_t, e) = exchange();
+    let simple = e.context().resolve_language("simple").unwrap();
+    let err = simple
+        .create_expression("${setHeader(foo,bar)}")
+        .unwrap()
+        .evaluate(&e)
+        .unwrap_err();
+    assert!(err.message().unwrap().contains("evaluate_mut"), "{err}");
+}
+
+#[test]
+fn test_list_add() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_body(texts(&["A", "B"]));
+    assert_eq!(
+        texts(&["A", "B", "C"]),
+        evaluate_mut(&mut e, "${listAdd('C')}")
+    );
+
+    e.message_mut().set_header("myChar", "D");
+    assert_eq!(
+        texts(&["A", "B", "C", "D"]),
+        evaluate_mut(&mut e, "${listAdd(${header.myChar})}")
+    );
+    assert_eq!(&texts(&["A", "B", "C", "D"]), e.message().body());
+
+    // two-parameter form: add to a header list instead of body
+    e.message_mut().set_header("myList", texts(&["X"]));
+    assert_eq!(
+        texts(&["X", "Y"]),
+        evaluate_mut(&mut e, "${listAdd(${header.myList},'Y')}")
+    );
+    assert_eq!(Some(&texts(&["X", "Y"])), e.message().header("myList"));
+}
+
+#[test]
+fn test_list_remove() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_body(texts(&["A", "B", "C"]));
+    assert_eq!(
+        texts(&["A", "B"]),
+        evaluate_mut(&mut e, "${listRemove('C')}")
+    );
+    assert_eq!(texts(&["B"]), evaluate_mut(&mut e, "${listRemove(0)}"));
+
+    // Java adds to the body list it holds; here the body is changed in the exchange
+    e.message_mut().set_body(texts(&["B", "C", "D", "E"]));
+    assert_eq!(
+        texts(&["B", "C", "D"]),
+        evaluate_mut(&mut e, "${listRemove(last)}")
+    );
+}
+
+#[test]
+fn test_map_add() {
+    let (_t, mut e) = exchange();
+    e.message_mut()
+        .set_body(text_map(&[("A", "AAA"), ("B", "BBB")]));
+    assert_eq!(
+        text_map(&[("A", "AAA"), ("B", "BBB"), ("C", "CCC")]),
+        evaluate_mut(&mut e, "${mapAdd('C','CCC')}")
+    );
+
+    e.message_mut().set_header("myChar", "DDD");
+    assert_eq!(
+        text_map(&[("A", "AAA"), ("B", "BBB"), ("C", "CCC"), ("D", "DDD")]),
+        evaluate_mut(&mut e, "${mapAdd('D',${header.myChar})}")
+    );
+
+    // two-parameter form: add to a header map instead of body
+    e.message_mut()
+        .set_header("myMap", text_map(&[("X", "XXX")]));
+    assert_eq!(
+        text_map(&[("X", "XXX"), ("Y", "YYY")]),
+        evaluate_mut(&mut e, "${mapAdd(${header.myMap},'Y','YYY')}")
+    );
+    assert_eq!(
+        Some(&text_map(&[("X", "XXX"), ("Y", "YYY")])),
+        e.message().header("myMap")
+    );
+}
+
+#[test]
+fn test_map_remove() {
+    let (_t, mut e) = exchange();
+    e.message_mut()
+        .set_body(text_map(&[("A", "AAA"), ("B", "BBB"), ("C", "CCC")]));
+    assert_eq!(
+        text_map(&[("A", "AAA"), ("B", "BBB")]),
+        evaluate_mut(&mut e, "${mapRemove('C')}")
+    );
+
+    // two-parameter form: remove from a header map instead of body
+    e.message_mut()
+        .set_header("myMap", text_map(&[("X", "XXX"), ("Z", "ZZZ")]));
+    assert_eq!(
+        text_map(&[("Z", "ZZZ")]),
+        evaluate_mut(&mut e, "${mapRemove(${header.myMap},'X')}")
+    );
+}

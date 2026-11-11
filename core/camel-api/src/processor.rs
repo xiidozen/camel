@@ -177,6 +177,20 @@ pub trait Expression: Send + Sync {
     /// Returns an error if the expression cannot be evaluated.
     fn evaluate(&self, exchange: &Exchange) -> CamelResult<Value>;
 
+    /// Evaluates the expression on an exchange it may change: a few functions of the simple
+    /// language change the exchange while evaluating (such as `${setHeader(..)}`,
+    /// `${setVariable(..)}` and `${listAdd(..)}`, which change a list of the exchange in place
+    /// as Java does). Processors owning the exchange (setBody, setHeader, transform, log, ...)
+    /// call this method; the default is [`evaluate`](Expression::evaluate), and expressions
+    /// composed of other expressions forward it to their parts.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the expression cannot be evaluated.
+    fn evaluate_mut(&self, exchange: &mut Exchange) -> CamelResult<Value> {
+        self.evaluate(exchange)
+    }
+
     /// Initializes the expression with the context (for example to resolve languages or
     /// endpoints) before it is used.
     ///

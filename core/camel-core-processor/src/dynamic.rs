@@ -146,7 +146,7 @@ impl Processor for SendDynamicProcessor {
 
     fn process<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>> {
         Box::pin(async move {
-            let uri = match self.uri.evaluate(exchange) {
+            let uri = match self.uri.evaluate_mut(exchange) {
                 Ok(v) => recipient(&v),
                 Err(e) => {
                     exchange.set_exception(Some(e));
@@ -234,7 +234,7 @@ impl Processor for RecipientListProcessor {
 
     fn process<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>> {
         Box::pin(async move {
-            let value = match self.expression.evaluate(exchange) {
+            let value = match self.expression.evaluate_mut(exchange) {
                 Ok(v) => v,
                 Err(e) => {
                     exchange.set_exception(Some(e));

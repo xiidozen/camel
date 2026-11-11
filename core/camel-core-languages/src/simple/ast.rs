@@ -4,12 +4,13 @@
 use super::functions::create_function;
 use super::tokenizer::{SimpleToken, TokenType};
 use super::{ParseResult, ParserError};
-use camel_api::error::CamelError;
+use camel_api::error::{CamelError, CamelResult};
 use camel_api::exchange::Exchange;
-use camel_api::processor::SharedExpression;
+use camel_api::processor::{Expression, SharedExpression};
 use camel_support::builder::{constant_expression, named_expression};
 use camel_util::value::Value;
 use std::fmt;
+use std::sync::Arc;
 
 /// The unary operators.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -411,16 +412,45 @@ pub fn concat(mut parts: Vec<SharedExpression>, description: String) -> SharedEx
     match parts.len() {
         0 => constant_expression(""),
         1 => parts.pop().unwrap(),
-        _ => named_expression(description, move |e| {
-            let mut sb = String::new();
-            for p in &parts {
-                let v = p.evaluate(e)?;
-                if !v.is_null() {
-                    sb.push_str(&v.to_string());
-                }
+        _ => Arc::new(Concat { parts, description }),
+    }
+}
+
+/// The concatenation of the parts of a template; [`Expression::evaluate_mut`] evaluates the
+/// parts in order on the exchange they may change, so a part sees the changes of the parts
+/// before it (such as `${setVariable(..)}` followed by `${variable.x}`).
+struct Concat {
+    parts: Vec<SharedExpression>,
+    description: String,
+}
+
+impl Concat {
+    fn join(
+        &self,
+        mut eval: impl FnMut(&SharedExpression) -> CamelResult<Value>,
+    ) -> CamelResult<Value> {
+        let mut sb = String::new();
+        for p in &self.parts {
+            let v = eval(p)?;
+            if !v.is_null() {
+                sb.push_str(&v.to_string());
             }
-            Ok(Value::from(sb))
-        }),
+        }
+        Ok(Value::from(sb))
+    }
+}
+
+impl Expression for Concat {
+    fn evaluate(&self, exchange: &Exchange) -> CamelResult<Value> {
+        self.join(|p| p.evaluate(exchange))
+    }
+
+    fn evaluate_mut(&self, exchange: &mut Exchange) -> CamelResult<Value> {
+        self.join(|p| p.evaluate_mut(exchange))
+    }
+
+    fn describe(&self) -> String {
+        self.description.clone()
     }
 }
 
@@ -440,13 +470,26 @@ fn create_function_block(
     // a composite function such as ${header.${header.name}}: the nested functions are kept as
     // text (Java lazy evaluation) or evaluated (quotes, ${type:..}), then the function is
     // created at runtime from the resulting text
-    let children = children.to_vec();
-    let index = token.index;
-    let expression = expression.to_string();
-    let description = expression.clone();
-    Ok(named_expression(description, move |e: &Exchange| {
+    Ok(Arc::new(CompositeFunction {
+        children: children.to_vec(),
+        index: token.index,
+        expression: expression.to_string(),
+    }))
+}
+
+/// A function containing nested functions, created when evaluated from the text of its
+/// parts (see `create_function_block`).
+struct CompositeFunction {
+    children: Vec<Node>,
+    index: usize,
+    expression: String,
+}
+
+impl CompositeFunction {
+    /// The function of the text with the nested parts evaluated (read only, as Java).
+    fn function(&self, e: &Exchange) -> CamelResult<SharedExpression> {
         let mut sb = String::new();
-        for child in &children {
+        for child in &self.children {
             match child {
                 Node::Literal { text, .. } => sb.push_str(text),
                 Node::FunctionStart { .. } if !child.to_string().starts_with("${type:") => {
@@ -454,8 +497,8 @@ fn create_function_block(
                 }
                 _ => {
                     let nested = child
-                        .create_expression(&expression)
-                        .map_err(|err| super::illegal_syntax(&expression, &err))?;
+                        .create_expression(&self.expression)
+                        .map_err(|err| super::illegal_syntax(&self.expression, &err))?;
                     let v = nested.evaluate(e)?;
                     if !v.is_null() {
                         sb.push_str(&v.to_string());
@@ -463,10 +506,23 @@ fn create_function_block(
                 }
             }
         }
-        let function =
-            create_function(&sb, index).map_err(|err| super::illegal_syntax(&expression, &err))?;
-        function.evaluate(e)
-    }))
+        create_function(&sb, self.index)
+            .map_err(|err| super::illegal_syntax(&self.expression, &err))
+    }
+}
+
+impl Expression for CompositeFunction {
+    fn evaluate(&self, exchange: &Exchange) -> CamelResult<Value> {
+        self.function(exchange)?.evaluate(exchange)
+    }
+
+    fn evaluate_mut(&self, exchange: &mut Exchange) -> CamelResult<Value> {
+        self.function(exchange)?.evaluate_mut(exchange)
+    }
+
+    fn describe(&self) -> String {
+        self.expression.clone()
+    }
 }
 
 /// Whether the token type ends a block of the node (for `prepare_blocks`).
