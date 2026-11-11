@@ -9,6 +9,7 @@ pub mod functions;
 pub mod language;
 pub mod math_functions;
 pub mod misc_functions;
+pub mod ognl;
 pub mod other_functions;
 pub mod predicate_parser;
 pub mod string_functions;

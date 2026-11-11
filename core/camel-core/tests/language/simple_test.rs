@@ -1289,3 +1289,513 @@ fn test_map_remove() {
         evaluate_mut(&mut e, "${mapRemove(${header.myMap},'X')}")
     );
 }
+
+// the basic functions and the OGNL navigation (Java BeanExpression on the values)
+
+fn predicate(e: &Exchange, text: &str) -> bool {
+    let simple = e.context().resolve_language("simple").unwrap();
+    simple.create_predicate(text).unwrap().matches(e).unwrap()
+}
+
+fn error(e: &Exchange, text: &str) -> CamelError {
+    let simple = e.context().resolve_language("simple").unwrap();
+    match simple.create_expression(text) {
+        Ok(x) => x.evaluate(e).unwrap_err(),
+        Err(err) => err,
+    }
+}
+
+fn cause(e: &CamelError) -> &CamelError {
+    e.cause()
+        .and_then(|c| c.downcast_ref::<CamelError>())
+        .unwrap_or_else(|| panic!("no cause: {e:?}"))
+}
+
+/// Java `OrderLine`.
+struct OrderLine {
+    id: i64,
+    name: &'static str,
+}
+
+impl camel_core::util::value::Bean for OrderLine {
+    fn property(&self, name: &str) -> Option<Value> {
+        match name {
+            "id" => Some(Value::Int(self.id)),
+            "name" => Some(Value::from(self.name)),
+            _ => None,
+        }
+    }
+}
+
+fn order_line(id: i64, name: &'static str) -> Value {
+    Value::bean(OrderLine { id, name })
+}
+
+#[test]
+fn test_simple_expression_or_predicate() {
+    let (_t, e) = exchange();
+    for _ in 0..2 {
+        assert!(predicate(&e, "${header.bar} == 123"));
+        assert!(!predicate(&e, "${header.bar} == 124"));
+        assert_expression(&e, "${body}", "<hello id='m123'>world!</hello>");
+    }
+}
+
+#[test]
+fn test_result_type() {
+    let (_t, e) = exchange();
+    assert_eq!(
+        Some(123),
+        <i64 as camel_core::api::convert::FromValue>::from_value(&evaluate(&e, "${header.bar}"))
+            .unwrap()
+    );
+    assert_eq!(Some("123".to_string()), string(&e, "${header.bar}"));
+    assert_eq!(None, string(&e, "${header.unknown}"));
+}
+
+#[test]
+fn test_constant_null_and_file_dir_expressions() {
+    let (_t, e) = exchange();
+    assert_expression(&e, "Hello World", "Hello World");
+    assert_eq!(Value::Null, evaluate(&e, "${null}"));
+    assert_expression(&e, "file:mydir", "file:mydir");
+}
+
+#[test]
+fn test_empty_expression() {
+    let (_t, e) = exchange();
+    assert_expression(&e, "", "");
+    assert_expression(&e, " ", " ");
+    assert!(!predicate(&e, ""));
+    assert!(!predicate(&e, " "));
+}
+
+#[test]
+fn test_exchange_expression() {
+    let (_t, e) = exchange();
+    let v = evaluate(&e, "${exchange}");
+    let x = v.downcast_ref::<Exchange>().expect("the exchange");
+    assert_eq!(e.exchange_id(), x.exchange_id());
+    assert_eq!(format!("Exchange[{}]", e.exchange_id()), v.to_string());
+}
+
+#[test]
+fn test_log_exchange_expression() {
+    use camel_core::api::spi::exchange_formatter::ExchangeFormatter;
+    let (_t, e) = exchange();
+    let expected =
+        camel_core::support::exchange_formatter::DefaultExchangeFormatter::default().format(&e);
+    assert_expression(&e, "${logExchange}", expected.as_str());
+}
+
+#[test]
+fn test_exchange_ognl_expression() {
+    let (_t, e) = exchange();
+    assert_expression(&e, "${exchange.exchangeId}", e.exchange_id());
+    assert_expression(
+        &e,
+        "${exchange.class.name}",
+        "org.apache.camel.support.DefaultExchange",
+    );
+}
+
+#[test]
+fn test_body_ognl_expression() {
+    let (_t, e) = exchange();
+    let simple = e.context().resolve_language("simple").unwrap();
+    assert!(simple.create_expression("${body}").is_ok());
+    assert!(simple.create_expression("${body.xxx}").is_ok());
+    // must start with a dot
+    let err = simple.create_expression("${bodyxxx}").err().unwrap();
+    assert!(err.is_subtype("SimpleIllegalSyntaxException"), "{err}");
+    assert!(simple.create_expression("$simple{body}").is_ok());
+}
+
+#[test]
+fn test_body_expression_not_string_type() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_body(123);
+    assert_eq!(Value::Int(123), evaluate(&e, "${body}"));
+}
+
+/// Java `MyClass` with `getMyArray()`.
+struct MyClass;
+
+impl camel_core::util::value::Bean for MyClass {
+    fn property(&self, name: &str) -> Option<Value> {
+        (name == "myArray")
+            .then(|| Value::List(vec![Value::from("a"), Value::from("b"), Value::from("c")]))
+    }
+}
+
+#[test]
+fn test_body_expression_with_array() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_body(Value::bean(MyClass));
+    assert!(matches!(evaluate(&e, "${body.myArray}"), Value::List(l) if l.len() == 3));
+    assert_eq!(Value::Int(3), evaluate(&e, "${body.myArray.length}"));
+}
+
+#[test]
+fn test_simple_expressions() {
+    let (_t, mut e) = exchange();
+    let id = e.exchange_id().to_string();
+    assert_expression(&e, "${exchangeId}", id.as_str());
+    assert_expression(&e, "${id}", id.as_str());
+    for exp in ["${body}", "${in.body}"] {
+        assert_expression(&e, exp, "<hello id='m123'>world!</hello>");
+    }
+    for exp in [
+        "${in.header.foo}",
+        "${in.headers.foo}",
+        "${header.foo}",
+        "${headers.foo}",
+    ] {
+        assert_expression(&e, exp, "abc");
+    }
+    assert_eq!(Value::Null, evaluate(&e, "${routeId}"));
+    assert_eq!(Value::Null, evaluate(&e, "${fromRouteId}"));
+    e.set_from_route_id("myRouteId");
+    assert_expression(&e, "${routeId}", "myRouteId");
+}
+
+#[test]
+fn test_simple_thread_id_and_name() {
+    let (_t, e) = exchange();
+    let id = format!("{:?}", std::thread::current().id());
+    assert_expression(&e, "${threadId}", id.as_str());
+    assert_expression(
+        &e,
+        "The id is ${threadId}",
+        format!("The id is {id}").as_str(),
+    );
+    let name = std::thread::current().name().unwrap_or("main").to_string();
+    assert_expression(&e, "${threadName}", name.as_str());
+    assert_expression(
+        &e,
+        "The name is ${threadName}",
+        format!("The name is {name}").as_str(),
+    );
+}
+
+#[test]
+fn test_simple_step_id_property_and_camel_id() {
+    let (_t, mut e) = exchange();
+    assert_eq!(Value::Null, evaluate(&e, "${stepId}"));
+    e.set_property("CamelStepId", "foo");
+    assert_expression(&e, "${stepId}", "foo");
+    e.set_property("medal", "gold");
+    assert_expression(&e, "${exchangeProperty.medal}", "gold");
+    assert_expression(&e, "${exchangeProperty:medal}", "gold");
+    let name = e.context().name().to_string();
+    assert_expression(&e, "${camelId}", name.as_str());
+}
+
+fn cool_map() -> ValueMap {
+    let mut map = ValueMap::new();
+    map.insert("cool".into(), Value::from("Camel rocks"));
+    map.insert("dude".into(), Value::from("Hey dude"));
+    map.insert("code".into(), Value::Int(4321));
+    map
+}
+
+#[test]
+fn test_ognl_body_list_and_map() {
+    let (_t, mut e) = exchange();
+    e.message_mut()
+        .set_body(Value::List(vec![Value::Map(cool_map())]));
+    assert_expression(&e, "${in.body[0][cool]}", "Camel rocks");
+    assert_expression(&e, "${body[0][cool]}", "Camel rocks");
+    assert_expression(&e, "${in.body[0][code]}", 4321);
+    assert_expression(&e, "${body[0][code]}", 4321);
+}
+
+#[test]
+fn test_ognl_body_empty_list() {
+    let (_t, mut e) = exchange();
+    let mut map = ValueMap::new();
+    map.insert("list".into(), Value::List(vec![]));
+    e.message_mut().set_body(Value::Map(map));
+    assert_eq!(
+        Value::Null,
+        evaluate(&e, "${in.body?.get('list')[0].toString}")
+    );
+}
+
+#[test]
+fn test_ognl_body_expression() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_body("hello world");
+    assert!(predicate(&e, "${body} == 'hello world'"));
+    assert!(predicate(&e, "${body.toUpperCase()} == 'HELLO WORLD'"));
+}
+
+#[test]
+fn test_ognl_body_as_expression() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_body(b"hello world".to_vec());
+    // there is no upper case method on byte array, but we can convert to String
+    let err = error(&e, "${body.toUpperCase()}");
+    assert!(err.is_subtype("RuntimeBeanExpressionException"), "{err}");
+    let c = cause(&err);
+    assert!(c.is_subtype("MethodNotFoundException"), "{c}");
+    assert!(c
+        .message()
+        .unwrap()
+        .starts_with("Method with name: toUpperCase() not found"));
+    for f in ["bodyAs", "mandatoryBodyAs"] {
+        assert!(predicate(&e, &format!("${{{f}(String)}} == 'hello world'")));
+        assert!(predicate(
+            &e,
+            &format!("${{{f}(String).toUpperCase()}} == 'HELLO WORLD'")
+        ));
+    }
+    // and the body of the exchange is not changed
+    assert_eq!(&Value::Bytes(b"hello world".to_vec()), e.message().body());
+}
+
+#[test]
+fn test_ognl_call_replace() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_header("cool", "Camel rocks");
+    e.message_mut().set_header("dude", "Hey dude");
+    assert_expression(
+        &e,
+        "${headers.cool.replaceAll(\"rocks\", \"is so cool\")}",
+        "Camel is so cool",
+    );
+}
+
+#[test]
+fn test_ognl_body_list_and_map_and_method() {
+    let (_t, mut e) = exchange();
+    let mut map = ValueMap::new();
+    map.insert("camel".into(), order_line(123, "Camel in Action"));
+    map.insert("amq".into(), order_line(456, "ActiveMQ in Action"));
+    e.message_mut().set_body(Value::List(vec![Value::Map(map)]));
+    for body in ["in.body", "body"] {
+        assert_expression(&e, &format!("${{{body}[0][camel].id}}"), 123);
+        assert_expression(
+            &e,
+            &format!("${{{body}[0][camel].name}}"),
+            "Camel in Action",
+        );
+        assert_expression(&e, &format!("${{{body}[0][camel].getId}}"), 123);
+        assert_expression(
+            &e,
+            &format!("${{{body}[0][camel].getName}}"),
+            "Camel in Action",
+        );
+    }
+}
+
+fn assert_index_out_of_bounds(e: &Exchange, text: &str) {
+    let err = error(e, text);
+    let c = cause(&err);
+    assert!(c.is_subtype("IndexOutOfBoundsException"), "{c}");
+    assert!(
+        c.message()
+            .unwrap()
+            .starts_with("Index: 2, Size: 2 out of bounds with List from bean"),
+        "{c}"
+    );
+}
+
+#[test]
+fn test_ognl_property_list() {
+    let (_t, mut e) = exchange();
+    e.set_property(
+        "wicket",
+        Value::List(vec![
+            Value::from("Camel in Action"),
+            Value::from("ActiveMQ in Action"),
+        ]),
+    );
+    assert_expression(&e, "${exchangeProperty.wicket[0]}", "Camel in Action");
+    assert_expression(&e, "${exchangeProperty.wicket[1]}", "ActiveMQ in Action");
+    assert_index_out_of_bounds(&e, "${exchangeProperty.wicket[2]}");
+    assert_eq!(
+        Value::Null,
+        evaluate(&e, "${exchangeProperty.unknown[cool]}")
+    );
+}
+
+#[test]
+fn test_ognl_property_lines_list() {
+    let (_t, mut e) = exchange();
+    e.set_property(
+        "wicket",
+        Value::List(vec![
+            order_line(123, "Camel in Action"),
+            order_line(456, "ActiveMQ in Action"),
+        ]),
+    );
+    assert_expression(&e, "${exchangeProperty.wicket[0].getId}", 123);
+    assert_expression(
+        &e,
+        "${exchangeProperty.wicket[1].getName}",
+        "ActiveMQ in Action",
+    );
+    assert_index_out_of_bounds(&e, "${exchangeProperty.wicket[2]}");
+    assert_eq!(
+        Value::Null,
+        evaluate(&e, "${exchangeProperty.unknown[cool]}")
+    );
+}
+
+#[test]
+fn test_ognl_property_map() {
+    let (_t, mut e) = exchange();
+    e.set_property("wicket", Value::Map(cool_map()));
+    assert_expression(&e, "${exchangeProperty.wicket[cool]}", "Camel rocks");
+    assert_expression(&e, "${exchangeProperty.wicket[dude]}", "Hey dude");
+    assert_eq!(
+        Value::Null,
+        evaluate(&e, "${exchangeProperty.wicket[unknown]}")
+    );
+    assert_expression(&e, "${exchangeProperty.wicket[code]}", 4321);
+    // no property named unknown
+    assert_eq!(
+        Value::Null,
+        evaluate(&e, "${exchangeProperty?.unknown[cool]}")
+    );
+    assert_eq!(
+        Value::Null,
+        evaluate(&e, "${exchangeProperty.unknown[cool]}")
+    );
+}
+
+#[test]
+fn test_ognl_property_map_with_dot() {
+    let (_t, mut e) = exchange();
+    let mut map = ValueMap::new();
+    map.insert("this.code".into(), Value::from("This code"));
+    e.set_property("wicket", Value::Map(map));
+    assert_expression(&e, "${exchangeProperty.wicket[this.code]}", "This code");
+}
+
+#[test]
+fn test_ognl_property_map_not_map() {
+    let (_t, e) = exchange();
+    let err = error(&e, "${exchangeProperty.foobar[bar]}");
+    assert!(err.is_subtype("RuntimeBeanExpressionException"), "{err}");
+    let c = cause(&err);
+    assert!(c.is_subtype("IndexOutOfBoundsException"), "{c}");
+    assert_eq!(
+        Some("Key: bar not found in bean: cba of type: java.lang.String using OGNL path [[bar]]"),
+        c.message()
+    );
+}
+
+#[test]
+fn test_ognl_property_map_illegal_syntax() {
+    let (_t, e) = exchange();
+    let err = error(&e, "${exchangeProperty.foobar[bar}");
+    assert!(err.is(ErrorKind::ExpressionIllegalSyntax), "{err}");
+    assert!(err.message().unwrap().starts_with(
+        "Valid syntax: ${exchangeProperty.OGNL} was: exchangeProperty.foobar[bar at location 0"
+    ));
+}
+
+#[test]
+fn test_ognl_header_empty() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_header("beer", "");
+    assert!(predicate(&e, "${header.beer} == ''"));
+    assert!(predicate(&e, "${header.beer} == \"\""));
+    assert!(!predicate(&e, "${header.beer} == ' '"));
+    assert!(!predicate(&e, "${header.beer} == \" \""));
+    e.message_mut().set_header("beer", " ");
+    assert!(!predicate(&e, "${header.beer} == ''"));
+    assert!(!predicate(&e, "${header.beer} == \"\""));
+    assert!(predicate(&e, "${header.beer} == ' '"));
+    assert!(predicate(&e, "${header.beer} == \" \""));
+    assert!(predicate(&e, "${header.beer.toString().trim()} == ''"));
+    assert!(predicate(&e, "${header.beer.toString().trim()} == \"\""));
+    e.message_mut().set_header("beer", "   ");
+    assert!(predicate(&e, "${header.beer.trim()} == ''"));
+    assert!(predicate(&e, "${header.beer.trim()} == \"\""));
+}
+
+#[test]
+fn test_complex_expressions() {
+    let (_t, e) = exchange();
+    for start in ["${", "$simple{"] {
+        let x = |s: &str| s.replace("${", start);
+        assert_expression(&e, &x("hey ${in.header.foo}"), "hey abc");
+        assert_expression(&e, &x("hey ${in.header:foo}"), "hey abc");
+        assert_expression(&e, &x("hey ${in.header.foo}!"), "hey abc!");
+        assert_expression(&e, &x("hey ${in.header:foo}!"), "hey abc!");
+        assert_expression(
+            &e,
+            &x("hey ${in.header.foo}-${in.header.foo}!"),
+            "hey abc-abc!",
+        );
+        assert_expression(
+            &e,
+            &x("hey ${in.header:foo}-${in.header.foo}!"),
+            "hey abc-abc!",
+        );
+        assert_expression(&e, &x("hey ${in.header.foo}${in.header.foo}"), "hey abcabc");
+        assert_expression(&e, &x("hey ${in.header:foo}${in.header.foo}"), "hey abcabc");
+        assert_expression(&e, &x("${in.header.foo}${in.header.foo}"), "abcabc");
+        assert_expression(&e, &x("${in.header.foo}"), "abc");
+        assert_expression(&e, &x("${in.header:foo}"), "abc");
+        assert_expression(&e, &x("${in.header.foo}!"), "abc!");
+        assert_expression(&e, &x("${in.header:foo}!"), "abc!");
+    }
+    assert_expression(&e, "${in.header:foo}${in.header:foo}", "abcabc");
+}
+
+#[test]
+fn test_invalid_complex_expression() {
+    let (_t, e) = exchange();
+    let err = error(&e, "hey ${foo");
+    assert!(err.is_subtype("SimpleIllegalSyntaxException"), "{err}");
+    assert!(err.message().unwrap().contains(" at location 8"), "{err}");
+}
+
+#[test]
+fn test_predicates() {
+    let (_t, e) = exchange();
+    assert!(predicate(&e, "${body}"));
+    assert!(predicate(&e, "${header.foo}"));
+    assert!(!predicate(&e, "${header.madeUpHeader}"));
+}
+
+#[test]
+fn test_exception_message_and_stacktrace() {
+    let (_t, mut e) = exchange();
+    // CAMEL-24651: no exception, no stack trace
+    assert_eq!(Value::Null, evaluate(&e, "${exception.stacktrace}"));
+    e.set_exception(Some(CamelError::illegal_argument("Just testing")));
+    assert_expression(&e, "${exception.message}", "Just testing");
+    assert_expression(
+        &e,
+        "Hello ${exception.message} World",
+        "Hello Just testing World",
+    );
+    // the Rust errors have no stack frames: the stack trace is the error and its causes
+    let out = string(&e, "${exception.stacktrace}").unwrap();
+    assert!(out.starts_with("java.lang.IllegalArgumentException: Just testing"));
+}
+
+#[test]
+fn test_exception() {
+    let (_t, mut e) = exchange();
+    e.set_exception(Some(CamelError::illegal_argument("Just testing")));
+    let v = evaluate(&e, "${exception}");
+    let x = v.downcast_ref::<CamelError>().expect("the exception");
+    assert!(x.is(ErrorKind::IllegalArgument));
+    assert_eq!(Some("Just testing"), x.message());
+    assert_expression(
+        &e,
+        "${exception}",
+        "java.lang.IllegalArgumentException: Just testing",
+    );
+    assert_expression(
+        &e,
+        "${exception.class.simpleName}",
+        "IllegalArgumentException",
+    );
+}

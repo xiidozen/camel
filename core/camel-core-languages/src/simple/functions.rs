@@ -7,8 +7,9 @@
 //! / `boolean:` / `string:` conversions. The other function factories (date, math, string,
 //! collection, random, ...) follow; an unknown function is a syntax error, as in Java.
 
+use super::ognl::invoke_ognl;
 use super::{ParseResult, ParserError};
-use camel_api::error::{CamelError, CamelResult, ErrorKind};
+use camel_api::error::{CamelError, ErrorKind};
 use camel_api::exchange::Exchange;
 use camel_api::processor::SharedExpression;
 use camel_support::builder::{constant_expression, named_expression};
@@ -112,109 +113,23 @@ fn variable_lookup(e: &Exchange, k: &str) -> Option<Value> {
     e.variable(k).cloned()
 }
 
-/// Navigates into a value with an OGNL expression (Java `OgnlExpressionBuilder` on maps and
-/// lists): `foo`, `[0]`, `[key]`, `.size()`, `.length()`, `?.foo` (null safe).
-fn navigate(value: Value, ognl: &str, description: &str) -> CamelResult<Value> {
-    let parts = ognl_helper::split_ognl(ognl)
-        .map_err(|m| CamelError::new(ErrorKind::ExpressionIllegalSyntax, m))?;
-    let parts = if parts.is_empty() {
-        vec![ognl.to_string()]
-    } else {
-        parts
-    };
-    let mut current = value;
-    for part in parts {
-        let null_safe = part.starts_with("?.") || part.starts_with('?');
-        let p = ognl_helper::remove_leading_operators(&part).to_string();
-        if current.is_null() {
-            if null_safe {
-                return Ok(Value::Null);
-            }
-            return Err(CamelError::new(
-                ErrorKind::RuntimeCamel,
-                format!("Null object returned by {description} when evaluating: {p}"),
-            ));
-        }
-        current = step(current, &p)?;
-    }
-    Ok(current)
-}
-
-fn step(value: Value, part: &str) -> CamelResult<Value> {
-    // index: [0], [key], name[0]
-    if let Some(start) = part.find('[') {
-        if part.ends_with(']') {
-            let (name, index) = (&part[..start], &part[start + 1..part.len() - 1]);
-            let base = if name.is_empty() {
-                value
-            } else {
-                step(value, name)?
-            };
-            return Ok(index_into(&base, &remove_leading_and_ending_quotes(index)));
-        }
-    }
-    match part {
-        "size()" | "size" | "length()" | "length" => Ok(value
-            .size()
-            .map(|s| Value::Int(s as i64))
-            .unwrap_or_else(|| Value::Int(value.to_string().chars().count() as i64))),
-        "isEmpty()" => Ok(Value::Bool(camel_util::object_helper::is_empty(&value))),
-        "toString()" => Ok(Value::from(value.to_string())),
-        "toUpperCase()" => Ok(Value::from(value.to_string().to_uppercase())),
-        "toLowerCase()" => Ok(Value::from(value.to_string().to_lowercase())),
-        "trim()" => Ok(Value::from(value.to_string().trim().to_string())),
-        key => match &value {
-            Value::Map(m) => Ok(m.get(key).cloned().unwrap_or_default()),
-            _ => Err(CamelError::new(
-                ErrorKind::RuntimeCamel,
-                format!(
-                    "Cannot invoke method: {key} on {} of type: {}",
-                    value,
-                    value.type_name()
-                ),
-            )),
-        },
-    }
-}
-
-fn index_into(value: &Value, index: &str) -> Value {
-    match value {
-        Value::List(l) => {
-            let i = if index == "last" {
-                l.len().checked_sub(1)
-            } else if let Some(rest) = index.strip_prefix("last-") {
-                rest.parse::<usize>()
-                    .ok()
-                    .and_then(|n| l.len().checked_sub(1 + n))
-            } else {
-                index.parse::<usize>().ok()
-            };
-            i.and_then(|i| l.get(i).cloned()).unwrap_or_default()
-        }
-        Value::Map(m) => m.get(index).cloned().unwrap_or_default(),
-        Value::Text(t) => index
-            .parse::<usize>()
-            .ok()
-            .and_then(|i| t.chars().nth(i))
-            .map(|c| Value::from(c.to_string()))
-            .unwrap_or_default(),
-        _ => Value::Null,
-    }
-}
-
 fn ognl_expression(kind: &'static str, key: &str, lookup: Lookup) -> SharedExpression {
     // the first part is the name, the rest navigates into the value
     let (name, rest) = split_first_ognl(key);
     let name = name.to_string();
     let rest = rest.to_string();
     let description = format!("{kind}({key})");
-    let d = description.clone();
+    let full = key.to_string();
     named_expression(description, move |e| {
+        // the full name first (Java KeyedOgnlExpressionAdapter), then the OGNL on the key
+        if let Some(v) = lookup(e, &full) {
+            return Ok(v);
+        }
         let v = lookup(e, &name).unwrap_or_default();
-        if rest.is_empty() {
+        if rest.is_empty() || v.is_null() {
             Ok(v)
         } else {
-            navigate(v, &rest, &d)
+            invoke_ognl(&v, &rest, e)
         }
     })
 }
@@ -317,11 +232,18 @@ fn direct_function(function: &str) -> Option<SharedExpression> {
             Ok(Value::Int(e.message().message_timestamp()))
         }),
         "exchangeId" => named_expression("exchangeId", |e| Ok(Value::from(e.exchange_id()))),
+        // the exception object, whose text is the Java toString(): `type: message`
         "exception" => named_expression("exception", |e| {
             Ok(exchange_exception(e)
                 .as_ref()
-                .map(|x| Value::from(format!("{}: {x}", camel_api::error::error_type_name(x))))
+                .map(camel_api::beans::exception_value)
                 .unwrap_or_default())
+        }),
+        "exchange" => named_expression("exchange", |e| Ok(camel_api::beans::exchange_value(e))),
+        "logExchange" => named_expression("logExchange", |e| {
+            use camel_api::spi::exchange_formatter::ExchangeFormatter;
+            use camel_support::exchange_formatter::DefaultExchangeFormatter;
+            Ok(Value::from(DefaultExchangeFormatter::default().format(e)))
         }),
         "exception.message" => named_expression("exception.message", |e| {
             Ok(exchange_exception(e)
@@ -448,10 +370,10 @@ fn body_function(function: &str, index: usize) -> ParseResult<Option<SharedExpre
                             e.exchange_id()),
                     ));
                 }
-                if rest.is_empty() {
+                if rest.is_empty() || v.is_null() {
                     Ok(v)
                 } else {
-                    navigate(v, &rest, &description)
+                    invoke_ognl(&v, &rest, e)
                 }
             })));
         }
@@ -470,7 +392,11 @@ fn body_function(function: &str, index: usize) -> ParseResult<Option<SharedExpre
         }
         let r = r.to_string();
         return Ok(Some(named_expression(format!("bodyOgnl({r})"), move |e| {
-            navigate(e.message().body().clone(), &r, "body")
+            let body = e.message().body();
+            if body.is_null() {
+                return Ok(Value::Null);
+            }
+            invoke_ognl(body, &r, e)
         })));
     }
     Ok(None)
@@ -624,6 +550,25 @@ fn variable_function(function: &str, index: usize) -> ParseResult<Option<SharedE
 
 /// The exchange property functions (Java `ExchangeFunctionFactory`).
 fn exchange_function(function: &str, index: usize) -> ParseResult<Option<SharedExpression>> {
+    // ${exception.OGNL} and ${exchange.OGNL} (exchangeProperty is checked before exchange)
+    if let Some(r) = if_starts_with_return_remainder("exception", function) {
+        if starts_ognl(r) {
+            if ognl_helper::is_invalid_valid_ognl_expression(r) {
+                return Err(ParserError::new(
+                    format!("Valid syntax: ${{exception.OGNL}} was: {function}"),
+                    index,
+                ));
+            }
+            let r = r.to_string();
+            return Ok(Some(named_expression(
+                format!("exchangeExceptionOgnl({r})"),
+                move |e| match exchange_exception(e) {
+                    Some(x) => invoke_ognl(&camel_api::beans::exception_value(&x), &r, e),
+                    None => Ok(Value::Null),
+                },
+            )));
+        }
+    }
     if let Some(r) = if_starts_with_return_remainder("exchangeProperty", function) {
         if starts_ognl(r) || r.starts_with(':') {
             return scoped_function(
@@ -635,6 +580,21 @@ fn exchange_function(function: &str, index: usize) -> ParseResult<Option<SharedE
                 property_lookup,
             )
             .map(Some);
+        }
+    }
+    if let Some(r) = if_starts_with_return_remainder("exchange", function) {
+        if starts_ognl(r) {
+            if ognl_helper::is_invalid_valid_ognl_expression(r) {
+                return Err(ParserError::new(
+                    format!("Valid syntax: ${{exchange.OGNL}} was: {function}"),
+                    index,
+                ));
+            }
+            let r = r.to_string();
+            return Ok(Some(named_expression(
+                format!("exchangeOgnl({r})"),
+                move |e| invoke_ognl(&camel_api::beans::exchange_value(e), &r, e),
+            )));
         }
     }
     Ok(None)

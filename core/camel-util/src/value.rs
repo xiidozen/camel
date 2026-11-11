@@ -30,7 +30,78 @@ use std::sync::Arc;
 /// A map of named values in insertion order (the Java `LinkedHashMap<String, Object>`).
 pub type ValueMap = IndexMap<String, Value>;
 
-type DisplayFn = fn(&(dyn Any + Send + Sync), &mut fmt::Formatter<'_>) -> fmt::Result;
+type DisplayFn =
+    Arc<dyn Fn(&(dyn Any + Send + Sync), &mut fmt::Formatter<'_>) -> fmt::Result + Send + Sync>;
+
+/// The properties and methods of a Rust value, for the OGNL navigation of the simple language
+/// (`${body.name}`, `${header.order.getId()}`): Java finds them by reflection, Rust values
+/// declare them by implementing this trait and being wrapped with [`Value::bean`].
+///
+/// # Examples
+///
+/// ```
+/// use camel_util::value::{Bean, Value};
+///
+/// struct OrderLine { id: i64, name: String }
+///
+/// impl Bean for OrderLine {
+///     fn property(&self, name: &str) -> Option<Value> {
+///         match name {
+///             "id" => Some(Value::Int(self.id)),
+///             "name" => Some(Value::from(self.name.as_str())),
+///             _ => None,
+///         }
+///     }
+/// }
+///
+/// let v = Value::bean(OrderLine { id: 123, name: "Camel in Action".into() });
+/// let Value::Object(o) = &v else { unreachable!() };
+/// assert_eq!(Some(Value::Int(123)), o.bean_property("id"));
+/// ```
+pub trait Bean: Any + Send + Sync {
+    /// The value of the property (Java getter `getName()` or `isName()` for `name`), if the
+    /// bean has it.
+    fn property(&self, name: &str) -> Option<Value> {
+        let _ = name;
+        None
+    }
+
+    /// Invokes the method with the arguments (already evaluated), if the bean has it.
+    ///
+    /// # Returns
+    ///
+    /// `None` if the bean has no such method, else the result or the error message.
+    fn invoke(&self, method: &str, args: &[Value]) -> Option<Result<Value, String>> {
+        let _ = (method, args);
+        None
+    }
+}
+
+type PropertyFn = fn(&(dyn Any + Send + Sync), &str) -> Option<Value>;
+type InvokeFn = fn(&(dyn Any + Send + Sync), &str, &[Value]) -> Option<Result<Value, String>>;
+
+#[derive(Clone, Copy)]
+struct BeanFns {
+    property: PropertyFn,
+    invoke: InvokeFn,
+}
+
+fn bean_fns<T: Bean>() -> BeanFns {
+    fn property<T: Bean>(v: &(dyn Any + Send + Sync), name: &str) -> Option<Value> {
+        v.downcast_ref::<T>()?.property(name)
+    }
+    fn invoke<T: Bean>(
+        v: &(dyn Any + Send + Sync),
+        method: &str,
+        args: &[Value],
+    ) -> Option<Result<Value, String>> {
+        v.downcast_ref::<T>()?.invoke(method, args)
+    }
+    BeanFns {
+        property: property::<T>,
+        invoke: invoke::<T>,
+    }
+}
 
 /// A reference counted, type erased Rust value stored in [`Value::Object`].
 ///
@@ -41,6 +112,7 @@ pub struct ObjectRef {
     inner: Arc<dyn Any + Send + Sync>,
     type_name: &'static str,
     display: Option<DisplayFn>,
+    bean: Option<BeanFns>,
 }
 
 impl ObjectRef {
@@ -50,6 +122,7 @@ impl ObjectRef {
             inner: Arc::new(value),
             type_name: type_name::<T>(),
             display: None,
+            bean: None,
         }
     }
 
@@ -68,7 +141,8 @@ impl ObjectRef {
         ObjectRef {
             inner: Arc::new(value),
             type_name: type_name::<T>(),
-            display: Some(show::<T>),
+            display: Some(Arc::new(show::<T>)),
+            bean: None,
         }
     }
 
@@ -78,12 +152,53 @@ impl ObjectRef {
             inner: value,
             type_name: type_name::<T>(),
             display: None,
+            bean: None,
         }
     }
 
     /// The Rust type name of the wrapped value (the Java `getClass().getName()`).
     pub fn type_name(&self) -> &'static str {
         self.type_name
+    }
+
+    /// Uses the function as the `Display` (the Java `toString()`) of the wrapped value of type
+    /// `T` (no change if the value is not a `T`).
+    pub fn with_display<T: Any>(
+        mut self,
+        show: impl Fn(&T, &mut fmt::Formatter<'_>) -> fmt::Result + Send + Sync + 'static,
+    ) -> Self {
+        if self.inner.is::<T>() {
+            self.display = Some(Arc::new(move |v, f| match v.downcast_ref::<T>() {
+                Some(t) => show(t, f),
+                None => f.write_str("?"),
+            }));
+        }
+        self
+    }
+
+    /// Makes the wrapped value a [`Bean`] for the OGNL navigation of the simple language.
+    pub fn with_bean<T: Bean>(mut self) -> Self {
+        if self.inner.is::<T>() {
+            self.bean = Some(bean_fns::<T>());
+        }
+        self
+    }
+
+    /// Whether the wrapped value is a [`Bean`].
+    pub fn is_bean(&self) -> bool {
+        self.bean.is_some()
+    }
+
+    /// The property of the [`Bean`], if it is one and has the property.
+    pub fn bean_property(&self, name: &str) -> Option<Value> {
+        self.bean
+            .and_then(|b| (b.property)(self.inner.as_ref(), name))
+    }
+
+    /// Invokes the method of the [`Bean`], if it is one and has the method.
+    pub fn bean_invoke(&self, method: &str, args: &[Value]) -> Option<Result<Value, String>> {
+        self.bean
+            .and_then(|b| (b.invoke)(self.inner.as_ref(), method, args))
     }
 
     /// Returns a reference to the wrapped value if it is of type `T`.
@@ -123,7 +238,7 @@ impl fmt::Debug for ObjectRef {
 
 impl fmt::Display for ObjectRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.display {
+        match &self.display {
             Some(show) => show(self.inner.as_ref(), f),
             None => write!(f, "{}@{}", self.type_name, self.identity_hash_code()),
         }
@@ -164,6 +279,17 @@ impl Value {
     /// Wraps any Rust value as a [`Value::Object`].
     pub fn object<T: Any + Send + Sync>(value: T) -> Value {
         Value::Object(ObjectRef::new(value))
+    }
+
+    /// Wraps a [`Bean`] as a [`Value::Object`] whose properties and methods the simple
+    /// language can navigate.
+    pub fn bean<T: Bean>(value: T) -> Value {
+        Value::Object(ObjectRef::new(value).with_bean::<T>())
+    }
+
+    /// Wraps a displayable [`Bean`] (its `Display` is the Java `toString()`).
+    pub fn bean_display<T: Bean + fmt::Display>(value: T) -> Value {
+        Value::Object(ObjectRef::new_display(value).with_bean::<T>())
     }
 
     /// Wraps any displayable Rust value as a [`Value::Object`] that uses its `Display` for
