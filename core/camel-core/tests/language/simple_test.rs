@@ -875,6 +875,10 @@ fn test_iif() {
         "Bye World",
     );
     assert_expression(&e, "${iif(${header.foo} > 0,${body},${null})}", Value::Null);
+    e.message_mut().set_header("CamelFileName", "testfile.txt");
+    assert_expression(&e, "${iif(${file:name} startsWith 'test',foo,bar)}", "foo");
+    e.message_mut().set_header("CamelFileName", "dummy.txt");
+    assert_expression(&e, "${iif(${file:name} startsWith 'test',foo,bar)}", "bar");
 }
 
 fn text(e: &Exchange, exp: &str) -> String {
@@ -2664,7 +2668,11 @@ fn test_ternary_operator() {
     e.message_mut().set_header("foo", -123);
     assert_expression(&e, "${header.foo > 0 ? ${body} : 'Bye World'}", "Bye World");
     assert_expression(&e, "${header.foo > 0 ? ${body} : ${null}}", Value::Null);
-    // the ${file:name} part of the Java test waits for the file functions (see the backlog)
+    // with the file name
+    e.message_mut().set_header("CamelFileName", "testfile.txt");
+    assert_expression(&e, "${file:name startsWith 'test' ? 'foo' : 'bar'}", "foo");
+    e.message_mut().set_header("CamelFileName", "dummy.txt");
+    assert_expression(&e, "${file:name startsWith 'test' ? 'foo' : 'bar'}", "bar");
 }
 
 #[test]

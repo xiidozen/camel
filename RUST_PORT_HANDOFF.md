@@ -173,6 +173,7 @@ Javadoc must be converted so `cargo doc` produces equivalent documentation:
 | JVM system properties | `camel_util::system_properties` (registry + env fallback + built-in `java.io.tmpdir`, `user.dir`, ...) |
 | `java.net.URI`, `URLEncoder`, `URLDecoder` | `camel_util::net` (exact JDK semantics — endpoint URI normalization depends on it) |
 | `java.time.Duration` | `camel_util::time_utils::SignedDuration` |
+| `java.util.Date`, `TimeZone`, `SimpleDateFormat` | `camel_util::date` (a `Date` value is a `Value::Object` compared by value; zones from the bundled IANA database) |
 | `java.nio.charset.Charset` | `camel_util::charset::Charset` (Java names; ISO-8859-1 is real Latin-1, not windows-1252) |
 | `java.util.Properties` file format | `camel_util::properties::parse_properties` |
 | headers map | `camel_util::case_insensitive_map::CaseInsensitiveMap<Value>` |

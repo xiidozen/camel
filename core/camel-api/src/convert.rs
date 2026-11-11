@@ -103,6 +103,11 @@ macro_rules! from_value_int {
                     Value::Int(i) => <$t>::try_from(*i).map(Some).map_err(|_| err()),
                     Value::Float(f) if f.fract() == 0.0 && f.is_finite() => <$t>::try_from(*f as i64).map(Some).map_err(|_| err()),
                     Value::Bool(_) => Err(err()),
+                    // Java DateTimeConverter: a Date is its milliseconds
+                    Value::Object(o) if o.is::<camel_util::date::Date>() => {
+                        let millis = o.downcast_ref::<camel_util::date::Date>().map(|d| d.millis()).unwrap_or_default();
+                        <$t>::try_from(millis).map(Some).map_err(|_| err())
+                    }
                     v => match text_of(v) {
                         // Java: the converter exists, the parse fails (NumberFormatException)
                         Some(s) => s.trim().parse::<$t>().map(Some).map_err(|_| {

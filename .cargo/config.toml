@@ -1,0 +1,4 @@
+# Limit parallel rustc jobs: the dev container (7.7 GiB RAM, 4 CPUs) was restarted during a
+# `cargo build --workspace --all-targets` with 4 large test crates compiling at once.
+[build]
+jobs = 2

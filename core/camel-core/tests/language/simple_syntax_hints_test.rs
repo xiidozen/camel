@@ -357,3 +357,12 @@ fn test_unknown_language_says_did_you_mean() {
     assert_contains(&msg, "(not a built-in Camel language)");
     assert!(!msg.contains("did you mean"));
 }
+
+#[test]
+fn test_file_function_does_not_read_a_file() {
+    let (_t, e) = exchange();
+    let msg = expression_error(&e, "${file:src/main/resources/input.xml}");
+    assert_contains(&msg, "Unknown file language syntax");
+    assert_contains(&msg, "they do not read a file");
+    assert_contains(&msg, "poll EIP");
+}

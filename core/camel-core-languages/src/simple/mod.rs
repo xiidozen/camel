@@ -4,7 +4,9 @@
 
 pub mod ast;
 pub mod collection_functions;
+pub mod date_functions;
 pub mod expression_parser;
+pub mod file_functions;
 pub mod functions;
 pub mod language;
 pub mod math_functions;

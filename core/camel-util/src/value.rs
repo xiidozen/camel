@@ -113,7 +113,10 @@ pub struct ObjectRef {
     type_name: &'static str,
     display: Option<DisplayFn>,
     bean: Option<BeanFns>,
+    equals: Option<EqualsFn>,
 }
+
+type EqualsFn = fn(&(dyn Any + Send + Sync), &(dyn Any + Send + Sync)) -> bool;
 
 impl ObjectRef {
     /// Wraps the value.
@@ -123,6 +126,7 @@ impl ObjectRef {
             type_name: type_name::<T>(),
             display: None,
             bean: None,
+            equals: None,
         }
     }
 
@@ -143,6 +147,7 @@ impl ObjectRef {
             type_name: type_name::<T>(),
             display: Some(Arc::new(show::<T>)),
             bean: None,
+            equals: None,
         }
     }
 
@@ -153,6 +158,7 @@ impl ObjectRef {
             type_name: type_name::<T>(),
             display: None,
             bean: None,
+            equals: None,
         }
     }
 
@@ -180,6 +186,24 @@ impl ObjectRef {
     pub fn with_bean<T: Bean>(mut self) -> Self {
         if self.inner.is::<T>() {
             self.bean = Some(bean_fns::<T>());
+        }
+        self
+    }
+
+    /// Compares the wrapped value of type `T` with `PartialEq` (the equivalent of a Java class
+    /// overriding `equals`), instead of by instance.
+    pub fn with_equals<T: Any + PartialEq>(mut self) -> Self {
+        fn eq<T: Any + PartialEq>(
+            a: &(dyn Any + Send + Sync),
+            b: &(dyn Any + Send + Sync),
+        ) -> bool {
+            match (a.downcast_ref::<T>(), b.downcast_ref::<T>()) {
+                (Some(x), Some(y)) => x == y,
+                _ => false,
+            }
+        }
+        if self.inner.is::<T>() {
+            self.equals = Some(eq::<T>);
         }
         self
     }
@@ -246,8 +270,13 @@ impl fmt::Display for ObjectRef {
 }
 
 impl PartialEq for ObjectRef {
+    /// The same instance, or equal values of a type registered with
+    /// [`ObjectRef::with_equals`].
     fn eq(&self, other: &Self) -> bool {
         self.ptr_eq(other)
+            || self
+                .equals
+                .is_some_and(|eq| eq(self.inner.as_ref(), other.inner.as_ref()))
     }
 }
 

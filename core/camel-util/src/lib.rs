@@ -14,6 +14,7 @@ pub mod case_insensitive_map;
 pub mod charset;
 pub mod collection_helper;
 pub mod concurrent;
+pub mod date;
 pub mod escape_helper;
 pub mod file_path_resolver;
 pub mod file_util;

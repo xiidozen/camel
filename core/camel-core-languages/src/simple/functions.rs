@@ -230,6 +230,9 @@ fn do_create(function: &str, index: usize) -> ParseResult<SharedExpression> {
     if let Some(e) = direct_function(function) {
         return Ok(e);
     }
+    if let Some(remainder) = if_starts_with_return_remainder("file:", function) {
+        return super::file_functions::file_function(remainder, index);
+    }
     for factory in [
         body_function,
         header_function,
@@ -241,6 +244,7 @@ fn do_create(function: &str, index: usize) -> ParseResult<SharedExpression> {
         super::string_functions::string_function,
         super::collection_functions::collection_function,
         super::misc_functions::misc_function,
+        super::date_functions::date_function,
     ] {
         if let Some(e) = factory(function, index)? {
             return Ok(e);
