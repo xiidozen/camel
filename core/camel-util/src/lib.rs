@@ -32,6 +32,7 @@ pub mod net;
 pub mod object_helper;
 pub mod ognl_helper;
 pub mod pair;
+pub mod pretty;
 pub mod properties;
 pub mod reference_count;
 pub mod scanner;

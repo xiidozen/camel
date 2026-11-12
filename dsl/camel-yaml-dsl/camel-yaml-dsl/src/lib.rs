@@ -275,7 +275,20 @@ fn language_expression(language: &str, value: &Yaml) -> CamelResult<ExpressionDe
         Some(t) => t,
         None => node.required("expression", language)?,
     };
-    Ok(ExpressionDefinition::language(language, &expression))
+    let mut def = ExpressionDefinition::language(language, &expression);
+    if let Some(t) = node.text("resultType") {
+        def = def.result_type(&t);
+    }
+    if node.bool("trim")? == Some(true) {
+        def = def.trim(true);
+    }
+    if node.bool("pretty")? == Some(true) {
+        def = def.pretty(true);
+    }
+    if node.bool("nested")? == Some(true) {
+        def = def.nested(true);
+    }
+    Ok(def)
 }
 
 /// The uri with the `parameters` of the node as its query.

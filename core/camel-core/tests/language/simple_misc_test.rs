@@ -64,3 +64,72 @@ fn test_white_space() {
     e.message_mut().set_body("\tsome\nmulti\rline\r\ntext");
     assert_predicate(&e, "${in.body} == '\tsome\nmulti\rline\r\ntext'", true);
 }
+
+/// Port of `SimpleNestedTest`.
+#[tokio::test]
+async fn test_nested() {
+    let t = ContextTestSupport::new();
+    t.context
+        .properties()
+        .add_initial_property("myProp", "${header.myValue}");
+    t.context
+        .add_routes(|r: &mut Routes| {
+            r.add(
+                from("direct:start")
+                    .set_body(simple("{{myProp}}").nested(true))
+                    .to("mock:result"),
+            );
+        })
+        .await
+        .unwrap();
+    t.context.start().await.unwrap();
+    let mock = t.mock("mock:result");
+    mock.expected_bodies_received([23]);
+    t.template
+        .send_body_and_header("direct:start", "13", "myValue", "${sum(${body},10)}")
+        .await
+        .unwrap();
+    mock.assert_is_satisfied().await;
+}
+
+/// Port of `SimplePrettyTest`.
+#[tokio::test]
+async fn test_pretty() {
+    let t = ContextTestSupport::with_routes(|r: &mut Routes| {
+        r.add(
+            from("direct:xml")
+                .set_body(simple("<person><name>Jack</name></person>").pretty(true))
+                .to("mock:result"),
+        );
+        r.add(
+            from("direct:json")
+                .set_body(simple("{ \"name\": \"Jack\", \"age\": 44 }").pretty(true))
+                .to("mock:result"),
+        );
+        r.add(
+            from("direct:text")
+                .set_body(simple("Hello ${body}").pretty(true))
+                .to("mock:result"),
+        );
+    })
+    .await;
+    for (uri, body, expected) in [
+        (
+            "direct:xml",
+            "Hello World",
+            "<person>\n  <name>\n    Jack\n  </name>\n</person>",
+        ),
+        (
+            "direct:json",
+            "Hello World",
+            "{\n\t\"name\": \"Jack\",\n\t\"age\": 44\n}\n",
+        ),
+        ("direct:text", "World", "Hello World"),
+    ] {
+        let mock = t.mock("mock:result");
+        mock.reset();
+        mock.expected_bodies_received([expected]);
+        t.template.send_body(uri, body).await.unwrap();
+        mock.assert_is_satisfied().await;
+    }
+}

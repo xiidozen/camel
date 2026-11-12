@@ -102,7 +102,81 @@ pub fn reify_expression(
                 Ok(Value::Bool(p.matches(e)?))
             }))
         }
+        ExpressionDefinition::Configured {
+            definition,
+            options,
+        } => configured_expression(context, definition, options),
     }
+}
+
+/// The expression with its options (Java `SimpleLanguage.createExpression(expression,
+/// resultType, pretty, trimResult, nested)`).
+fn configured_expression(
+    context: &Arc<dyn CamelContext>,
+    definition: &ExpressionDefinition,
+    options: &camel_core_model::expression::ExpressionOptions,
+) -> CamelResult<SharedExpression> {
+    use camel_support::builder::named_expression;
+    let result_type = options.result_type.clone();
+    if matches!(
+        result_type.as_deref(),
+        Some("boolean" | "Boolean" | "java.lang.Boolean")
+    ) {
+        // a boolean result: the expression is a predicate
+        let p = reify_predicate(context, definition)?;
+        return Ok(named_expression(definition.to_string(), move |e| {
+            Ok(Value::Bool(p.matches(e)?))
+        }));
+    }
+    let mut exp = reify_expression(context, definition)?;
+    let name = definition.to_string();
+    if options.nested {
+        let language = context.resolve_language(definition.language_name().unwrap_or("simple"))?;
+        let inner = exp;
+        exp = named_expression(name.clone(), move |e| {
+            let v = inner.evaluate(e)?;
+            if v.is_null() {
+                return Ok(v);
+            }
+            language.create_expression(&v.to_string())?.evaluate(e)
+        });
+    }
+    if let Some(t) = result_type {
+        let inner = exp;
+        exp = named_expression(name.clone(), move |e| {
+            camel_support::type_conversion::convert_to_type(&inner.evaluate(e)?, &t)
+        });
+    }
+    if options.trim {
+        let inner = exp;
+        exp = named_expression(name.clone(), move |e| {
+            let v = inner.evaluate(e)?;
+            Ok(match v {
+                Value::Text(t) => Value::Text(t.trim().to_string()),
+                other => other,
+            })
+        });
+    }
+    if options.pretty {
+        let inner = exp;
+        exp = named_expression(format!("pretty({name})"), move |e| {
+            let v = inner.evaluate(e)?;
+            if v.is_null() {
+                return Ok(v);
+            }
+            let body = v.to_string();
+            let json = (body.starts_with('{') && body.ends_with('}'))
+                || (body.starts_with('[') && body.ends_with(']'));
+            Ok(Value::Text(if json {
+                camel_util::pretty::pretty_json(&body).unwrap_or(body)
+            } else if body.starts_with('<') && body.ends_with('>') {
+                camel_util::pretty::pretty_xml(&body, 2, body.starts_with("<?xml")).unwrap_or(body)
+            } else {
+                body
+            }))
+        });
+    }
+    Ok(exp)
 }
 
 /// The text with its property placeholders resolved (Java `AbstractReifier.parseString`); a
@@ -145,6 +219,10 @@ pub fn reify_predicate(
         ExpressionDefinition::Predicate(p) => {
             p.init(context)?;
             Ok(p.clone())
+        }
+        ExpressionDefinition::Configured { .. } => {
+            let e = reify_expression(context, def)?;
+            Ok(Arc::new(ExpressionPredicate(e)))
         }
     }
 }

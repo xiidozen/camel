@@ -20,6 +20,28 @@ pub enum ExpressionDefinition {
     Expression(SharedExpression),
     /// A predicate built in Rust code.
     Predicate(SharedPredicate),
+    /// An expression with options (Java `SimpleExpression` `resultType`, `trim`, `pretty` and
+    /// `nested`).
+    Configured {
+        /// The expression.
+        definition: Box<ExpressionDefinition>,
+        /// The options.
+        options: ExpressionOptions,
+    },
+}
+
+/// The options of an expression (applied in the Java order: nested, result type, trim,
+/// pretty).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ExpressionOptions {
+    /// The value is a text evaluated again as an expression of the language.
+    pub nested: bool,
+    /// The type the value is converted to (`boolean` makes it a predicate).
+    pub result_type: Option<String>,
+    /// The text of the value is trimmed.
+    pub trim: bool,
+    /// The JSON or XML text of the value is pretty printed.
+    pub pretty: bool,
 }
 
 impl ExpressionDefinition {
@@ -35,8 +57,52 @@ impl ExpressionDefinition {
     pub fn language_name(&self) -> Option<&str> {
         match self {
             ExpressionDefinition::Language { language, .. } => Some(language),
+            ExpressionDefinition::Configured { definition, .. } => definition.language_name(),
             _ => None,
         }
+    }
+
+    /// The expression without its options.
+    pub fn definition(&self) -> &ExpressionDefinition {
+        match self {
+            ExpressionDefinition::Configured { definition, .. } => definition.definition(),
+            other => other,
+        }
+    }
+
+    fn with_options(self, f: impl FnOnce(&mut ExpressionOptions)) -> Self {
+        let (definition, mut options) = match self {
+            ExpressionDefinition::Configured {
+                definition,
+                options,
+            } => (definition, options),
+            other => (Box::new(other), ExpressionOptions::default()),
+        };
+        f(&mut options);
+        ExpressionDefinition::Configured {
+            definition,
+            options,
+        }
+    }
+
+    /// Evaluates the value again as an expression of the language (Java `nested(true)`).
+    pub fn nested(self, nested: bool) -> Self {
+        self.with_options(|o| o.nested = nested)
+    }
+
+    /// Pretty prints a JSON or XML value (Java `.simple(text, true)`).
+    pub fn pretty(self, pretty: bool) -> Self {
+        self.with_options(|o| o.pretty = pretty)
+    }
+
+    /// Trims the text of the value.
+    pub fn trim(self, trim: bool) -> Self {
+        self.with_options(|o| o.trim = trim)
+    }
+
+    /// Converts the value to the type (Java `resultType`, such as `int` or `boolean`).
+    pub fn result_type(self, type_name: &str) -> Self {
+        self.with_options(|o| o.result_type = Some(type_name.to_string()))
     }
 }
 
@@ -51,6 +117,7 @@ impl fmt::Display for ExpressionDefinition {
             } => write!(f, "{language}{{{expression}}}"),
             ExpressionDefinition::Expression(e) => f.write_str(&e.describe()),
             ExpressionDefinition::Predicate(p) => f.write_str(&p.describe()),
+            ExpressionDefinition::Configured { definition, .. } => definition.fmt(f),
         }
     }
 }
