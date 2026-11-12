@@ -9,6 +9,7 @@
 
 pub mod builder;
 pub mod component_support;
+pub mod endpoint_helper;
 pub mod exchange_formatter;
 pub mod exchange_helper;
 pub mod header_filter_strategy;

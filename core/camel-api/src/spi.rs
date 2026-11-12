@@ -6,6 +6,7 @@ pub mod exchange_formatter;
 pub mod header_filter;
 pub mod language;
 pub mod log_listener;
+pub mod properties;
 pub mod registry;
 pub mod synchronization;
 pub mod uuid;

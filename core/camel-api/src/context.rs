@@ -7,6 +7,7 @@ use crate::endpoint::SharedEndpoint;
 use crate::error::{CamelError, CamelResult};
 use crate::spi::language::Language;
 use crate::spi::log_listener::LogListener;
+use crate::spi::properties::{PropertiesComponent, PREFIX_TOKEN};
 use crate::spi::registry::Registry;
 use crate::spi::uuid::{DefaultUuidGenerator, UuidGenerator};
 use std::any::{Any, TypeId};
@@ -57,6 +58,31 @@ pub trait CamelContext: Send + Sync {
     /// The bean registry, if the context has one.
     fn registry(&self) -> Option<Arc<dyn Registry>> {
         None
+    }
+
+    /// The properties component resolving property placeholders, if the context has one (Java
+    /// `getPropertiesComponent`).
+    fn properties_component(&self) -> Option<Arc<dyn PropertiesComponent>> {
+        None
+    }
+
+    /// Replaces the property placeholders (`{{key}}`) of the text (Java
+    /// `resolvePropertyPlaceholders`); a text without placeholders, or a context without a
+    /// properties component, keeps the text. `None` for a single optional placeholder of a
+    /// missing property.
+    ///
+    /// # Errors
+    ///
+    /// An `IllegalArgumentException` for a missing property (see
+    /// [`PropertiesComponent::parse_uri`]).
+    fn resolve_property_placeholders(&self, text: &str) -> CamelResult<Option<String>> {
+        if !text.contains(PREFIX_TOKEN) {
+            return Ok(Some(text.to_string()));
+        }
+        match self.properties_component() {
+            Some(pc) => pc.parse_uri(text),
+            None => Ok(Some(text.to_string())),
+        }
     }
 
     /// The plugin of the type, if the context has one (Java

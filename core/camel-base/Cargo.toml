@@ -1,0 +1,14 @@
+[package]
+name = "camel-base"
+description = "Camel :: Base — the base services of the engine: the properties component resolving property placeholders (port of core/camel-base)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+camel-api = { workspace = true }
+camel-util = { workspace = true }
+indexmap = "2"
+log = "0.4"

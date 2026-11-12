@@ -4,6 +4,7 @@ members = [
     "core/camel-util",
     "core/camel-api",
     "core/camel-support",
+    "core/camel-base",
     "core/camel-core-processor",
     "core/camel-core-languages",
     "core/camel-base-engine",
@@ -29,6 +30,7 @@ rust-version = "1.80"
 camel-util = { path = "core/camel-util" }
 camel-api = { path = "core/camel-api" }
 camel-support = { path = "core/camel-support" }
+camel-base = { path = "core/camel-base" }
 camel-core-processor = { path = "core/camel-core-processor" }
 camel-core-languages = { path = "core/camel-core-languages" }
 camel-base-engine = { path = "core/camel-base-engine" }

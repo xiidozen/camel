@@ -6,4 +6,5 @@ mod support;
 
 mod bean;
 mod log;
+mod properties;
 mod seda;

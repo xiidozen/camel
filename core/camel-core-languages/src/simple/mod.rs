@@ -16,6 +16,7 @@ pub mod ognl;
 pub mod other_functions;
 pub mod other_operators;
 pub mod predicate_parser;
+pub mod properties_functions;
 pub mod string_functions;
 pub mod syntax_hints;
 pub mod tokenizer;

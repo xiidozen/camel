@@ -86,7 +86,11 @@ impl ModelCamelContext for DefaultCamelContext {
             let mut ids = Vec::new();
             for def in definitions {
                 let (id, generated) = match &def.id {
-                    Some(id) => (id.clone(), false),
+                    // the property placeholders of the route id (Java RouteReifier)
+                    Some(id) => (
+                        camel_core_reifier::resolve_placeholders(&context, id)?,
+                        false,
+                    ),
                     None => (self.generate_route_id(), true),
                 };
                 let processor = reify_route(&context, &id, &def)?;

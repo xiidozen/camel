@@ -10,6 +10,7 @@ rust-version.workspace = true
 [dependencies]
 camel-api = { workspace = true }
 camel-util = { workspace = true }
+camel-base = { workspace = true }
 camel-support = { workspace = true }
 camel-core-processor = { workspace = true }
 indexmap = "2"

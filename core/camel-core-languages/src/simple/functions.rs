@@ -233,6 +233,9 @@ fn do_create(function: &str, index: usize) -> ParseResult<SharedExpression> {
     if let Some(e) = super::bean_functions::bean_function(function, index)? {
         return Ok(e);
     }
+    if let Some(e) = super::properties_functions::properties_function(function, index)? {
+        return Ok(e);
+    }
     if let Some(remainder) = if_starts_with_return_remainder("file:", function) {
         return super::file_functions::file_function(remainder, index);
     }

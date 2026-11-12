@@ -35,10 +35,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "camel-base"
+version = "4.23.0"
+dependencies = [
+ "camel-api",
+ "camel-util",
+ "indexmap",
+ "log",
+]
+
+[[package]]
 name = "camel-base-engine"
 version = "4.23.0"
 dependencies = [
  "camel-api",
+ "camel-base",
  "camel-core-processor",
  "camel-support",
  "camel-util",

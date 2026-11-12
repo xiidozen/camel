@@ -101,6 +101,10 @@ Crates live **in the directory of the Maven module they replace** (`core/camel-a
   are ported (`camel_core_processor::errorhandler`; the reifier wraps each step as Java channels do).
 - `components/camel-log`: **in progress** (formatter options, level, groupSize, log listeners).
 - `components/camel-seda`: **in progress** (queues, concurrent consumers, InOut waiting).
+- `core/camel-base`: **in progress** — the properties component (`camel_base::properties`), owned by
+  `DefaultCamelContext` (`context.properties()`); placeholders are resolved in endpoint uris,
+  language expression texts (in the reifier) and route ids. The Rust `constant(..)` builder is a value,
+  not the constant language: use `language("constant", "{{..}}")` for placeholders in constants.
 - `components/camel-bean`: **in progress** — the bean language and `MethodBean`; beans implement
   `camel_api::bean_binding::ExchangeBean` (Java bean binding without reflection: each method reads
   its parameters from the `BeanInvocation`, `parameter(i)` = explicit parameter, else the body).

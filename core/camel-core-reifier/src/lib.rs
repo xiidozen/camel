@@ -65,9 +65,10 @@ pub fn reify_expression(
             language,
             expression,
         } => {
+            let expression = resolve_placeholders(context, expression)?;
             let e = context
                 .resolve_language(language)?
-                .create_expression(expression)?;
+                .create_expression(&expression)?;
             e.init(context)?;
             Ok(e)
         }
@@ -86,6 +87,18 @@ pub fn reify_expression(
     }
 }
 
+/// The text with its property placeholders resolved (Java `AbstractReifier.parseString`); a
+/// single optional placeholder of a missing property is an empty text.
+///
+/// # Errors
+///
+/// A missing property.
+pub fn resolve_placeholders(context: &Arc<dyn CamelContext>, text: &str) -> CamelResult<String> {
+    Ok(context
+        .resolve_property_placeholders(text)?
+        .unwrap_or_default())
+}
+
 /// Creates the predicate of the definition (an expression is a predicate by its value).
 ///
 /// # Errors
@@ -100,9 +113,10 @@ pub fn reify_predicate(
             language,
             expression,
         } => {
+            let expression = resolve_placeholders(context, expression)?;
             let p = context
                 .resolve_language(language)?
-                .create_predicate(expression)?;
+                .create_predicate(&expression)?;
             p.init(context)?;
             Ok(p)
         }

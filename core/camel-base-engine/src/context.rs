@@ -10,8 +10,10 @@ use camel_api::route::Route;
 use camel_api::service::{ServiceState, StatefulService, SuspendableService};
 use camel_api::spi::language::Language;
 use camel_api::spi::log_listener::LogListener;
+use camel_api::spi::properties::PropertiesComponent;
 use camel_api::spi::registry::{lookup_bean, Registry};
 use camel_api::spi::uuid::{DefaultUuidGenerator, UuidGenerator};
+use camel_base::properties::DefaultPropertiesComponent;
 use camel_support::component_support;
 use camel_support::simple_registry::SimpleRegistry;
 use camel_util::uri_support::normalize_uri;
@@ -54,6 +56,7 @@ pub struct DefaultCamelContext {
     log_listeners: RwLock<Vec<Arc<dyn LogListener>>>,
     message_history: AtomicBool,
     plugins: RwLock<HashMap<TypeId, Arc<dyn Any + Send + Sync>>>,
+    properties: Arc<DefaultPropertiesComponent>,
     state: ServiceState,
 }
 
@@ -82,6 +85,12 @@ impl DefaultCamelContext {
             log_listeners: RwLock::new(Vec::new()),
             message_history: AtomicBool::new(false),
             plugins: RwLock::new(HashMap::new()),
+            properties: {
+                let pc = Arc::new(DefaultPropertiesComponent::new());
+                let weak: Weak<dyn CamelContext> = this.clone();
+                pc.set_camel_context(weak);
+                pc
+            },
             state: ServiceState::new(),
         })
     }
@@ -136,6 +145,12 @@ impl DefaultCamelContext {
     /// Adds a listener of the log messages (Java `addLogListener`).
     pub fn add_log_listener(&self, listener: Arc<dyn LogListener>) {
         self.log_listeners.write().unwrap().push(listener);
+    }
+
+    /// The properties component resolving the property placeholders (Java
+    /// `getPropertiesComponent`), to configure its properties and locations.
+    pub fn properties(&self) -> &Arc<DefaultPropertiesComponent> {
+        &self.properties
     }
 
     /// Adds the plugin of the type `T` (Java `CamelContextExtension.addContextPlugin`),
@@ -225,6 +240,10 @@ impl DefaultCamelContext {
         if uri.trim().is_empty() {
             return Err(CamelError::no_such_endpoint(uri));
         }
+        // the property placeholders of the uri (Java getEndpoint)
+        let resolved =
+            camel_support::endpoint_helper::resolve_endpoint_uri_property_placeholders(self, uri)?;
+        let uri = resolved.as_str();
         let normalized = normalize_uri(uri).map_err(|e| {
             CamelError::resolve_endpoint_failed(uri, camel_api::error::box_error(e))
         })?;
@@ -522,6 +541,10 @@ impl CamelContext for DefaultCamelContext {
 
     fn endpoint(&self, uri: &str) -> CamelResult<SharedEndpoint> {
         self.resolve_endpoint(uri)
+    }
+
+    fn properties_component(&self) -> Option<Arc<dyn PropertiesComponent>> {
+        Some(self.properties.clone())
     }
 
     fn plugin(&self, type_id: TypeId) -> Option<Arc<dyn Any + Send + Sync>> {
