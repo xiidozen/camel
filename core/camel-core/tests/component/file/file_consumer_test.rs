@@ -431,3 +431,89 @@ async fn test_consumer_template_file_shutdown() {
     consumer.done_uow(exchange).await;
     consumer.stop().await.unwrap();
 }
+
+/// Ports of `FileConsumerPreMoveTest`, `FileConsumerPreMoveDeleteTest` and
+/// `FileConsumerPreMoveNoopTest` (each sends the same file twice).
+#[tokio::test]
+async fn test_pre_move() {
+    for (option, work, after) in [
+        (
+            "?preMove=work/work-${file:name}&initialDelay=0&delay=10",
+            "work/work-hello.txt",
+            None,
+        ),
+        (
+            "?preMove=work&delete=true&idempotent=false&initialDelay=0&delay=10",
+            "work/hello.txt",
+            Some(false),
+        ),
+        (
+            "?preMove=work&noop=true&idempotent=false&initialDelay=0&delay=10",
+            "work/hello.txt",
+            Some(true),
+        ),
+    ] {
+        let dir = TestDirectory::new("FileConsumerPreMoveTest");
+        let uri = dir.file_uri(option);
+        let pre_moved = dir.test_file(work);
+        let checked = pre_moved.clone();
+        let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+            let checked = checked.clone();
+            r.add(
+                from(&uri)
+                    .process_fn(move |_| {
+                        assert!(checked.exists(), "Pre move file should exist");
+                        Ok(())
+                    })
+                    .to("mock:result"),
+            );
+        })
+        .await;
+        for body in ["Hello World", "Hello Again World"] {
+            let mock = t.mock("mock:result");
+            mock.reset();
+            mock.expected_bodies_received([body]);
+            send(&t, &dir, "hello.txt", body).await;
+            mock.assert_is_satisfied().await;
+            if let Some(exists) = after {
+                support_wait(|| pre_moved.exists() == exists).await;
+                assert_eq!(exists, pre_moved.exists(), "{option}");
+            }
+        }
+    }
+}
+
+async fn support_wait(condition: impl Fn() -> bool) {
+    crate::support::await_until(std::time::Duration::from_secs(5), condition).await;
+}
+
+/// Port of `FileConsumeMaxMessagesPerPollTest`.
+#[tokio::test]
+async fn test_max_messages_per_poll() {
+    use camel_core::api::exchange_constants::BATCH_SIZE;
+    let dir = TestDirectory::new("FileConsumeMaxMessagesPerPollTest");
+    let uri = dir.file_uri("?initialDelay=0&delay=10&maxMessagesPerPoll=2");
+    let t = ContextTestSupport::new();
+    t.context
+        .add_routes(move |r: &mut Routes| {
+            r.add(
+                from(&uri)
+                    .route_id("foo")
+                    .auto_startup(false)
+                    .convert_body_to("String")
+                    .to("mock:result"),
+            );
+        })
+        .await
+        .unwrap();
+    t.context.start().await.unwrap();
+    let mock = t.mock("mock:result");
+    mock.expected_minimum_message_count(2);
+    mock.message_matches(0, exchange_property(BATCH_SIZE).is_equal_to(2));
+    mock.message_matches(1, exchange_property(BATCH_SIZE).is_equal_to(2));
+    send(&t, &dir, "bye.txt", "Bye World").await;
+    send(&t, &dir, "hello.txt", "Hello World").await;
+    send(&t, &dir, "godday.txt", "Godday World").await;
+    t.context.start_route("foo").await.unwrap();
+    mock.assert_is_satisfied().await;
+}

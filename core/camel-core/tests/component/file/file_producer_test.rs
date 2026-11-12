@@ -181,3 +181,90 @@ async fn test_produce_absolute_file() {
         .unwrap();
     mock.assert_is_satisfied().await;
 }
+
+/// Port of `FileProducerFileExistFailTest`.
+#[tokio::test]
+async fn test_file_exist_fail() {
+    let dir = TestDirectory::new("FileProducerFileExistFailTest");
+    let uri = dir.file_uri("?noop=true&initialDelay=0&delay=10");
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(from(&uri).convert_body_to("String").to("mock:result"));
+    })
+    .await;
+    let mock = t.mock("mock:result");
+    mock.expected_bodies_received(["Hello World"]);
+    mock.expected_file_exists(dir.test_file("hello.txt"), Some("Hello World"));
+    t.template
+        .send_body_and_header(&dir.file_uri(""), "Hello World", FILE_NAME, "hello.txt")
+        .await
+        .unwrap();
+    let e = t
+        .template
+        .send_body_and_header(
+            &dir.file_uri("?fileExist=Fail"),
+            "Bye World",
+            FILE_NAME,
+            "hello.txt",
+        )
+        .await
+        .unwrap_err();
+    let cause = crate::support::cause_of(&e);
+    assert!(cause.is(ErrorKind::GenericFileOperationFailed), "{e}");
+    assert_eq!(
+        Some(
+            format!(
+                "File already exist: {}/hello.txt. Cannot write new file.",
+                dir.path()
+            )
+            .as_str()
+        ),
+        cause.message()
+    );
+    mock.assert_is_satisfied().await;
+}
+
+/// Ports of `FileProducerFileExistAppendTest` (not the case appending `File` bodies) and
+/// `FileProducerFileExistOverrideNoFileBeforeTest`.
+#[tokio::test]
+async fn test_file_exist_append_and_override_no_file() {
+    for (first, option, expected) in [
+        (
+            Some("Hello World\n"),
+            "?fileExist=Append",
+            "Hello World\nBye World",
+        ),
+        (None, "?fileExist=Override", "Bye World"),
+    ] {
+        let dir = TestDirectory::new("FileProducerFileExistAppendTest");
+        let uri = dir.file_uri("?noop=true&initialDelay=0&delay=10");
+        let t = ContextTestSupport::new();
+        t.context
+            .add_routes(move |r: &mut Routes| {
+                r.add(
+                    from(&uri)
+                        .route_id("foo")
+                        .auto_startup(false)
+                        .convert_body_to("String")
+                        .to("mock:result"),
+                );
+            })
+            .await
+            .unwrap();
+        t.context.start().await.unwrap();
+        if let Some(body) = first {
+            t.template
+                .send_body_and_header(&dir.file_uri(""), body, FILE_NAME, "hello.txt")
+                .await
+                .unwrap();
+        }
+        let mock = t.mock("mock:result");
+        mock.expected_bodies_received([expected]);
+        mock.expected_file_exists(dir.test_file("hello.txt"), Some(expected));
+        t.template
+            .send_body_and_header(&dir.file_uri(option), "Bye World", FILE_NAME, "hello.txt")
+            .await
+            .unwrap();
+        t.context.start_route("foo").await.unwrap();
+        mock.assert_is_satisfied().await;
+    }
+}

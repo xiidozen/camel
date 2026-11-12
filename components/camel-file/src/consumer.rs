@@ -353,10 +353,19 @@ async fn process_file(
     endpoint: &Arc<FileEndpoint>,
     processor: &SharedProcessor,
     path: PathBuf,
+    batch: (usize, usize),
 ) -> CamelResult<()> {
     let Some((taken, mut exchange)) = begin(endpoint, &path)? else {
         return Ok(());
     };
+    // the batch of the poll (Java ScheduledBatchPollingConsumer)
+    let (index, size) = batch;
+    exchange.set_property(camel_api::exchange_constants::BATCH_INDEX, index as i64);
+    exchange.set_property(camel_api::exchange_constants::BATCH_SIZE, size as i64);
+    exchange.set_property(
+        camel_api::exchange_constants::BATCH_COMPLETE,
+        index + 1 == size,
+    );
     if let Err(e) = processor.process(&mut exchange).await {
         exchange.set_exception(Some(e));
     }
@@ -403,16 +412,18 @@ async fn poll(
     state: &State,
 ) -> CamelResult<usize> {
     let c = &endpoint.config;
+    let mut files = candidates(endpoint, filters)?;
+    if c.max_messages_per_poll > 0 {
+        files.truncate(c.max_messages_per_poll);
+    }
+    let size = files.len();
     let mut count = 0;
-    for path in candidates(endpoint, filters)? {
+    for (index, path) in files.into_iter().enumerate() {
         if state.stopped.load(Ordering::SeqCst) {
             break;
         }
-        if c.max_messages_per_poll > 0 && count >= c.max_messages_per_poll {
-            break;
-        }
         count += 1;
-        if let Err(e) = process_file(endpoint, processor, path).await {
+        if let Err(e) = process_file(endpoint, processor, path, (index, size)).await {
             log::warn!("Error processing file: {e}");
         }
     }
