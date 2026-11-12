@@ -3,7 +3,7 @@
 //! `FileConsumerDeleteAndFailureTest`, `FileConsumerDeleteAndMoveFailedTest` and
 //! `FromFileMoveFileIfProcessFailsTest`.
 
-use crate::support::{ContextTestSupport, TestDirectory};
+use crate::support::{await_until, ContextTestSupport, TestDirectory};
 use camel_core::api::error::ErrorType;
 use camel_core::api::exchange_constants::{
     FILE_LAST_MODIFIED, FILE_LENGTH, FILE_NAME, MESSAGE_TIMESTAMP,
@@ -2353,5 +2353,111 @@ async fn test_recursive_depth() {
         ),
     ] {
         consume("FileRecursiveDepthTest", option, &files, &expected, &[]).await;
+    }
+}
+
+/// Port of `PollEnrichHeaderPropagationTest`: the headers, properties and variables of the
+/// exchange are kept by a pollEnrich without strategy.
+#[tokio::test]
+async fn test_poll_enrich_header_propagation() {
+    let dir = TestDirectory::new("PollEnrichHeaderPropagationTest");
+    let uri = dir.file_uri("?fileName=file.txt");
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(
+            from("direct:start")
+                .set_header("foo", constant("bar"))
+                .set_header("customHeader", constant("customValue"))
+                .set_property("customProp", constant("cheese"))
+                .set_variable("myVar", constant("beer"))
+                .poll_enrich(&uri, 3000)
+                .convert_body_to("String")
+                .to("log:result?showAll=true")
+                .to("mock:result"),
+        );
+    })
+    .await;
+    let mock = t.mock("mock:result");
+    mock.expected_bodies_received(["Hello Camel from file"]);
+    mock.expected_header_received("foo", "bar");
+    mock.expected_header_received("customHeader", "customValue");
+    mock.expected_property_received("customProp", "cheese");
+    mock.expected_variable_received("myVar", "beer");
+    send(&t, &dir, "file.txt", "Hello Camel from file").await;
+    t.template
+        .send_body("direct:start", "trigger")
+        .await
+        .unwrap();
+    mock.assert_is_satisfied().await;
+}
+
+/// Ports of `FileMoveWithInMessageTest` and `FileMoveWithOutMessageTest`: two pollEnrich move
+/// their files, the route replacing the in (or setting the out) message.
+#[tokio::test]
+async fn test_move_with_in_and_out_message() {
+    for out in [false, true] {
+        move_with_message(out).await;
+    }
+}
+
+async fn move_with_message(out: bool) {
+    let dir = TestDirectory::new("FileMoveWithInMessageTest");
+    let uri = dir.file_uri("?move=archive");
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(
+            from("seda:triggerIn")
+                .poll_enrich(&uri, -1)
+                .poll_enrich(&uri, -1)
+                .process_fn(move |e| {
+                    // a new in message with the body and headers
+                    let mut msg = camel_core::api::message::Message::default();
+                    msg.set_body(e.message().body().clone());
+                    for (k, v) in e.message().headers().iter() {
+                        msg.set_header(k, v.clone());
+                    }
+                    if out {
+                        e.set_out(Some(msg));
+                    } else {
+                        *e.in_message_mut() = msg;
+                    }
+                    Ok(())
+                }),
+        );
+    })
+    .await;
+    send(&t, &dir, "hello1.txt", "Hello World1").await;
+    send(&t, &dir, "hello2.txt", "Hello World2").await;
+    t.template.send_body("seda:triggerIn", "").await.unwrap();
+    for f in ["archive/hello1.txt", "archive/hello2.txt"] {
+        let f = dir.test_file(f);
+        await_until(std::time::Duration::from_secs(10), || f.exists()).await;
+    }
+}
+
+/// Port of `FileConsumeCurrentDirTest` (a file of the working directory).
+#[tokio::test]
+async fn test_consume_current_dir() {
+    struct Remove(std::path::PathBuf);
+    impl Drop for Remove {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+    for (dir, body) in [(".", "Report 123"), ("./", "Report 456")] {
+        let name = format!(
+            "current-dir-{}-{}.txt",
+            std::process::id(),
+            body.len() + dir.len()
+        );
+        let _file = Remove(std::path::PathBuf::from(&name));
+        std::fs::write(&name, body).unwrap();
+        let uri = format!("file:{dir}?initialDelay=0&delay=10&noop=true&include={name}");
+        let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+            r.add(from(&uri).convert_body_to("String").to("mock:result"));
+        })
+        .await;
+        let mock = t.mock("mock:result");
+        mock.expected_bodies_received([body]);
+        mock.assert_is_satisfied().await;
+        t.context.stop().await.unwrap();
     }
 }

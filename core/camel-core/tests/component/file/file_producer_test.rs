@@ -827,3 +827,59 @@ async fn test_producer_done_file_name() {
     assert!(dir.test_file("route.txt").exists());
     assert!(dir.test_file("done-route.txt").exists());
 }
+
+/// Ports of `BeanToFileTest` and `ToFileRouteTest` (a bean method and a processor bean before
+/// the file producer).
+#[tokio::test]
+async fn test_bean_and_processor_to_file() {
+    use camel_bean::{processor_value, MethodBean};
+    let dir = TestDirectory::new("BeanToFileTest");
+    let t = ContextTestSupport::new();
+    let registry = t.context.registry().unwrap();
+    let my_bean = MethodBean::new("MyBean")
+        .method("doSomething", |inv| {
+            let input = inv.parameter_as::<String>(0)?.unwrap_or_default();
+            Ok(Value::from(format!("Bye {input}")))
+        })
+        .into_value();
+    registry.bind("myBean", my_bean).unwrap();
+    let report = processor_value(std::sync::Arc::new(
+        camel_core::api::processor::processor_fn(|e: &mut Exchange| {
+            let body = e.message().body().to_string();
+            e.message_mut().set_body(body);
+            e.message_mut().set_header(FILE_NAME, "report.txt");
+            Ok(())
+        }),
+    ));
+    registry.bind("processReport", report).unwrap();
+    let (a, b) = (dir.file_uri("?fileExist=Override"), dir.file_uri(""));
+    t.context
+        .add_routes(move |r: &mut Routes| {
+            r.add(
+                from("direct:in")
+                    .to("bean:myBean")
+                    .set_header(FILE_NAME, constant("bean.txt"))
+                    .to(&a)
+                    .to("mock:result"),
+            );
+            r.add(
+                from("direct:reports")
+                    .process_ref("processReport")
+                    .to(&b)
+                    .to("mock:result"),
+            );
+        })
+        .await
+        .unwrap();
+    t.context.start().await.unwrap();
+    let mock = t.mock("mock:result");
+    mock.expected_message_count(2);
+    mock.expected_file_exists(dir.test_file("bean.txt"), Some("Bye World"));
+    mock.expected_file_exists(dir.test_file("report.txt"), None);
+    t.template.send_body("direct:in", "World").await.unwrap();
+    t.template
+        .send_body("direct:reports", "This is a great report")
+        .await
+        .unwrap();
+    mock.assert_is_satisfied().await;
+}
