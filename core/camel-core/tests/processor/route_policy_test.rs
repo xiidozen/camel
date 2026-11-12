@@ -266,3 +266,31 @@ async fn test_route_policy_factory() {
         .unwrap();
     t.assert_mock_endpoints_satisfied().await;
 }
+
+/// Port of `throttle.ThrottlingInflightRoutePolicyTest`.
+#[tokio::test]
+async fn test_throttling_inflight_route_policy() {
+    use camel_core::support::throttling::ThrottlingInflightRoutePolicy;
+    let url = "seda:foo?concurrentConsumers=20";
+    let policy: SharedRoutePolicy =
+        Arc::new(ThrottlingInflightRoutePolicy::new().with_max_inflight_exchanges(10));
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(
+            from(url)
+                .route_policy(policy.clone())
+                .delay(constant(3))
+                .to("log:foo?groupSize=10")
+                .to("mock:result"),
+        );
+    })
+    .await;
+    let mock = t.mock("mock:result");
+    mock.expected_minimum_message_count(90);
+    for i in 0..100 {
+        t.template
+            .send_body(url, format!("Message {i}"))
+            .await
+            .unwrap();
+    }
+    mock.assert_is_satisfied().await;
+}

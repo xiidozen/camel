@@ -20,6 +20,7 @@ pub mod pattern_helper;
 pub mod resource_helper;
 pub mod route_policy_support;
 pub mod simple_registry;
+pub mod throttling;
 pub mod tokenizer;
 pub mod type_conversion;
 pub mod uuid_generators;
