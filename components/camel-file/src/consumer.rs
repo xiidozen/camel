@@ -1,6 +1,7 @@
 //! The file consumer (Java `FileConsumer`, `GenericFileConsumer` and the process strategies
 //! of `GenericFileOnCompletion`): polls the starting directory and routes each file.
 
+use crate::read_lock::{self, ReadLock};
 use crate::{operation_failed, FileEndpoint, GenericFile, SortBy};
 use camel_api::endpoint::{Consumer, Endpoint, SharedEndpoint};
 use camel_api::error::{CamelError, CamelResult, ErrorKind};
@@ -240,14 +241,16 @@ pub(crate) struct Taken {
     key: String,
     idempotent_key: String,
     idempotent: bool,
+    lock: ReadLock,
 }
 
 /// Takes the file for routing (Java `GenericFileConsumer.processExchange` before the routing):
 /// the idempotent check, the preMove, the exchange with the headers and the body; `None` when
 /// the file was consumed before.
-pub(crate) fn begin(
+pub(crate) async fn begin(
     endpoint: &Arc<FileEndpoint>,
     path: &Path,
+    stopped: Option<&AtomicBool>,
 ) -> CamelResult<Option<(Taken, Exchange)>> {
     let c = &endpoint.config;
     let file = GenericFile::of(&c.directory, path)
@@ -284,13 +287,47 @@ pub(crate) fn begin(
         );
         return Ok(None);
     }
-    match prepare(endpoint, file, &key, &idempotent_key, idempotent) {
-        Ok(r) => Ok(Some(r)),
+    let abort = || {
+        endpoint.in_progress.lock().unwrap().remove(&key);
+        if idempotent {
+            endpoint.idempotent.remove(&idempotent_key);
+        }
+    };
+    // the exclusive read lock (Java processStrategy.begin)
+    let lock = match read_lock::acquire(endpoint, &file, stopped).await {
+        Ok(Some(lock)) => lock,
+        Ok(None) => {
+            log::debug!(
+                "{} cannot begin processing file: {} as the read lock was not acquired",
+                endpoint.uri,
+                path.display()
+            );
+            abort();
+            return Ok(None);
+        }
         Err(e) => {
-            endpoint.in_progress.lock().unwrap().remove(&key);
-            if idempotent {
-                endpoint.idempotent.remove(&idempotent_key);
-            }
+            abort();
+            return Err(e);
+        }
+    };
+    // the file as locked (a changed file has its final length)
+    let prepared = GenericFile::of(&c.directory, path)
+        .map_err(|e| operation_failed(format!("Cannot read file: {}: {e}", path.display())))
+        .and_then(|file| prepare(endpoint, file));
+    match prepared {
+        Ok((file, exchange)) => Ok(Some((
+            Taken {
+                file,
+                key,
+                idempotent_key,
+                idempotent,
+                lock,
+            },
+            exchange,
+        ))),
+        Err(e) => {
+            lock.release();
+            abort();
             Err(e)
         }
     }
@@ -300,12 +337,8 @@ pub(crate) fn begin(
 fn prepare(
     endpoint: &Arc<FileEndpoint>,
     mut file: GenericFile,
-    key: &str,
-    idempotent_key: &str,
-    idempotent: bool,
-) -> CamelResult<(Taken, Exchange)> {
+) -> CamelResult<(GenericFile, Exchange)> {
     let c = &endpoint.config;
-    let key = key.to_string();
     let mut exchange = endpoint.create_exchange();
     file.populate_headers(&mut exchange);
     if let Some(pre) = &c.pre_move {
@@ -317,15 +350,7 @@ fn prepare(
     }
     let body = read_body(&file.file_path, c.charset.as_deref())?;
     exchange.message_mut().set_body(body);
-    Ok((
-        Taken {
-            file,
-            key,
-            idempotent_key: idempotent_key.to_string(),
-            idempotent,
-        },
-        exchange,
-    ))
+    Ok((file, exchange))
 }
 
 /// Applies the process strategy after the routing (Java `GenericFileOnCompletion`): on
@@ -336,6 +361,14 @@ pub(crate) fn commit(
     taken: &Taken,
     exchange: &mut Exchange,
 ) -> CamelResult<()> {
+    let result = complete(endpoint, taken, exchange);
+    // the read lock is released last (Java GenericFileProcessStrategySupport)
+    taken.lock.release();
+    result
+}
+
+/// The process strategy of the done file: commit or rollback.
+fn complete(endpoint: &FileEndpoint, taken: &Taken, exchange: &mut Exchange) -> CamelResult<()> {
     let c = &endpoint.config;
     let file = &taken.file;
     endpoint.in_progress.lock().unwrap().remove(&taken.key);
@@ -387,8 +420,9 @@ async fn process_file(
     processor: &SharedProcessor,
     path: PathBuf,
     batch: (usize, usize),
+    state: &State,
 ) -> CamelResult<()> {
-    let Some((taken, mut exchange)) = begin(endpoint, &path)? else {
+    let Some((taken, mut exchange)) = begin(endpoint, &path, Some(&state.stopped)).await? else {
         return Ok(());
     };
     // the batch of the poll (Java ScheduledBatchPollingConsumer)
@@ -548,7 +582,7 @@ async fn poll(
             break;
         }
         count += 1;
-        if let Err(e) = process_file(endpoint, processor, path, (index, size)).await {
+        if let Err(e) = process_file(endpoint, processor, path, (index, size), state).await {
             log::warn!("Error processing file: {e}");
         }
     }
@@ -622,6 +656,7 @@ impl Service for FileConsumer {
                 }
             }
             let filters = Filters::of(&self.endpoint)?;
+            read_lock::delete_orphan_lock_files(&self.endpoint);
             let mut task = self.task.lock().unwrap();
             if task.is_some() {
                 return Ok(());
@@ -695,10 +730,10 @@ impl FilePollingConsumer {
         FilePollingConsumer { endpoint }
     }
 
-    fn poll_one(&self) -> CamelResult<Option<Exchange>> {
+    async fn poll_one(&self) -> CamelResult<Option<Exchange>> {
         let filters = Filters::of(&self.endpoint)?;
         for path in candidates(&self.endpoint, &filters)? {
-            if let Some((taken, mut exchange)) = begin(&self.endpoint, &path)? {
+            if let Some((taken, mut exchange)) = begin(&self.endpoint, &path, None).await? {
                 exchange.add_on_completion(Arc::new(FileCompletion {
                     endpoint: self.endpoint.clone(),
                     taken,
@@ -714,7 +749,7 @@ impl FilePollingConsumer {
         deadline: Option<tokio::time::Instant>,
     ) -> CamelResult<Option<Exchange>> {
         loop {
-            if let Some(e) = self.poll_one()? {
+            if let Some(e) = self.poll_one().await? {
                 return Ok(Some(e));
             }
             let wait = Duration::from_millis(self.endpoint.config.delay.clamp(1, 100));
@@ -738,7 +773,7 @@ impl camel_api::endpoint::PollingConsumer for FilePollingConsumer {
     }
 
     fn receive_no_wait(&self) -> BoxFuture<'_, CamelResult<Option<Exchange>>> {
-        Box::pin(std::future::ready(self.poll_one()))
+        Box::pin(self.poll_one())
     }
 
     fn receive_timeout(&self, timeout: Duration) -> BoxFuture<'_, CamelResult<Option<Exchange>>> {

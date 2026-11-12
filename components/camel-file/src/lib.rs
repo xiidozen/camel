@@ -27,9 +27,11 @@
 
 mod consumer;
 mod producer;
+pub mod read_lock;
 
 pub use consumer::{FileConsumer, FilePollingConsumer};
 pub use producer::{generated_file_name, FileProducer};
+pub use read_lock::{ReadLockKind, ReadLockOptions};
 
 use camel_api::context::{CamelContext, StandaloneContext};
 use camel_api::endpoint::{Component, Endpoint, SharedConsumer, SharedEndpoint, SharedProducer};
@@ -176,8 +178,8 @@ pub struct FileConfiguration {
     pub include_hidden_files: bool,
     /// Whether the hidden directories (starting with a dot) are polled (default `false`).
     pub include_hidden_dirs: bool,
-    /// The read lock (only `none` is available).
-    pub read_lock: String,
+    /// The read lock of the consumed files (`readLock` and the `readLock*` options).
+    pub read_lock: ReadLockOptions,
     /// The sort groups of the files of a poll (`sortBy`; the listing is by name).
     pub sort_by: Vec<SortBy>,
     /// Whether `maxMessagesPerPoll` limits the files before sorting them (default `true`).
@@ -274,7 +276,7 @@ impl FileConfiguration {
             directory_must_exist: false,
             include_hidden_files: false,
             include_hidden_dirs: false,
-            read_lock: "none".into(),
+            read_lock: ReadLockOptions::default(),
             sort_by: Vec::new(),
             eager_max_messages_per_poll: true,
         }
@@ -402,12 +404,38 @@ impl Component for FileComponent {
             c.include_hidden_dirs = v;
         }
         if let Some(v) = param::<String>(parameters, "readLock")? {
-            if v != "none" {
-                return Err(CamelError::illegal_argument(format!(
-                    "The readLock {v} is not available in the Rust port yet (only none)"
-                )));
-            }
-            c.read_lock = v;
+            c.read_lock.kind = v.parse()?;
+        }
+        c.read_lock.timeout = millis(parameters, "readLockTimeout", c.read_lock.timeout)?;
+        c.read_lock.check_interval = millis(
+            parameters,
+            "readLockCheckInterval",
+            c.read_lock.check_interval,
+        )?;
+        if let Some(v) = param::<i64>(parameters, "readLockMinLength")? {
+            c.read_lock.min_length = v.max(0) as u64;
+        }
+        c.read_lock.min_age = millis(parameters, "readLockMinAge", c.read_lock.min_age)?;
+        if let Some(v) = param(parameters, "readLockMarkerFile")? {
+            c.read_lock.marker_file = v;
+        }
+        if let Some(v) = param(parameters, "readLockDeleteOrphanLockFiles")? {
+            c.read_lock.delete_orphan_lock_files = v;
+        }
+        if let Some(v) = param::<String>(parameters, "readLockLoggingLevel")? {
+            c.read_lock.logging_level = match v.to_ascii_uppercase().as_str() {
+                "OFF" => None,
+                "TRACE" => Some(log::Level::Trace),
+                "DEBUG" => Some(log::Level::Debug),
+                "INFO" => Some(log::Level::Info),
+                "WARN" => Some(log::Level::Warn),
+                "ERROR" => Some(log::Level::Error),
+                other => {
+                    return Err(CamelError::illegal_argument(format!(
+                        "Invalid readLockLoggingLevel: {other}"
+                    )))
+                }
+            };
         }
         if let Some(sort) = param::<String>(parameters, "sortBy")? {
             c.sort_by = SortBy::parse(&sort)?;
