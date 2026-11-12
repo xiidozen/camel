@@ -140,6 +140,12 @@ impl From<SharedPredicate> for ExpressionDefinition {
     }
 }
 
+impl From<camel_support::tokenizer::TokenizeExpression> for ExpressionDefinition {
+    fn from(t: camel_support::tokenizer::TokenizeExpression) -> Self {
+        ExpressionDefinition::Expression(t.into_expression())
+    }
+}
+
 impl From<ValueBuilder> for ExpressionDefinition {
     fn from(v: ValueBuilder) -> Self {
         ExpressionDefinition::Expression(v.expression())

@@ -19,5 +19,6 @@ pub mod object_helper;
 pub mod pattern_helper;
 pub mod resource_helper;
 pub mod simple_registry;
+pub mod tokenizer;
 pub mod type_conversion;
 pub mod uuid_generators;

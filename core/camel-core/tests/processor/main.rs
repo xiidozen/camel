@@ -32,6 +32,7 @@ mod routing_slip_test;
 mod sampling_throttler_test;
 mod sort_step_script_test;
 mod split_parallel_test;
+mod split_tokenizer_test;
 mod splitter_misc_test;
 mod splitter_test;
 mod threads_test;

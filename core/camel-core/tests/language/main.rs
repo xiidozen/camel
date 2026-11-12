@@ -20,3 +20,4 @@ mod simple_predicate_in_braces_test;
 mod simple_string_math_date_functions_test;
 mod simple_syntax_hints_test;
 mod simple_test;
+mod tokenizer_test;

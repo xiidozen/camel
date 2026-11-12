@@ -68,6 +68,30 @@ pub use camel_support::builder::{
     ValueBuilder,
 };
 
+pub use camel_support::tokenizer::TokenizeExpression;
+
+/// Splits the body by the token (Java `tokenize(",")`); see [`TokenizeExpression`] for the
+/// options (`group`, `skip_first`, `source`, ...).
+pub fn tokenize(token: &str) -> TokenizeExpression {
+    TokenizeExpression::token(token)
+}
+
+/// Splits the body by the regular expression (Java `tokenize(regex, true)`).
+pub fn tokenize_regex(regex: &str) -> TokenizeExpression {
+    TokenizeExpression::regex(regex)
+}
+
+/// The texts of the body between the start and end tokens (Java `tokenizePair`).
+pub fn tokenize_pair(start: &str, end: &str, include_tokens: bool) -> TokenizeExpression {
+    TokenizeExpression::pair(start, end, include_tokens)
+}
+
+/// The XML elements of the tag in the body (Java `tokenizeXML(tag)` and
+/// `tokenizeXML(tag, inheritNamespaceTag)`).
+pub fn tokenize_xml(tag: &str, inherit_namespace_tag: Option<&str>) -> TokenizeExpression {
+    TokenizeExpression::xml(tag, inherit_namespace_tag)
+}
+
 /// An expression in the simple language (Java `simple("${body}")`).
 pub fn simple(expression: &str) -> ExpressionDefinition {
     ExpressionDefinition::language("simple", expression)

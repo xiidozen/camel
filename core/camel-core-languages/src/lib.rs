@@ -73,6 +73,23 @@ name_language!(
     variable_expression
 );
 
+/// The tokenize language (Java `TokenizeLanguage`): the text is the token splitting the body
+/// (the other options are set with [`camel_support::tokenizer::TokenizeExpression`]).
+#[derive(Default)]
+pub struct TokenizeLanguage;
+
+impl Language for TokenizeLanguage {
+    fn create_predicate(&self, expression: &str) -> CamelResult<SharedPredicate> {
+        Ok(Arc::new(ExpressionPredicate(
+            self.create_expression(expression)?,
+        )))
+    }
+
+    fn create_expression(&self, expression: &str) -> CamelResult<SharedExpression> {
+        Ok(camel_support::tokenizer::TokenizeExpression::token(expression).into_expression())
+    }
+}
+
 /// A language factory: the language name and how to create it.
 pub type LanguageEntry = (&'static str, fn() -> Arc<dyn Language>);
 
@@ -86,6 +103,7 @@ pub fn core_languages() -> Vec<LanguageEntry> {
         ("header", || Arc::new(HeaderLanguage)),
         ("exchangeProperty", || Arc::new(ExchangePropertyLanguage)),
         ("variable", || Arc::new(VariableLanguage)),
+        ("tokenize", || Arc::new(TokenizeLanguage)),
     ]
 }
 
