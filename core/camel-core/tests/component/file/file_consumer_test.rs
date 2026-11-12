@@ -3300,3 +3300,56 @@ async fn test_ant_filter_beans() {
         mock.assert_is_satisfied().await;
     }
 }
+
+/// Ports of `FileMarkerFileRecursiveFilterDeleteOldLockFilesTest` and
+/// `FileMarkerFileRecursiveFilterDeleteOldLockFilesIncludeTest`: the filtered files and their
+/// lock files are left.
+#[tokio::test]
+async fn test_marker_file_recursive_filter_old_lock_files() {
+    use camel_core::api::exchange_constants::FILE_NAME_ONLY;
+    for (option, hi_name) in [
+        ("&filter=#myFilter", "hi.txt"),
+        ("&include=.*(hello.txt|bye.txt|gooday.txt)$", "gooday.txt"),
+    ] {
+        let dir = TestDirectory::new("FileMarkerFileRecursiveFilterDeleteOldLockFilesTest");
+        let filter: camel_file::SharedFileFilter =
+            std::sync::Arc::new(|f: &camel_file::GenericFile| {
+                !(f.directory && f.relative_file_path == "bar")
+            });
+        let t = with_file_beans(vec![("myFilter", camel_file::filter_value(filter))]);
+        let uri = dir.file_uri(&format!(
+            "?initialDelay=0&delay=10&recursive=true&sortBy=file:name{option}"
+        ));
+        t.context
+            .add_routes(move |r: &mut Routes| {
+                r.add(
+                    from(&uri)
+                        .route_id("foo")
+                        .auto_startup(false)
+                        .convert_body_to("String")
+                        .to("mock:result"),
+                );
+            })
+            .await
+            .unwrap();
+        t.context.start().await.unwrap();
+        let mock = t.mock("mock:result");
+        mock.expected_bodies_received(["Bye World", "Hi World"]);
+        mock.message_matches(0, header(FILE_NAME_ONLY).is_equal_to("bye.txt"));
+        mock.message_matches(1, header(FILE_NAME_ONLY).is_equal_to(hi_name));
+        mock.expected_file_exists(dir.test_file("bar/davs.txt"), None);
+        mock.expected_file_exists(dir.test_file("bar/davs.txt.camelLock"), None);
+        for (name, body) in [
+            ("hello.txt.camelLock", "locked"),
+            ("bye.txt", "Bye World"),
+            ("foo/gooday.txt.camelLock", "locked"),
+            (&format!("foo/{hi_name}") as &str, "Hi World"),
+            ("bar/davs.txt.camelLock", "locked"),
+            ("bar/davs.txt", "Davs World"),
+        ] {
+            send(&t, &dir, name, body).await;
+        }
+        t.context.start_route("foo").await.unwrap();
+        mock.assert_is_satisfied().await;
+    }
+}
