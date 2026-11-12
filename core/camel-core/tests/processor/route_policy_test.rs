@@ -294,3 +294,53 @@ async fn test_throttling_inflight_route_policy() {
     }
     mock.assert_is_satisfied().await;
 }
+
+/// Ports of `impl.DurationRoutePolicyMaxMessagesTest`, `impl.DurationRoutePolicyMaxSecondsTest`
+/// and `impl.DurationRoutePolicyFactoryTest`: the route is stopped.
+#[tokio::test]
+async fn test_duration_route_policy() {
+    use camel_core::engine::duration_route_policy::{
+        DurationRoutePolicy, DurationRoutePolicyFactory,
+    };
+    for (max_messages, max_seconds, factory, minimum) in
+        [(5, 0, false, 5), (0, 2, false, 1), (25, 4, true, 10)]
+    {
+        let t = ContextTestSupport::new();
+        if factory {
+            t.context
+                .add_route_policy_factory(Arc::new(DurationRoutePolicyFactory {
+                    max_messages,
+                    max_seconds,
+                    ..Default::default()
+                }));
+        }
+        let policy: SharedRoutePolicy = Arc::new(DurationRoutePolicy::new(
+            &t.context,
+            max_messages,
+            max_seconds,
+        ));
+        t.context
+            .add_routes(move |r: &mut Routes| {
+                let route = from("timer:foo?delay=100&period=100").route_id("foo");
+                let route = if factory {
+                    route
+                } else {
+                    route.route_policy(policy.clone())
+                };
+                r.add(route.to("mock:foo"));
+            })
+            .await
+            .unwrap();
+        t.context.start().await.unwrap();
+        assert!(t.context.route_status("foo").unwrap().is_started());
+        let mock = t.mock("mock:foo");
+        mock.expected_minimum_message_count(minimum);
+        mock.set_result_wait_time(10000);
+        mock.assert_is_satisfied().await;
+        let context = t.context.clone();
+        crate::support::await_until(std::time::Duration::from_secs(10), move || {
+            context.route_status("foo").unwrap().is_stopped()
+        })
+        .await;
+    }
+}

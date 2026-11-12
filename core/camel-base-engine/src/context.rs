@@ -167,6 +167,12 @@ impl DefaultCamelContext {
         r
     }
 
+    /// A weak reference to this context (for the services holding it without keeping it
+    /// alive).
+    pub fn downgrade(&self) -> Weak<DefaultCamelContext> {
+        self.this.clone()
+    }
+
     /// This context as a shared `CamelContext` (what endpoints and exchanges refer to).
     pub fn as_shared(&self) -> Arc<dyn CamelContext> {
         self.this

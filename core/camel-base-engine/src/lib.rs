@@ -34,5 +34,6 @@
 
 pub mod consumer_template;
 pub mod context;
+pub mod duration_route_policy;
 pub mod producer_template;
 pub mod route;
