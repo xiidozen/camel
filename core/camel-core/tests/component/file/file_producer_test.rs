@@ -115,3 +115,49 @@ async fn test_header_file_name_produced() {
         dir.read("target/FileHeaderFileNameProducedTest.txt")
     );
 }
+
+/// Port of `FileProducerFileExistAppendNoFileBeforeTest`.
+#[tokio::test]
+async fn test_append_no_file_before() {
+    let dir = TestDirectory::new("FileProducerFileExistAppendNoFileBeforeTest");
+    let uri = dir.file_uri("?noop=true&initialDelay=100&delay=10");
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(from(&uri).convert_body_to("String").to("mock:result"));
+    })
+    .await;
+    let mock = t.mock("mock:result");
+    mock.expected_bodies_received(["Bye World"]);
+    mock.expected_file_exists(dir.test_file("hello.txt"), Some("Bye World"));
+    t.template
+        .send_body_and_header(
+            &dir.file_uri("?fileExist=Append"),
+            "Bye World",
+            FILE_NAME,
+            "hello.txt",
+        )
+        .await
+        .unwrap();
+    mock.assert_is_satisfied().await;
+}
+
+/// Port of `FileProduceGeneratedFileNameTest`.
+#[tokio::test]
+async fn test_generated_file_name() {
+    let dir = TestDirectory::new("FileProduceGeneratedFileNameTest");
+    let uri = dir.file_uri("");
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(from("direct:a").to(&uri));
+    })
+    .await;
+    let mut exchange = t
+        .template
+        .create_exchange("direct:a", ExchangePattern::InOnly)
+        .unwrap();
+    exchange.message_mut().set_body("Hello World");
+    let id = camel_file::generated_file_name(&exchange);
+    t.template.send("direct:a", exchange).await.unwrap();
+    assert!(
+        dir.test_file(&id).exists(),
+        "The generated file should exists: {id}"
+    );
+}

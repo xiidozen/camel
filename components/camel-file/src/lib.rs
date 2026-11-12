@@ -29,7 +29,7 @@ mod consumer;
 mod producer;
 
 pub use consumer::FileConsumer;
-pub use producer::FileProducer;
+pub use producer::{generated_file_name, FileProducer};
 
 use camel_api::context::{CamelContext, StandaloneContext};
 use camel_api::endpoint::{Component, Endpoint, SharedConsumer, SharedEndpoint, SharedProducer};

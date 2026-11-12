@@ -159,3 +159,99 @@ async fn test_move_file_if_process_fails() {
     send(&t, &dir, "hello.txt", "Hello World").await;
     mock.assert_is_satisfied().await;
 }
+
+/// Ports of `FileConsumeNoopIdempotentEnabledTest`, `FileConsumeNoopIdempotentAutoTest` and
+/// `FileConsumeNoopIdempotentDisabledTest`.
+#[tokio::test]
+async fn test_noop_idempotent() {
+    for (option, minimum) in [
+        ("?noop=true&idempotent=true&initialDelay=0&delay=10", None),
+        ("?initialDelay=0&delay=10&noop=true", None),
+        (
+            "?initialDelay=0&delay=10&noop=true&idempotent=false",
+            Some(2),
+        ),
+    ] {
+        let dir = TestDirectory::new("FileConsumeNoopIdempotentTest");
+        let uri = dir.file_uri(option);
+        let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+            r.add(from(&uri).convert_body_to("String").to("mock:result"));
+        })
+        .await;
+        let mock = t.mock("mock:result");
+        match minimum {
+            Some(n) => mock.expected_minimum_message_count(n),
+            None => mock.expected_message_count(1),
+        }
+        send(&t, &dir, "hello.txt", "Hello World").await;
+        if minimum.is_none() {
+            // more polls do not consume the file again
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        mock.assert_is_satisfied().await;
+        assert!(dir.test_file("hello.txt").exists());
+    }
+}
+
+/// Port of `FileConsumerFileNameFilterTest`.
+#[tokio::test]
+async fn test_file_name_filter() {
+    let dir = TestDirectory::new("FileConsumerFileNameFilterTest");
+    let uri = dir.file_uri("?initialDelay=0&delay=10&fileName=${file:onlyname.noext}.txt");
+    let t = ContextTestSupport::new();
+    t.context
+        .add_routes(move |r: &mut Routes| {
+            r.add(
+                from(&uri)
+                    .route_id("foo")
+                    .auto_startup(false)
+                    .to("mock:txt"),
+            );
+        })
+        .await
+        .unwrap();
+    t.context.start().await.unwrap();
+    t.mock("mock:txt")
+        .expected_bodies_received_in_any_order(["Hello World", "Bye World"]);
+    send(&t, &dir, "hello.txt", "Hello World").await;
+    send(&t, &dir, "customer.xml", "<customer>123</customer>").await;
+    send(&t, &dir, "book.xml", "<book>Camel Rocks</book>").await;
+    send(&t, &dir, "bye.txt", "Bye World").await;
+    t.context.start_route("foo").await.unwrap();
+    t.assert_mock_endpoints_satisfied().await;
+}
+
+/// Port of `FileConsumeSingleDirectoryOnlyTest`.
+#[tokio::test]
+async fn test_single_directory_only() {
+    let dir = TestDirectory::new("FileConsumeSingleDirectoryOnlyTest");
+    let uri = dir.file_uri("?recursive=false&delete=true&initialDelay=0&delay=10");
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(from(&uri).convert_body_to("String").to("mock:result"));
+    })
+    .await;
+    t.mock("mock:result")
+        .expected_bodies_received_in_any_order(["Hello World", "Bye World"]);
+    send(&t, &dir, "2008/report2008.txt", "2008 Report").await;
+    send(&t, &dir, "report.txt", "Hello World").await;
+    send(&t, &dir, "report2.txt", "Bye World").await;
+    t.assert_mock_endpoints_satisfied().await;
+}
+
+/// Port of `FileConsumerConsumedFileNameTest`.
+#[tokio::test]
+async fn test_consumed_file_name() {
+    use camel_core::api::exchange_constants::FILE_NAME_CONSUMED;
+    let dir = TestDirectory::new("FileConsumerConsumedFileNameTest");
+    let uri = dir.file_uri("?initialDelay=0&delay=10");
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(from(&uri).to("mock:result"));
+    })
+    .await;
+    let mock = t.mock("mock:result");
+    mock.expected_message_count(1);
+    mock.message_matches(0, header(FILE_NAME).is_equal_to("hello.123.txt"));
+    mock.message_matches(0, header(FILE_NAME_CONSUMED).is_equal_to("hello.123.txt"));
+    send(&t, &dir, "hello.123.txt", "Hello World").await;
+    mock.assert_is_satisfied().await;
+}

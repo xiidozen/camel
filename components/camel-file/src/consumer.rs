@@ -212,14 +212,19 @@ fn rename(from: &Path, to: &Path) -> CamelResult<()> {
     Ok(())
 }
 
-/// Whether the file of the consumer is the only file named by the `fileName` option.
-fn named(endpoint: &FileEndpoint, file_name_only: &str) -> CamelResult<bool> {
+/// Whether the file matches the `fileName` option (Java `FileConsumer.isMatched`): the
+/// expression is evaluated with the headers of the file, and must give its name.
+fn named(endpoint: &FileEndpoint, path: &Path) -> CamelResult<bool> {
     let Some(expr) = &endpoint.config.file_name else {
         return Ok(true);
     };
+    let Ok(file) = GenericFile::of(&endpoint.config.directory, path) else {
+        return Ok(false);
+    };
     let mut e = endpoint.create_exchange();
+    file.populate_headers(&mut e);
     let name = endpoint.expression(expr)?.evaluate_mut(&mut e)?.to_string();
-    Ok(name == file_name_only)
+    Ok(name == file.file_name_only() || name == file.relative_file_path)
 }
 
 /// Routes one file and applies the process strategy (Java `GenericFileOnCompletion`).
@@ -324,7 +329,7 @@ async fn poll(
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        if !filters.matches(&name) || !named(endpoint, &name)? {
+        if !filters.matches(&name) || !named(endpoint, &path)? {
             continue;
         }
         count += 1;

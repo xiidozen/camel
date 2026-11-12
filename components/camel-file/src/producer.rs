@@ -65,15 +65,7 @@ impl FileProducer {
         };
         let name = match name {
             Some(n) => n,
-            None => {
-                // Java getGeneratedFileName: the sanitized message id
-                let id = exchange
-                    .message()
-                    .message_id()
-                    .unwrap_or(exchange.exchange_id())
-                    .to_string();
-                id.replace([':', '/', '\\'], "-")
-            }
+            None => generated_file_name(exchange),
         };
         let answer = format!("{base}{name}");
         if c.jail_starting_directory {
@@ -267,6 +259,16 @@ impl FileProducer {
             .set_header(FILE_NAME_PRODUCED, target);
         Ok(())
     }
+}
+
+/// The name of a file written without a name (Java `getGeneratedFileName`): the message id,
+/// sanitized.
+pub fn generated_file_name(exchange: &Exchange) -> String {
+    exchange
+        .message()
+        .message_id()
+        .unwrap_or(exchange.exchange_id())
+        .replace([':', '/', '\\'], "-")
 }
 
 /// The bytes of the text in the charset (UTF-8 by default, ISO-8859-1/US-ASCII as one byte per
