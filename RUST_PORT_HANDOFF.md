@@ -144,9 +144,14 @@ Crates live **in the directory of the Maven module they replace** (`core/camel-a
   `context.set_message_history(true)` is set before the routes are added; dumped by
   `camel_support::message_helper::dump_message_history_stacktrace` (simple `${messageHistory}`, exhausted
   error logs).
-- **Next:** the rest of the simple tests (`SimpleTest` cases, messageAs), then the pending pieces
-  of camel-main (component options from properties) and of the DSLs (rest, route templates, route
-  configurations).
+- **Next:** the file component (`components/camel-file`, 243 tests in `core/camel-core/.../component/file`): new
+  crate `camel-file` modelled on `camel-timer` (component, endpoint options, `GenericFile` headers `CamelFile*` the
+  simple `${file:..}` functions read, producer: fileName header/option, fileExist Override/Append/Fail/Ignore/Move/
+  TryRename, tempPrefix/tempFileName, autoCreate, flatten, jail; polling consumer: initialDelay/delay, noop, delete,
+  move/preMove/moveFailed, include/exclude, recursive, idempotent, sortBy, maxMessagesPerPoll, read locks), registered
+  in `camel_core::register_core_components`; tests use a per-test temp directory (Java `fileUri()`/`testFile()`).
+  Then the rest of the simple tests (`SimpleTest` cases, messageAs), the xpath language, camel-main component options.
+- Commit only when `etc/rust/check.sh` passes (chain the commit on its exit status).
 - Java files still present in `core/camel-api/src/main/java` are the ones not ported yet.
 - Everything else in the repository: **not started** (status `todo` in the backlog).
 
