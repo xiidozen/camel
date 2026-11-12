@@ -40,6 +40,7 @@ mod splitter_misc_test;
 mod splitter_test;
 mod threads_test;
 mod to_dynamic_test;
+mod to_variable_test;
 mod try_processor_test;
 mod validate_test;
 mod wire_tap_misc_test;

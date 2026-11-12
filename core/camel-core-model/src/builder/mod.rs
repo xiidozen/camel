@@ -173,6 +173,20 @@ pub trait Dsl: Sized {
         self.eip(Eip::To {
             uri: uri.to_string(),
             pattern: None,
+            variable_send: None,
+            variable_receive: None,
+        })
+    }
+
+    /// Sends to the endpoint the value of the variable `send` as body (if any), and stores the
+    /// reply in the variable `receive` (its body, and its headers as `header:receive.name`)
+    /// instead of the message (Java `.toV(uri, variableSend, variableReceive)`).
+    fn to_v(self, uri: &str, send: Option<&str>, receive: Option<&str>) -> Self {
+        self.eip(Eip::To {
+            uri: uri.to_string(),
+            pattern: None,
+            variable_send: send.map(str::to_string),
+            variable_receive: receive.map(str::to_string),
         })
     }
 
@@ -181,6 +195,8 @@ pub trait Dsl: Sized {
         self.eip(Eip::To {
             uri: uri.to_string(),
             pattern: Some(pattern),
+            variable_send: None,
+            variable_receive: None,
         })
     }
 

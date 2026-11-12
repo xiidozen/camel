@@ -66,6 +66,42 @@ pub fn prepare_out_to_in(exchange: &mut Exchange) {
     }
 }
 
+/// Whether the reply of a sending is stored in its variable (Java
+/// `ExchangeHelper.shouldSetVariableResult`): a variable is given and the exchange did not fail
+/// or stop.
+pub fn should_set_variable_result(exchange: &Exchange, name: Option<&str>) -> bool {
+    name.is_some()
+        && !(exchange.is_route_stop()
+            || exchange.is_failed()
+            || exchange.is_rollback_only()
+            || exchange.is_rollback_only_last()
+            || exchange.error_handler_handled() == Some(true))
+}
+
+/// Stores the body of the message in the variable and its headers in the variables
+/// `header:name.key`, removing the headers of a previous message (Java
+/// `ExchangeHelper.setVariableFromMessageBodyAndHeaders`).
+pub fn set_variable_from_message_body_and_headers(
+    exchange: &mut Exchange,
+    name: &str,
+    message: &camel_api::message::Message,
+) {
+    let prefix = format!("header:{name}.");
+    let old: Vec<String> = exchange
+        .variables()
+        .keys()
+        .filter(|k| k.starts_with(&prefix))
+        .cloned()
+        .collect();
+    for k in old {
+        exchange.remove_variable(&k);
+    }
+    exchange.set_variable(name, message.body().clone());
+    for (k, v) in message.headers().iter() {
+        exchange.set_variable(&format!("{prefix}{k}"), v.clone());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

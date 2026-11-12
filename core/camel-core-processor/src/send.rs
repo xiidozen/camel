@@ -16,6 +16,8 @@ pub struct SendProcessor {
     endpoint: SharedEndpoint,
     pattern: Option<ExchangePattern>,
     producer: Mutex<Option<SharedProducer>>,
+    variable_send: Option<String>,
+    variable_receive: Option<String>,
 }
 
 impl SendProcessor {
@@ -25,7 +27,17 @@ impl SendProcessor {
             endpoint,
             pattern,
             producer: Mutex::new(None),
+            variable_send: None,
+            variable_receive: None,
         }
+    }
+
+    /// Sends the value of the variable `send` as body, and stores the reply in the variable
+    /// `receive` instead of the message (Java `variableSend` and `variableReceive`).
+    pub fn with_variables(mut self, send: Option<String>, receive: Option<String>) -> Self {
+        self.variable_send = send;
+        self.variable_receive = receive;
+        self
     }
 
     /// The destination endpoint.
@@ -110,9 +122,36 @@ impl Processor for SendProcessor {
                     endpoint: &uri,
                 },
             );
+            let originals =
+                (self.variable_send.is_some() || self.variable_receive.is_some()).then(|| {
+                    (
+                        exchange.message().body().clone(),
+                        exchange.message().headers().clone(),
+                    )
+                });
+            if let Some(v) = &self.variable_send {
+                let value = exchange.variable(v).cloned().unwrap_or_default();
+                exchange.message_mut().set_body(value);
+            }
             let started = Instant::now();
             let r = producer.process(exchange).await;
             exchange.set_pattern(original);
+            if r.is_ok()
+                && camel_support::exchange_helper::should_set_variable_result(
+                    exchange,
+                    self.variable_receive.as_deref(),
+                )
+            {
+                let name = self.variable_receive.clone().unwrap_or_default();
+                let reply = exchange.message().clone();
+                camel_support::exchange_helper::set_variable_from_message_body_and_headers(
+                    exchange, &name, &reply,
+                );
+                if let Some((body, headers)) = originals {
+                    exchange.message_mut().set_body(body);
+                    exchange.message_mut().set_headers(headers);
+                }
+            }
             notify(
                 context.as_ref(),
                 CamelEvent::ExchangeSent {

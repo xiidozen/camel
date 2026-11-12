@@ -400,6 +400,13 @@ fn step(
     let node = Node::of(value);
     let d = StepsDsl::default();
     let mut def = match eip {
+        "to" if node.get("variableSend").is_some() || node.get("variableReceive").is_some() => {
+            one(d.to_v(
+                &uri_of(value, eip)?,
+                node.text("variableSend").as_deref(),
+                node.text("variableReceive").as_deref(),
+            ))
+        }
         "to" => match &node.text("pattern") {
             Some(p) => {
                 let pattern: ExchangePattern = p

@@ -410,10 +410,17 @@ impl<'a> RouteReifier<'a> {
     /// Returns an error if the endpoint, expression or bean of the step cannot be resolved.
     pub fn create(&self, def: &ProcessorDefinition) -> CamelResult<SharedProcessor> {
         let p: SharedProcessor = match &def.eip {
-            Eip::To { uri, pattern } => {
+            Eip::To {
+                uri,
+                pattern,
+                variable_send,
+                variable_receive,
+            } => {
                 let endpoint = self.context.endpoint(uri)?;
-                let send: SharedProcessor =
-                    Arc::new(SendProcessor::new(endpoint.clone(), *pattern));
+                let send: SharedProcessor = Arc::new(
+                    SendProcessor::new(endpoint.clone(), *pattern)
+                        .with_variables(variable_send.clone(), variable_receive.clone()),
+                );
                 let mut matching = Vec::new();
                 for (p, i) in self.intercepts.send.iter() {
                     if match_endpoint(self.context.as_ref(), endpoint.endpoint_uri(), p)? {
@@ -1036,6 +1043,8 @@ pub fn reify_route(
                     .create(&ProcessorDefinition::new(Eip::To {
                         uri: u.clone(),
                         pattern: None,
+                        variable_send: None,
+                        variable_receive: None,
                     }))
                     .map_err(failed)?,
             ),

@@ -458,6 +458,10 @@ pub enum Eip {
         uri: String,
         /// The exchange pattern to send with.
         pattern: Option<ExchangePattern>,
+        /// The variable whose value is the body sent (`variableSend`).
+        variable_send: Option<String>,
+        /// The variable receiving the reply instead of the message (`variableReceive`).
+        variable_receive: Option<String>,
     },
     /// Continues only with the exchanges matching the predicate (`filter`).
     Filter {
