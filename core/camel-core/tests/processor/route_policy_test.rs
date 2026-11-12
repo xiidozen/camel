@@ -656,3 +656,101 @@ async fn test_throttling_exception_route_policy_reopen() {
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     keep.assert_is_satisfied().await;
 }
+
+/// Port of `throttle.ThrottlingExceptionRoutePolicyHalfOpenHandlerSedaTest`: the message sent
+/// while the circuit is open is consumed once it closes.
+#[tokio::test]
+async fn test_throttling_exception_route_policy_half_open_handler_seda() {
+    use camel_core::support::throttling::{
+        ThrottlingExceptionHalfOpenHandler, ThrottlingExceptionRoutePolicy,
+    };
+    struct AlwaysCloseHandler;
+    impl ThrottlingExceptionHalfOpenHandler for AlwaysCloseHandler {
+        fn is_ready_to_be_closed(&self) -> bool {
+            true
+        }
+    }
+    let url = "seda:foo?concurrentConsumers=2";
+    let policy: SharedRoutePolicy = Arc::new(
+        ThrottlingExceptionRoutePolicy::new(2, 30, 1000, Vec::new())
+            .with_half_open_handler(Arc::new(AlwaysCloseHandler)),
+    );
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(
+            from(url)
+                .route_id("foo")
+                .route_policy(policy.clone())
+                .log("${body}")
+                .to("mock:result"),
+        );
+    })
+    .await;
+    let result = t.mock("mock:result");
+    result.expected_bodies_received_in_any_order(["Message One", "Message Two"]);
+    result.when_any_exchange_received(failing());
+    t.template.send_body(url, "Message One").await.unwrap();
+    t.template.send_body(url, "Message Two").await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    t.template.send_body(url, "Message Three").await.unwrap();
+    result.assert_is_satisfied().await;
+    result.reset();
+    result.expected_bodies_received_in_any_order(["Message Three", "Message Four"]);
+    result.set_result_wait_time(10000);
+    t.template.send_body(url, "Message Four").await.unwrap();
+    result.assert_is_satisfied().await;
+}
+
+/// Port of `throttle.ThrottlingExceptionRoutePolicySuspendRouteTest`: the half open circuit
+/// does not resume the consumer of a suspended route.
+#[tokio::test]
+async fn test_throttling_exception_route_policy_suspend_route() {
+    use camel_core::support::throttling::ThrottlingExceptionRoutePolicy;
+    let policy = Arc::new(ThrottlingExceptionRoutePolicy::new(
+        1,
+        100,
+        3000,
+        Vec::new(),
+    ));
+    let p: SharedRoutePolicy = policy.clone();
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(
+            from("direct:start?block=false")
+                .route_id("foo")
+                .route_policy(p.clone())
+                .filter(body().is_equal_to("Kaboom"), |s| {
+                    s.throw_exception(CamelError::illegal_argument("Forced"))
+                })
+                .to("mock:result"),
+        );
+    })
+    .await;
+    assert!(t
+        .template
+        .send_body("direct:start", "Kaboom")
+        .await
+        .is_err());
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert_eq!("opened", policy.state_as_string());
+    t.context.suspend_route("foo").await.unwrap();
+    assert!(t.context.route_status("foo").unwrap().is_suspended());
+    assert_eq!(
+        "opened",
+        policy.state_as_string(),
+        "The half open timer should not have fired yet"
+    );
+    let p2 = policy.clone();
+    crate::support::await_until(std::time::Duration::from_secs(10), move || {
+        p2.state_as_string() == "half opened"
+    })
+    .await;
+    assert!(t.context.route_status("foo").unwrap().is_suspended());
+    let mock = t.mock("mock:result");
+    mock.expected_bodies_received(["Hello World"]);
+    t.context.resume_route("foo").await.unwrap();
+    t.template
+        .send_body("direct:start", "Hello World")
+        .await
+        .unwrap();
+    mock.assert_is_satisfied().await;
+    assert_eq!("closed", policy.state_as_string());
+}
