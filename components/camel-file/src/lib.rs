@@ -28,7 +28,7 @@
 mod consumer;
 mod producer;
 
-pub use consumer::FileConsumer;
+pub use consumer::{FileConsumer, FilePollingConsumer};
 pub use producer::{generated_file_name, FileProducer};
 
 use camel_api::context::{CamelContext, StandaloneContext};
@@ -399,6 +399,12 @@ impl Endpoint for FileEndpoint {
 
     fn create_consumer(self: Arc<Self>, processor: SharedProcessor) -> CamelResult<SharedConsumer> {
         Ok(Arc::new(FileConsumer::new(self, processor)))
+    }
+
+    fn create_polling_consumer(
+        self: Arc<Self>,
+    ) -> CamelResult<Arc<dyn camel_api::endpoint::PollingConsumer>> {
+        Ok(Arc::new(FilePollingConsumer::new(self)))
     }
 
     fn as_any(&self) -> &dyn Any {

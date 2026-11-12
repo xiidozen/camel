@@ -43,7 +43,7 @@ impl FileConsumer {
 }
 
 /// The compiled filters of the endpoint.
-struct Filters {
+pub(crate) struct Filters {
     include: Option<Regex>,
     exclude: Option<Regex>,
     include_ext: Vec<String>,
@@ -73,7 +73,7 @@ fn extensions(e: &Option<String>) -> Vec<String> {
 }
 
 impl Filters {
-    fn of(endpoint: &FileEndpoint) -> CamelResult<Self> {
+    pub(crate) fn of(endpoint: &FileEndpoint) -> CamelResult<Self> {
         let c = &endpoint.config;
         Ok(Filters {
             include: pattern(&c.include)?,
@@ -227,20 +227,28 @@ fn named(endpoint: &FileEndpoint, path: &Path) -> CamelResult<bool> {
     Ok(name == file.file_name_only() || name == file.relative_file_path)
 }
 
-/// Routes one file and applies the process strategy (Java `GenericFileOnCompletion`).
-async fn process_file(
+/// A file taken for routing: the file, the key in the idempotent repository.
+pub(crate) struct Taken {
+    file: GenericFile,
+    key: String,
+    idempotent: bool,
+}
+
+/// Takes the file for routing (Java `GenericFileConsumer.processExchange` before the routing):
+/// the idempotent check, the preMove, the exchange with the headers and the body; `None` when
+/// the file was consumed before.
+pub(crate) fn begin(
     endpoint: &Arc<FileEndpoint>,
-    processor: &SharedProcessor,
-    path: PathBuf,
-) -> CamelResult<()> {
+    path: &Path,
+) -> CamelResult<Option<(Taken, Exchange)>> {
     let c = &endpoint.config;
-    let mut file = GenericFile::of(&c.directory, &path)
+    let mut file = GenericFile::of(&c.directory, path)
         .map_err(|e| operation_failed(format!("Cannot read file: {}: {e}", path.display())))?;
     let key = file.absolute_file_path().to_string_lossy().into_owned();
     let idempotent = c.idempotent.unwrap_or(c.noop);
     if idempotent && !endpoint.idempotent.add(&key) {
         log::trace!("This consumer is idempotent and the file has been consumed before: {key}");
-        return Ok(());
+        return Ok(None);
     }
     let mut exchange = endpoint.create_exchange();
     file.populate_headers(&mut exchange);
@@ -253,13 +261,30 @@ async fn process_file(
     }
     let body = read_body(&file.file_path, c.charset.as_deref())?;
     exchange.message_mut().set_body(body);
-    if let Err(e) = processor.process(&mut exchange).await {
-        exchange.set_exception(Some(e));
-    }
+    Ok(Some((
+        Taken {
+            file,
+            key,
+            idempotent,
+        },
+        exchange,
+    )))
+}
+
+/// Applies the process strategy after the routing (Java `GenericFileOnCompletion`): on
+/// failure the file stays (or is moved to `moveFailed`), else it is left (`noop`), deleted or
+/// moved.
+pub(crate) fn commit(
+    endpoint: &FileEndpoint,
+    taken: &Taken,
+    exchange: &mut Exchange,
+) -> CamelResult<()> {
+    let c = &endpoint.config;
+    let file = &taken.file;
     let failed = exchange.is_failed() || exchange.is_rollback_only();
     if failed {
-        if idempotent {
-            endpoint.idempotent.remove(&key);
+        if taken.idempotent {
+            endpoint.idempotent.remove(&taken.key);
         }
         if let Some(e) = exchange.exception() {
             log::warn!(
@@ -269,7 +294,7 @@ async fn process_file(
             );
         }
         if let Some(failed_to) = &c.move_failed {
-            let to = rename_target(endpoint, &mut exchange, &file, failed_to)?;
+            let to = rename_target(endpoint, exchange, file, failed_to)?;
             rename(&file.file_path, &to)?;
         }
         return Ok(());
@@ -290,9 +315,53 @@ async fn process_file(
     }
     let move_to = c.move_to.clone().unwrap_or_else(|| ".camel".to_string());
     // the headers of the file again, as the route may have changed them
-    file.populate_headers(&mut exchange);
-    let to = rename_target(endpoint, &mut exchange, &file, &move_to)?;
+    file.populate_headers(exchange);
+    let to = rename_target(endpoint, exchange, file, &move_to)?;
     rename(&file.file_path, &to)
+}
+
+/// Routes one file and applies the process strategy.
+async fn process_file(
+    endpoint: &Arc<FileEndpoint>,
+    processor: &SharedProcessor,
+    path: PathBuf,
+) -> CamelResult<()> {
+    let Some((taken, mut exchange)) = begin(endpoint, &path)? else {
+        return Ok(());
+    };
+    if let Err(e) = processor.process(&mut exchange).await {
+        exchange.set_exception(Some(e));
+    }
+    commit(endpoint, &taken, &mut exchange)
+}
+
+/// The candidate files of a poll, filtered (Java `pollDirectory` with `isValidFile`).
+pub(crate) fn candidates(endpoint: &FileEndpoint, filters: &Filters) -> CamelResult<Vec<PathBuf>> {
+    let c = &endpoint.config;
+    let dir = Path::new(&c.directory);
+    if !dir.is_dir() {
+        if c.directory_must_exist {
+            return Err(CamelError::new(
+                ErrorKind::FileNotFound,
+                format!("Directory does not exist: {}", c.directory),
+            ));
+        }
+        return Ok(Vec::new());
+    }
+    let mut files = Vec::new();
+    list_files(endpoint, dir, 1, &mut files)
+        .map_err(|e| operation_failed(format!("Cannot list directory: {}: {e}", c.directory)))?;
+    let mut answer = Vec::new();
+    for path in files {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if filters.matches(&name) && named(endpoint, &path)? {
+            answer.push(path);
+        }
+    }
+    Ok(answer)
 }
 
 /// One poll: routes the files of the starting directory (Java `GenericFileConsumer.poll`).
@@ -303,34 +372,13 @@ async fn poll(
     state: &State,
 ) -> CamelResult<usize> {
     let c = &endpoint.config;
-    let dir = Path::new(&c.directory);
-    if !dir.is_dir() {
-        if c.directory_must_exist {
-            return Err(CamelError::new(
-                ErrorKind::FileNotFound,
-                format!("Directory does not exist: {}", c.directory),
-            ));
-        }
-        log::trace!("Cannot poll as directory does not exist: {}", c.directory);
-        return Ok(0);
-    }
-    let mut files = Vec::new();
-    list_files(endpoint, dir, 1, &mut files)
-        .map_err(|e| operation_failed(format!("Cannot list directory: {}: {e}", c.directory)))?;
     let mut count = 0;
-    for path in files {
+    for path in candidates(endpoint, filters)? {
         if state.stopped.load(Ordering::SeqCst) {
             break;
         }
         if c.max_messages_per_poll > 0 && count >= c.max_messages_per_poll {
             break;
-        }
-        let name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        if !filters.matches(&name) || !named(endpoint, &path)? {
-            continue;
         }
         count += 1;
         if let Err(e) = process_file(endpoint, processor, path).await {
@@ -433,5 +481,90 @@ impl Consumer for FileConsumer {
 
     fn processor(&self) -> SharedProcessor {
         self.processor.clone()
+    }
+}
+
+/// Applies the process strategy of the polled file when its exchange is done.
+struct FileCompletion {
+    endpoint: Arc<FileEndpoint>,
+    taken: Taken,
+}
+
+impl camel_api::spi::synchronization::Synchronization for FileCompletion {
+    fn on_complete<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, ()> {
+        Box::pin(async move {
+            if let Err(e) = commit(&self.endpoint, &self.taken, exchange) {
+                log::warn!(
+                    "Error committing the file {}: {e}",
+                    self.taken.file.file_path.display()
+                );
+            }
+        })
+    }
+
+    fn on_failure<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, ()> {
+        self.on_complete(exchange)
+    }
+}
+
+/// The polling consumer of a file endpoint (Java `GenericFilePollingConsumer`): receives one
+/// file at a time; the process strategy (move, delete, ...) runs when the exchange is done.
+pub struct FilePollingConsumer {
+    endpoint: Arc<FileEndpoint>,
+}
+
+impl FilePollingConsumer {
+    pub(crate) fn new(endpoint: Arc<FileEndpoint>) -> Self {
+        FilePollingConsumer { endpoint }
+    }
+
+    fn poll_one(&self) -> CamelResult<Option<Exchange>> {
+        let filters = Filters::of(&self.endpoint)?;
+        for path in candidates(&self.endpoint, &filters)? {
+            if let Some((taken, mut exchange)) = begin(&self.endpoint, &path)? {
+                exchange.add_on_completion(Arc::new(FileCompletion {
+                    endpoint: self.endpoint.clone(),
+                    taken,
+                }));
+                return Ok(Some(exchange));
+            }
+        }
+        Ok(None)
+    }
+
+    async fn poll_until(
+        &self,
+        deadline: Option<tokio::time::Instant>,
+    ) -> CamelResult<Option<Exchange>> {
+        loop {
+            if let Some(e) = self.poll_one()? {
+                return Ok(Some(e));
+            }
+            let wait = Duration::from_millis(self.endpoint.config.delay.clamp(1, 100));
+            match deadline {
+                Some(d) if tokio::time::Instant::now() + wait > d => return Ok(None),
+                _ => tokio::time::sleep(wait).await,
+            }
+        }
+    }
+}
+
+impl Service for FilePollingConsumer {}
+
+impl camel_api::endpoint::PollingConsumer for FilePollingConsumer {
+    fn endpoint(&self) -> SharedEndpoint {
+        self.endpoint.clone()
+    }
+
+    fn receive(&self) -> BoxFuture<'_, CamelResult<Option<Exchange>>> {
+        Box::pin(self.poll_until(None))
+    }
+
+    fn receive_no_wait(&self) -> BoxFuture<'_, CamelResult<Option<Exchange>>> {
+        Box::pin(std::future::ready(self.poll_one()))
+    }
+
+    fn receive_timeout(&self, timeout: Duration) -> BoxFuture<'_, CamelResult<Option<Exchange>>> {
+        Box::pin(self.poll_until(Some(tokio::time::Instant::now() + timeout)))
     }
 }

@@ -403,6 +403,32 @@ impl<'a> RouteReifier<'a> {
         reify_expression(self.context, def)
     }
 
+    /// The expression of a dynamic uri (toD, enrich, pollEnrich, wireTap): a simple
+    /// expression keeps its `${file:..}` functions as text, for the file endpoints (Java
+    /// `skipFileFunctions`).
+    fn uri_expr(&self, def: &ExpressionDefinition) -> CamelResult<SharedExpression> {
+        match def {
+            ExpressionDefinition::Language {
+                language,
+                expression,
+            } if language == "simple" && expression.contains("${file:") => {
+                let (text, kept) = set_aside_file_functions(expression);
+                let e = self.expr(&ExpressionDefinition::language("simple", &text))?;
+                Ok(camel_support::builder::named_expression(
+                    format!("simple{{{expression}}}"),
+                    move |ex| {
+                        let mut uri = e.evaluate(ex)?.to_string();
+                        for (i, f) in kept.iter().enumerate() {
+                            uri = uri.replace(&file_function_token(i), f);
+                        }
+                        Ok(Value::from(uri))
+                    },
+                ))
+            }
+            other => self.expr(other),
+        }
+    }
+
     /// Creates the processor of the step (without error handler).
     ///
     /// # Errors
@@ -592,7 +618,7 @@ impl<'a> RouteReifier<'a> {
                 pattern,
                 ignore_invalid_endpoint,
             } => {
-                let e = self.expr(&ExpressionDefinition::language("simple", uri))?;
+                let e = self.uri_expr(&ExpressionDefinition::language("simple", uri))?;
                 Arc::new(SendDynamicProcessor::new(
                     e,
                     *pattern,
@@ -628,7 +654,7 @@ impl<'a> RouteReifier<'a> {
                 variable_send,
             } => Arc::new(
                 WireTapProcessor::new(
-                    self.expr(&ExpressionDefinition::language("simple", uri))?,
+                    self.uri_expr(&ExpressionDefinition::language("simple", uri))?,
                     *ignore_invalid_endpoint,
                 )
                 .with_on_prepare(optional_ref(self.context, on_prepare)?)
@@ -721,7 +747,7 @@ impl<'a> RouteReifier<'a> {
             } => {
                 let strategy = resolve_aggregation(self.context, strategy)?;
                 Arc::new(EnrichProcessor::new(
-                    self.expr(uri)?,
+                    self.uri_expr(uri)?,
                     strategy,
                     *aggregate_on_exception,
                     *ignore_invalid_endpoint,
@@ -736,7 +762,7 @@ impl<'a> RouteReifier<'a> {
             } => {
                 let strategy = resolve_aggregation(self.context, strategy)?;
                 Arc::new(PollEnrichProcessor::new(
-                    self.expr(uri)?,
+                    self.uri_expr(uri)?,
                     *timeout,
                     strategy,
                     *aggregate_on_exception,
@@ -996,6 +1022,42 @@ fn threads_config(t: &camel_core_model::processor::ThreadsDefinition) -> Threads
             .caller_runs_when_rejected
             .unwrap_or(d.caller_runs_when_rejected),
     }
+}
+
+fn file_function_token(i: usize) -> String {
+    format!("__CAMEL_FILE_FUNCTION_{i}__")
+}
+
+/// The text with its `${file:..}` functions replaced by tokens, and the functions.
+fn set_aside_file_functions(text: &str) -> (String, Vec<String>) {
+    let mut out = String::new();
+    let mut kept = Vec::new();
+    let mut rest = text;
+    while let Some(i) = rest.find("${file:") {
+        out.push_str(&rest[..i]);
+        let after = &rest[i..];
+        // the end of the function (nested braces counted)
+        let mut depth = 0;
+        let mut end = after.len();
+        for (j, c) in after.char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = j + 1;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        out.push_str(&file_function_token(kept.len()));
+        kept.push(after[..end].to_string());
+        rest = &after[end..];
+    }
+    out.push_str(rest);
+    (out, kept)
 }
 
 /// Creates the processor of the route: resolves the endpoints and expressions of all steps.

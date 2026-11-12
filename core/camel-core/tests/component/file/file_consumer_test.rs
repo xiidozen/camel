@@ -356,3 +356,28 @@ async fn test_convert_body_to_utf8() {
         "Should be same byte data"
     );
 }
+
+/// Port of `PollEnrichSimpleMoveTest` (the `${file:..}` functions of the uri are evaluated by
+/// the file endpoint).
+#[tokio::test]
+async fn test_poll_enrich_simple_move() {
+    let dir = TestDirectory::new("PollEnrichSimpleMoveTest");
+    let uri = dir.file_uri("?move=backup/my-${file:onlyname}");
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(
+            from("direct:start")
+                .poll_enrich(&uri, 5000)
+                .to("mock:result"),
+        );
+    })
+    .await;
+    let mock = t.mock("mock:result");
+    mock.expected_message_count(1);
+    mock.expected_file_exists(dir.test_file("backup/my-hello.txt"), None);
+    send(&t, &dir, "hello.txt", "Hello World").await;
+    t.template
+        .send_body("direct:start", "Trigger")
+        .await
+        .unwrap();
+    mock.assert_is_satisfied().await;
+}
