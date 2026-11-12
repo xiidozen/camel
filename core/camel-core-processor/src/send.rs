@@ -6,7 +6,9 @@ use camel_api::error::CamelResult;
 use camel_api::exchange::Exchange;
 use camel_api::processor::{BoxFuture, Processor};
 use camel_api::service::Service;
+use camel_api::spi::event::{notify, CamelEvent};
 use std::sync::Mutex;
+use std::time::Instant;
 
 /// Sends the exchange to an endpoint, using a producer created on first use. An optional
 /// exchange pattern is set for the duration of the send.
@@ -94,8 +96,26 @@ impl Processor for SendProcessor {
             if let Some(p) = self.pattern {
                 exchange.set_pattern(p);
             }
+            let context = exchange.context().clone();
+            let uri = self.endpoint.endpoint_uri().to_string();
+            notify(
+                context.as_ref(),
+                CamelEvent::ExchangeSending {
+                    exchange,
+                    endpoint: &uri,
+                },
+            );
+            let started = Instant::now();
             let r = producer.process(exchange).await;
             exchange.set_pattern(original);
+            notify(
+                context.as_ref(),
+                CamelEvent::ExchangeSent {
+                    exchange,
+                    endpoint: &uri,
+                    time_taken: started.elapsed(),
+                },
+            );
             r
         })
     }

@@ -25,19 +25,20 @@
 //!
 //! Not available yet: the configuration of the components, data formats and languages from
 //! `camel.component.*` properties, the bean (`camel.beans.*`) and REST configurations, route
-//! discovery by class or package scanning, the routes reload, the health checks, the vaults
-//! and the duration in messages or idle time (`durationMaxMessages`, `durationMaxIdleSeconds`
-//! are kept in the configuration but do not stop the application).
+//! discovery by class or package scanning, the routes reload, the health checks and the
+//! vaults.
 
 #![deny(missing_docs)]
 #![deny(rustdoc::broken_intra_doc_links)]
 
 use camel_api::error::{CamelError, CamelResult};
+use camel_api::spi::event::{CamelEvent, EventNotifier, EventType};
 use camel_api::spi::properties::PropertiesComponent;
 use camel_core::prelude::*;
 use camel_core::util::time_utils::to_milli_seconds;
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tokio::sync::Notify;
 
 /// The default location of the properties (Java
@@ -151,7 +152,7 @@ impl MainConfigurationProperties {
         Ok(self)
     }
 
-    /// The number of messages to process before stopping (not acted upon yet).
+    /// The number of messages to process (completed or failed) before stopping (0: no limit).
     pub fn duration_max_messages(&self) -> i32 {
         self.duration_max_messages
     }
@@ -162,7 +163,7 @@ impl MainConfigurationProperties {
         self
     }
 
-    /// The idle seconds before stopping (not acted upon yet).
+    /// The seconds without messages in flight or activity before stopping (0: no limit).
     pub fn duration_max_idle_seconds(&self) -> i32 {
         self.duration_max_idle_seconds
     }
@@ -276,6 +277,7 @@ pub struct Main {
     beans: Vec<(String, Value)>,
     listeners: Vec<Arc<dyn MainListener>>,
     context: Option<Arc<DefaultCamelContext>>,
+    duration_notifier: Option<Arc<DurationNotifier>>,
     started: bool,
     completed: Arc<Notify>,
 }
@@ -299,6 +301,7 @@ impl Main {
             beans: Vec::new(),
             listeners: Vec::new(),
             context: None,
+            duration_notifier: None,
             started: false,
             completed: Arc::new(Notify::new()),
         }
@@ -539,6 +542,18 @@ impl Main {
         self.context = Some(context.clone());
         self.fire(|l, m| l.before_configure(m));
         self.configure_from_properties(&context)?;
+        let config = &self.configuration;
+        if config.duration_max_messages > 0 || config.duration_max_idle_seconds > 0 {
+            let notifier = Arc::new(DurationNotifier {
+                max_messages: config.duration_max_messages,
+                done: AtomicI32::new(0),
+                inflight: AtomicI32::new(0),
+                last_activity: Mutex::new(Instant::now()),
+                completed: self.completed.clone(),
+            });
+            context.add_event_notifier(notifier.clone());
+            self.duration_notifier = Some(notifier);
+        }
         for builder in self.configuration.routes_builders.clone() {
             context.add_route_definitions(builder.build()).await?;
         }
@@ -576,8 +591,9 @@ impl Main {
         self.completed.notify_one();
     }
 
-    /// Starts, runs until completed, the duration has elapsed (`durationMaxSeconds`) or the
-    /// process is interrupted (Ctrl-C), then stops.
+    /// Starts, runs until completed, the duration has elapsed (`durationMaxSeconds`), the
+    /// number of messages are done (`durationMaxMessages`), there was no activity for the
+    /// idle time (`durationMaxIdleSeconds`) or the process is interrupted (Ctrl-C), then stops.
     ///
     /// # Errors
     ///
@@ -593,10 +609,25 @@ impl Main {
                 std::future::pending::<()>().await;
             }
         };
+        let idle_seconds = self.configuration.duration_max_idle_seconds;
+        let notifier = self.duration_notifier.clone();
+        let idle = async move {
+            match notifier.filter(|_| idle_seconds > 0) {
+                Some(n) => {
+                    let idle = Duration::from_secs(idle_seconds as u64);
+                    while !n.is_idle(idle) {
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
+                    log::info!("Duration max idle triggering shutdown of the JVM");
+                }
+                None => std::future::pending::<()>().await,
+            }
+        };
         let completed = self.completed.clone();
         tokio::select! {
             _ = completed.notified() => {}
             _ = duration => {}
+            _ = idle => {}
             _ = tokio::signal::ctrl_c() => log::info!("Received hang up - stopping the main instance."),
         }
         self.stop().await
@@ -605,6 +636,51 @@ impl Main {
     /// Whether tracing is enabled (the configuration; the Rust context has no tracer yet).
     pub fn is_tracing(&self) -> bool {
         self.configuration.tracing
+    }
+}
+
+/// Counts the done exchanges and the activity for the durations in messages and idle time
+/// (Java `MainDurationEventNotifier`).
+struct DurationNotifier {
+    max_messages: i32,
+    done: AtomicI32,
+    inflight: AtomicI32,
+    last_activity: Mutex<Instant>,
+    completed: Arc<Notify>,
+}
+
+impl DurationNotifier {
+    /// Whether there was no exchange in flight nor activity for the duration.
+    fn is_idle(&self, idle: Duration) -> bool {
+        self.inflight.load(Ordering::SeqCst) <= 0
+            && self.last_activity.lock().unwrap().elapsed() >= idle
+    }
+}
+
+impl EventNotifier for DurationNotifier {
+    fn notify(&self, event: &CamelEvent<'_>) {
+        match event.event_type() {
+            EventType::ExchangeCreated => {
+                self.inflight.fetch_add(1, Ordering::SeqCst);
+            }
+            EventType::ExchangeCompleted | EventType::ExchangeFailed => {
+                self.inflight.fetch_sub(1, Ordering::SeqCst);
+                let done = self.done.fetch_add(1, Ordering::SeqCst) + 1;
+                if self.max_messages > 0 && done == self.max_messages {
+                    log::info!("Duration max messages triggering shutdown of the JVM");
+                    self.completed.notify_one();
+                }
+            }
+            _ => return,
+        }
+        *self.last_activity.lock().unwrap() = Instant::now();
+    }
+
+    fn is_enabled(&self, event: &CamelEvent<'_>) -> bool {
+        matches!(
+            event.event_type(),
+            EventType::ExchangeCreated | EventType::ExchangeCompleted | EventType::ExchangeFailed
+        )
     }
 }
 

@@ -7,9 +7,11 @@ use camel_api::endpoint::SharedProducer;
 use camel_api::enums::ExchangePattern;
 use camel_api::error::{CamelError, CamelResult};
 use camel_api::exchange::Exchange;
+use camel_api::spi::event::{notify, CamelEvent};
 use camel_util::value::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 /// Sends messages to endpoints by uri. The producers are created and started on first use and
 /// cached per endpoint.
@@ -65,9 +67,27 @@ impl ProducerTemplate {
     /// Returns an error only if the endpoint or its producer cannot be created.
     pub async fn send(&self, uri: &str, mut exchange: Exchange) -> CamelResult<Exchange> {
         let producer = self.producer(uri).await?;
+        let endpoint = producer.endpoint().endpoint_uri().to_string();
+        let context = self.context.as_shared();
+        notify(
+            context.as_ref(),
+            CamelEvent::ExchangeSending {
+                exchange: &exchange,
+                endpoint: &endpoint,
+            },
+        );
+        let started = Instant::now();
         if let Err(e) = producer.process(&mut exchange).await {
             exchange.set_exception(Some(e));
         }
+        notify(
+            context.as_ref(),
+            CamelEvent::ExchangeSent {
+                exchange: &exchange,
+                endpoint: &endpoint,
+                time_taken: started.elapsed(),
+            },
+        );
         Ok(exchange)
     }
 

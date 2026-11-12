@@ -1,6 +1,7 @@
 //! Ports of `MainTest`, `MainPropertyPlaceholderTest`, `MainDurationAliasTest` and
 //! `MainListenerTest` (the test resources are in `src/test/resources`, a classpath root).
 
+use camel_core::api::processor::processor_fn;
 use camel_core::prelude::*;
 use camel_main::{Main, MainConfigurationProperties, MainListener};
 use std::sync::{Arc, Mutex};
@@ -249,4 +250,42 @@ async fn test_before_configure() {
     main.start().await.unwrap();
     assert_eq!("my-ctx-override", main.camel_context().unwrap().name());
     main.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn test_duration_max_messages_and_idle_seconds() {
+    // the timer fires twice, the second message completes the run
+    let mut main = Main::new();
+    main.configure().with_duration_max_messages(2);
+    let list = Arc::new(Mutex::new(Vec::new()));
+    let l = list.clone();
+    main.configure().add_routes_builder(move |r: &mut Routes| {
+        let l = l.clone();
+        r.add(
+            from("timer:foo?period=10&repeatCount=5")
+                .set_body(simple("{{hello}}"))
+                .process(Arc::new(processor_fn(move |e: &mut Exchange| {
+                    l.lock().unwrap().push(e.message().body().to_string());
+                    Ok(())
+                }))),
+        );
+    });
+    tokio::time::timeout(Duration::from_secs(10), main.run())
+        .await
+        .expect("the run completes after 2 messages")
+        .unwrap();
+    let list = list.lock().unwrap().clone();
+    assert!(list.len() >= 2, "{list:?}");
+    assert_eq!("World", list[0]);
+
+    // Java testDurationIdleSeconds: no messages, stops after the idle time
+    let mut main = Main::new();
+    main.configure().add_routes_builder(my_route_builder);
+    main.configure().with_duration_max_idle_seconds(1);
+    let started = Instant::now();
+    tokio::time::timeout(Duration::from_secs(10), main.run())
+        .await
+        .expect("the run completes when idle")
+        .unwrap();
+    assert!(started.elapsed() >= Duration::from_secs(1));
 }

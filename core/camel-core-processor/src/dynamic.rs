@@ -11,10 +11,12 @@ use camel_api::exchange_constants::TO_ENDPOINT;
 use camel_api::processor::{
     BoxFuture, Processor, SharedAggregationStrategy, SharedExpression, SharedProcessor,
 };
+use camel_api::spi::event::{notify, CamelEvent};
 use camel_support::exchange_helper::create_correlated_copy;
 use camel_util::value::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 /// Producers cached by endpoint key, created and started on first use (Java `ProducerCache`).
 #[derive(Default)]
@@ -94,16 +96,33 @@ impl ProducerCache {
     }
 }
 
-/// Sends the exchange to the target, with the pattern if given; a failure is set on the
-/// exchange.
+/// Sends the exchange to the target, with the pattern if given, between the `ExchangeSending`
+/// and `ExchangeSent` events; a failure is set on the exchange.
 pub async fn send_to(target: &Target, pattern: Option<ExchangePattern>, exchange: &mut Exchange) {
     exchange.set_property(TO_ENDPOINT, target.uri.clone());
     let original = exchange.pattern();
     if let Some(p) = pattern {
         exchange.set_pattern(p);
     }
+    let context = exchange.context().clone();
+    notify(
+        context.as_ref(),
+        CamelEvent::ExchangeSending {
+            exchange,
+            endpoint: &target.uri,
+        },
+    );
+    let started = Instant::now();
     let r = target.producer.process(exchange).await;
     exchange.set_pattern(original);
+    notify(
+        context.as_ref(),
+        CamelEvent::ExchangeSent {
+            exchange,
+            endpoint: &target.uri,
+            time_taken: started.elapsed(),
+        },
+    );
     if let Err(e) = r {
         exchange.set_exception(Some(e));
     }

@@ -8,6 +8,7 @@ use camel_api::enums::ServiceStatus;
 use camel_api::error::{CamelError, CamelResult, ErrorKind};
 use camel_api::route::Route;
 use camel_api::service::{ServiceState, StatefulService, SuspendableService};
+use camel_api::spi::event::{CamelEvent, SharedEventNotifier};
 use camel_api::spi::language::Language;
 use camel_api::spi::log_listener::LogListener;
 use camel_api::spi::properties::PropertiesComponent;
@@ -57,6 +58,11 @@ pub struct DefaultCamelContext {
     message_history: AtomicBool,
     plugins: RwLock<HashMap<TypeId, Arc<dyn Any + Send + Sync>>>,
     properties: Arc<DefaultPropertiesComponent>,
+    event_notifiers: RwLock<Vec<SharedEventNotifier>>,
+    initialized: AtomicBool,
+    /// The routes whose `RouteAdded` event was sent (the routes added before the start are
+    /// announced when starting, as Java creates them then).
+    announced_routes: Mutex<HashSet<String>>,
     state: ServiceState,
 }
 
@@ -91,6 +97,9 @@ impl DefaultCamelContext {
                 pc.set_camel_context(weak);
                 pc
             },
+            event_notifiers: RwLock::new(Vec::new()),
+            initialized: AtomicBool::new(false),
+            announced_routes: Mutex::new(HashSet::new()),
             state: ServiceState::new(),
         })
     }
@@ -99,6 +108,58 @@ impl DefaultCamelContext {
     /// camel-main); set it before starting.
     pub fn set_name(&self, name: &str) {
         *self.name.write().unwrap() = name.to_string();
+    }
+
+    /// Adds a notifier of the events (Java `getManagementStrategy().addEventNotifier`).
+    pub fn add_event_notifier(&self, notifier: SharedEventNotifier) {
+        self.event_notifiers.write().unwrap().push(notifier);
+    }
+
+    /// Removes the notifier.
+    pub fn remove_event_notifier(&self, notifier: &SharedEventNotifier) -> bool {
+        let mut list = self.event_notifiers.write().unwrap();
+        let before = list.len();
+        list.retain(|n| !Arc::ptr_eq(n, notifier));
+        list.len() != before
+    }
+
+    fn notify(&self, event: CamelEvent<'_>) {
+        let list = self.event_notifiers.read().unwrap().clone();
+        for n in list {
+            if n.is_enabled(&event) {
+                n.notify(&event);
+            }
+        }
+    }
+
+    /// Sends the `RouteAdded` event of the route unless already sent.
+    fn announce_route(&self, id: &str) {
+        if self.announced_routes.lock().unwrap().insert(id.to_string()) {
+            self.notify(CamelEvent::RouteAdded(id));
+        }
+    }
+
+    /// Starts the route with its events.
+    async fn start_route_with_events(&self, route: &DefaultRoute) -> CamelResult<()> {
+        if route.status().is_started() {
+            return Ok(());
+        }
+        self.notify(CamelEvent::RouteStarting(route.id()));
+        camel_api::service::Service::start(route).await?;
+        self.notify(CamelEvent::RouteStarted(route.id()));
+        Ok(())
+    }
+
+    /// Stops the route with its events.
+    async fn stop_route_with_events(&self, route: &DefaultRoute) -> CamelResult<()> {
+        let status = route.status();
+        if !status.is_started() && !status.is_suspended() {
+            return camel_api::service::Service::stop(route).await;
+        }
+        self.notify(CamelEvent::RouteStopping(route.id()));
+        let r = camel_api::service::Service::stop(route).await;
+        self.notify(CamelEvent::RouteStopped(route.id()));
+        r
     }
 
     /// This context as a shared `CamelContext` (what endpoints and exchanges refer to).
@@ -353,9 +414,12 @@ impl DefaultCamelContext {
         })?;
         let route = Arc::new(DefaultRoute::new(id.clone(), custom, endpoint, spec));
         self.routes.write().unwrap().push(route.clone());
-        if self.state.status().is_started() && route.is_auto_startup() {
-            self.start_components().await?;
-            camel_api::service::Service::start(route.as_ref()).await?;
+        if self.state.status().is_started() {
+            self.announce_route(&id);
+            if route.is_auto_startup() {
+                self.start_components().await?;
+                self.start_route_with_events(&route).await?;
+            }
         }
         Ok(id)
     }
@@ -396,7 +460,7 @@ impl DefaultCamelContext {
     pub async fn start_route(&self, id: &str) -> CamelResult<()> {
         let route = self.mandatory_route(id)?;
         self.start_components().await?;
-        camel_api::service::Service::start(route.as_ref()).await
+        self.start_route_with_events(&route).await
     }
 
     /// Stops the route (Java `RouteController.stopRoute`).
@@ -405,7 +469,8 @@ impl DefaultCamelContext {
     ///
     /// Returns an error if there is no such route or it fails to stop.
     pub async fn stop_route(&self, id: &str) -> CamelResult<()> {
-        camel_api::service::Service::stop(self.mandatory_route(id)?.as_ref()).await
+        let route = self.mandatory_route(id)?;
+        self.stop_route_with_events(&route).await
     }
 
     /// Suspends the route (Java `RouteController.suspendRoute`).
@@ -436,6 +501,10 @@ impl DefaultCamelContext {
         match routes.iter().position(|r| r.id() == id) {
             Some(i) if !routes[i].status().is_started() && !routes[i].status().is_suspended() => {
                 routes.remove(i);
+                drop(routes);
+                if self.announced_routes.lock().unwrap().remove(id) {
+                    self.notify(CamelEvent::RouteRemoved(id));
+                }
                 true
             }
             _ => false,
@@ -455,26 +524,21 @@ impl DefaultCamelContext {
     pub async fn start(&self) -> CamelResult<()> {
         self.state
             .start(|| async {
+                if !self.initialized.swap(true, Ordering::SeqCst) {
+                    self.notify(CamelEvent::CamelContextInitializing);
+                    self.notify(CamelEvent::CamelContextInitialized);
+                }
                 log::info!(
                     "Apache Camel {} ({}) is starting",
                     env!("CARGO_PKG_VERSION"),
                     self.name.read().unwrap()
                 );
-                self.start_components().await?;
-                let mut routes: Vec<Arc<DefaultRoute>> = self
-                    .routes()
-                    .into_iter()
-                    .filter(|r| r.is_auto_startup())
-                    .collect();
-                routes.sort_by_key(|r| r.startup_order().unwrap_or(i32::MAX));
-                for (i, r) in routes.iter().enumerate() {
-                    if let Err(e) = camel_api::service::Service::start(r.as_ref()).await {
-                        for started in routes[..i].iter().rev() {
-                            let _ = camel_api::service::Service::stop(started.as_ref()).await;
-                        }
-                        return Err(e);
-                    }
+                self.notify(CamelEvent::CamelContextStarting);
+                if let Err(e) = self.start_routes().await {
+                    self.notify(CamelEvent::CamelContextStartupFailure(&e));
+                    return Err(e);
                 }
+                self.notify(CamelEvent::CamelContextStarted);
                 log::info!(
                     "Apache Camel {} ({}) started",
                     env!("CARGO_PKG_VERSION"),
@@ -483,6 +547,29 @@ impl DefaultCamelContext {
                 Ok(())
             })
             .await
+    }
+
+    /// Starts the components and the auto started routes in startup order.
+    async fn start_routes(&self) -> CamelResult<()> {
+        self.start_components().await?;
+        self.notify(CamelEvent::CamelContextRoutesStarting);
+        let all = self.routes();
+        for r in &all {
+            self.announce_route(r.id());
+        }
+        let mut routes: Vec<Arc<DefaultRoute>> =
+            all.into_iter().filter(|r| r.is_auto_startup()).collect();
+        routes.sort_by_key(|r| r.startup_order().unwrap_or(i32::MAX));
+        for (i, r) in routes.iter().enumerate() {
+            if let Err(e) = self.start_route_with_events(r).await {
+                for started in routes[..i].iter().rev() {
+                    let _ = camel_api::service::Service::stop(started.as_ref()).await;
+                }
+                return Err(e);
+            }
+        }
+        self.notify(CamelEvent::CamelContextRoutesStarted);
+        Ok(())
     }
 
     /// Stops the context: the routes in reverse startup order, then the components.
@@ -498,14 +585,22 @@ impl DefaultCamelContext {
                     env!("CARGO_PKG_VERSION"),
                     self.name.read().unwrap()
                 );
+                self.notify(CamelEvent::CamelContextStopping);
                 let mut first_error = None;
                 let mut routes = self.routes();
                 routes.sort_by_key(|r| r.startup_order().unwrap_or(i32::MAX));
+                self.notify(CamelEvent::CamelContextRoutesStopping);
                 for r in routes.iter().rev() {
-                    if let Err(e) = camel_api::service::Service::stop(r.as_ref()).await {
+                    if let Err(e) = self.stop_route_with_events(r).await {
                         first_error.get_or_insert(e);
                     }
+                    // Java removes the routes when stopping (and creates them again when
+                    // starting); the Rust context keeps them, but sends the same events
+                    if self.announced_routes.lock().unwrap().remove(r.id()) {
+                        self.notify(CamelEvent::RouteRemoved(r.id()));
+                    }
                 }
+                self.notify(CamelEvent::CamelContextRoutesStopped);
                 let components: Vec<SharedComponent> =
                     self.components.read().unwrap().values().cloned().collect();
                 for c in components.iter().rev() {
@@ -515,8 +610,14 @@ impl DefaultCamelContext {
                 }
                 self.started_components.lock().unwrap().clear();
                 match first_error {
-                    Some(e) => Err(e),
-                    None => Ok(()),
+                    Some(e) => {
+                        self.notify(CamelEvent::CamelContextStopFailure(&e));
+                        Err(e)
+                    }
+                    None => {
+                        self.notify(CamelEvent::CamelContextStopped);
+                        Ok(())
+                    }
                 }
             })
             .await
@@ -539,6 +640,10 @@ impl CamelContext for DefaultCamelContext {
 
     fn uuid_generator(&self) -> Arc<dyn UuidGenerator> {
         self.uuid.clone()
+    }
+
+    fn event_notifiers(&self) -> Vec<SharedEventNotifier> {
+        self.event_notifiers.read().unwrap().clone()
     }
 
     fn is_message_history(&self) -> bool {

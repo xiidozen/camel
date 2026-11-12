@@ -6,11 +6,13 @@ use camel_api::exchange::Exchange;
 use camel_api::processor::{
     start_processors, stop_processors, BoxFuture, Processor, SharedProcessor,
 };
+use camel_api::spi::event::{notify, CamelEvent};
 use camel_api::spi::synchronization::{after_route_synchronizations, done_synchronizations};
 
 /// Runs the processor in a unit of work: if the exchange has none, one is started, and when
 /// the processor is done the on completions of the exchange run (`on_failure` if it failed,
-/// else `on_complete`). With a route id, the `on_after_route` callbacks run after the
+/// else `on_complete`), then the `ExchangeCompleted` or `ExchangeFailed` event is sent (the
+/// `ExchangeCreated` event when it begins). With a route id, the `on_after_route` callbacks run after the
 /// processor too.
 ///
 /// Errors of the processor are set on the exchange (so the on completions see the failure).
@@ -43,6 +45,10 @@ impl Processor for UnitOfWorkProcessor {
             let created = !exchange.has_unit_of_work();
             if created {
                 exchange.begin_unit_of_work();
+                notify(
+                    exchange.context().clone().as_ref(),
+                    CamelEvent::ExchangeCreated(exchange),
+                );
             }
             if let Some(route_id) = &self.route_id {
                 for s in exchange.on_completions().to_vec() {
@@ -59,6 +65,12 @@ impl Processor for UnitOfWorkProcessor {
             if created {
                 let list = exchange.take_on_completions();
                 done_synchronizations(exchange, list).await;
+                let context = exchange.context().clone();
+                if exchange.is_failed() {
+                    notify(context.as_ref(), CamelEvent::ExchangeFailed(exchange));
+                } else {
+                    notify(context.as_ref(), CamelEvent::ExchangeCompleted(exchange));
+                }
                 exchange.end_unit_of_work();
             }
             Ok(())

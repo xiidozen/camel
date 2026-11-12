@@ -27,6 +27,12 @@ pub trait CamelContext: Send + Sync {
         false
     }
 
+    /// The notifiers of the events (Java `getManagementStrategy().getEventNotifiers()`);
+    /// send events with [`notify`](crate::spi::event::notify).
+    fn event_notifiers(&self) -> Vec<crate::spi::event::SharedEventNotifier> {
+        Vec::new()
+    }
+
     /// Resolves the endpoint for the uri, creating it with its component on first use (Java
     /// `getEndpoint(String)`).
     ///
