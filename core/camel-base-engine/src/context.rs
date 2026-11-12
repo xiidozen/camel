@@ -41,7 +41,7 @@ static CONTEXT_COUNTER: AtomicU32 = AtomicU32::new(0);
 /// The context is always held in an `Arc` (see [`DefaultCamelContext::new`]), as endpoints and
 /// exchanges refer back to it.
 pub struct DefaultCamelContext {
-    name: String,
+    name: RwLock<String>,
     this: Weak<DefaultCamelContext>,
     uuid: Arc<dyn UuidGenerator>,
     registry: Arc<SimpleRegistry>,
@@ -70,7 +70,7 @@ impl DefaultCamelContext {
     /// Creates a context with the name.
     pub fn with_name(name: &str) -> Arc<Self> {
         Arc::new_cyclic(|this| DefaultCamelContext {
-            name: name.to_string(),
+            name: RwLock::new(name.to_string()),
             this: this.clone(),
             uuid: Arc::new(DefaultUuidGenerator::new()),
             registry: Arc::new(SimpleRegistry::new()),
@@ -93,6 +93,12 @@ impl DefaultCamelContext {
             },
             state: ServiceState::new(),
         })
+    }
+
+    /// Sets the name of the context (Java `setName`, the `camel.context.name` option of
+    /// camel-main); set it before starting.
+    pub fn set_name(&self, name: &str) {
+        *self.name.write().unwrap() = name.to_string();
     }
 
     /// This context as a shared `CamelContext` (what endpoints and exchanges refer to).
@@ -452,7 +458,7 @@ impl DefaultCamelContext {
                 log::info!(
                     "Apache Camel {} ({}) is starting",
                     env!("CARGO_PKG_VERSION"),
-                    self.name
+                    self.name.read().unwrap()
                 );
                 self.start_components().await?;
                 let mut routes: Vec<Arc<DefaultRoute>> = self
@@ -472,7 +478,7 @@ impl DefaultCamelContext {
                 log::info!(
                     "Apache Camel {} ({}) started",
                     env!("CARGO_PKG_VERSION"),
-                    self.name
+                    self.name.read().unwrap()
                 );
                 Ok(())
             })
@@ -490,7 +496,7 @@ impl DefaultCamelContext {
                 log::info!(
                     "Apache Camel {} ({}) is shutting down",
                     env!("CARGO_PKG_VERSION"),
-                    self.name
+                    self.name.read().unwrap()
                 );
                 let mut first_error = None;
                 let mut routes = self.routes();
@@ -528,7 +534,7 @@ impl DefaultCamelContext {
 
 impl CamelContext for DefaultCamelContext {
     fn name(&self) -> String {
-        self.name.clone()
+        self.name.read().unwrap().clone()
     }
 
     fn uuid_generator(&self) -> Arc<dyn UuidGenerator> {

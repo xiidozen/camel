@@ -20,6 +20,7 @@ members = [
     "components/camel-timer",
     "dsl/camel-yaml-dsl/camel-yaml-dsl",
     "dsl/camel-xml-io-dsl",
+    "core/camel-main",
 ]
 
 [workspace.package]
@@ -49,3 +50,4 @@ camel-bean = { path = "components/camel-bean" }
 camel-timer = { path = "components/camel-timer" }
 camel-yaml-dsl = { path = "dsl/camel-yaml-dsl/camel-yaml-dsl" }
 camel-xml-io-dsl = { path = "dsl/camel-xml-io-dsl" }
+camel-main = { path = "core/camel-main" }
