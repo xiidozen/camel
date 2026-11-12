@@ -174,3 +174,160 @@ async fn test_choice_with_transform() {
         .unwrap();
     assert_eq!(Value::from("Rejecting body"), out);
 }
+
+/// Port of `ChoiceCompoundPredicateTest`.
+#[tokio::test]
+async fn test_choice_compound_predicate() {
+    let t = ContextTestSupport::with_routes(|r: &mut Routes| {
+        let user = header("username").is_not_null();
+        let admin = and(user.clone(), header("admin").is_equal_to("true"));
+        let god = and(
+            admin.clone(),
+            or(
+                body().contains("Camel Rider"),
+                header("type").is_equal_to("god"),
+            ),
+        );
+        r.add(from("direct:start").choice(move |c| {
+            c.when(god, |w| w.to("mock:god"))
+                .when(admin, |w| w.to("mock:admin"))
+                .when(user, |w| w.to("mock:user"))
+                .otherwise(|o| o.to("mock:guest"))
+        }));
+    })
+    .await;
+    let h = |pairs: &[(&str, &str)]| -> Vec<(String, Value)> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), Value::from(*v)))
+            .collect()
+    };
+    for (body, headers, target) in [
+        ("Hello World", h(&[]), "mock:guest"),
+        ("Hello World", h(&[("username", "goofy")]), "mock:user"),
+        (
+            "Hello World",
+            h(&[("username", "donald"), ("admin", "true")]),
+            "mock:admin",
+        ),
+        (
+            "Hello World",
+            h(&[("username", "pluto"), ("admin", "true"), ("type", "god")]),
+            "mock:god",
+        ),
+        (
+            "Hello Camel Rider",
+            h(&[("username", "Camel"), ("admin", "true")]),
+            "mock:god",
+        ),
+    ] {
+        let mock = t.mock(target);
+        mock.reset();
+        mock.expected_message_count(1);
+        t.template
+            .send_body_and_headers("direct:start", body, headers)
+            .await
+            .unwrap();
+        mock.assert_is_satisfied().await;
+    }
+}
+
+/// Port of `ChoiceWithEndTest` (not the case navigating the Java processors).
+#[tokio::test]
+async fn test_choice_with_end() {
+    let t = ContextTestSupport::with_routes(|r: &mut Routes| {
+        r.add(
+            from("direct:start")
+                .to("mock:start")
+                .choice(|c| {
+                    c.when(body().contains("Hello"), |w| {
+                        w.transform(simple("echo ${body}")).to("mock:echo")
+                    })
+                    .when(body().contains("Bye"), |w| {
+                        w.to("direct:bye").to("mock:bye")
+                    })
+                    .otherwise(|o| o.transform(simple("other ${body}")).to("mock:other"))
+                })
+                .transform(body().prepend("last "))
+                .to("mock:last"),
+        );
+        r.add(from("direct:bye").do_try(|b| {
+            b.process_fn(|_| Err(CamelError::illegal_argument("Damn does not work")))
+                .to("mock:bye")
+                .do_catch(camel_core::api::error::ErrorType::Any, |c| {
+                    c.set_body(constant("We do not care"))
+                })
+        }));
+    })
+    .await;
+    for (body, mock, mock_body, last) in [
+        (
+            "Hello World",
+            "mock:echo",
+            "echo Hello World",
+            "last echo Hello World",
+        ),
+        (
+            "Bye World",
+            "mock:bye",
+            "We do not care",
+            "last We do not care",
+        ),
+        ("Camel", "mock:other", "other Camel", "last other Camel"),
+    ] {
+        for m in ["mock:start", mock, "mock:last"] {
+            t.mock(m).reset();
+        }
+        t.mock("mock:start").expected_bodies_received([body]);
+        t.mock(mock).expected_bodies_received([mock_body]);
+        t.mock("mock:last").expected_bodies_received([last]);
+        t.template.send_body("direct:start", body).await.unwrap();
+        t.assert_mock_endpoints_satisfied().await;
+    }
+}
+
+/// Port of `ChoicePredicateThrowExceptionTest`.
+#[tokio::test]
+async fn test_choice_predicate_throw_exception() {
+    fn failing() -> camel_core::api::processor::SharedPredicate {
+        camel_core::support::builder::named_predicate("forced", |_| {
+            Err(CamelError::illegal_argument("Forced"))
+        })
+    }
+    fn choice(route: RouteDsl) -> RouteDsl {
+        route.choice(|c| {
+            c.when(failing(), |w| w.to("mock:a").to("mock:b").to("mock:c"))
+                .otherwise(|o| o.to("mock:d").to("mock:e").to("mock:f"))
+        })
+    }
+    for sub_route in [false, true] {
+        let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+            if sub_route {
+                r.add(from("direct:start").to("direct:sub").to("mock:result"));
+                r.add(choice(from("direct:sub").error_handler(no_error_handler())));
+            } else {
+                r.error_handler(no_error_handler());
+                r.add(choice(from("direct:start")).to("mock:result"));
+            }
+        })
+        .await;
+        for m in [
+            "mock:a",
+            "mock:b",
+            "mock:c",
+            "mock:d",
+            "mock:e",
+            "mock:f",
+            "mock:result",
+        ] {
+            t.mock(m).expected_message_count(0);
+        }
+        let e = t
+            .template
+            .send_body("direct:start", "Hello World")
+            .await
+            .unwrap_err();
+        assert!(cause_of(&e).is(ErrorKind::IllegalArgument), "{e}");
+        t.assert_mock_endpoints_satisfied().await;
+    }
+}
