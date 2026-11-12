@@ -154,6 +154,9 @@ pub struct FileConfiguration {
     pub max_messages_per_poll: usize,
     /// Whether the consumed files are remembered (default: with `noop`).
     pub idempotent: Option<bool>,
+    /// The key of a file in the idempotent repository (a simple expression; default the
+    /// absolute path).
+    pub idempotent_key: Option<String>,
     /// Whether the starting directory must exist (default `false`).
     pub starting_directory_must_exist: bool,
     /// Whether the directory must exist when polling (default `false`).
@@ -199,6 +202,7 @@ impl FileConfiguration {
             max_depth: usize::MAX,
             max_messages_per_poll: 0,
             idempotent: None,
+            idempotent_key: None,
             starting_directory_must_exist: false,
             directory_must_exist: false,
             include_hidden_files: false,
@@ -305,6 +309,7 @@ impl Component for FileComponent {
             c.max_messages_per_poll = v.max(0) as usize;
         }
         c.idempotent = param(parameters, "idempotent")?;
+        c.idempotent_key = param(parameters, "idempotentKey")?;
         if let Some(v) = param(parameters, "startingDirectoryMustExist")? {
             c.starting_directory_must_exist = v;
         }

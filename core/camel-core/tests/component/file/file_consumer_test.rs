@@ -517,3 +517,84 @@ async fn test_max_messages_per_poll() {
     t.context.start_route("foo").await.unwrap();
     mock.assert_is_satisfied().await;
 }
+
+/// Ports of `FileConsumerIdempotentTest` and `FileConsumerIdempotentKeyTest`: a file moved back
+/// after being consumed is not consumed again.
+#[tokio::test]
+async fn test_idempotent() {
+    for key in ["", "&idempotentKey=${file:onlyname}"] {
+        let dir = TestDirectory::new("FileConsumerIdempotentTest");
+        let uri = dir.file_uri(&format!(
+            "?idempotent=true{key}&move=done/${{file:name}}&initialDelay=0&delay=10"
+        ));
+        let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+            r.add(from(&uri).convert_body_to("String").to("mock:result"));
+        })
+        .await;
+        let mock = t.mock("mock:result");
+        mock.expected_bodies_received(["Hello World"]);
+        send(&t, &dir, "report.txt", "Hello World").await;
+        mock.assert_is_satisfied().await;
+        let done = dir.test_file("done/report.txt");
+        support_wait(|| done.exists()).await;
+        mock.reset();
+        mock.expected_message_count(0);
+        std::fs::rename(&done, dir.test_file("report.txt")).unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        mock.assert_is_satisfied().await;
+        assert!(dir.test_file("report.txt").exists());
+    }
+}
+
+/// Port of `FileIdempotentReadSameFileAgainTest`.
+#[tokio::test]
+async fn test_idempotent_read_same_file_again() {
+    let dir = TestDirectory::new("FileIdempotentReadSameFileAgainTest");
+    let uri = dir.file_uri(
+        "?idempotent=false&move=../done&moveFailed=../error&preMove=working/${date:now:yyyyMMddHHmmssSSS}-${file:name}&readLock=none&initialDelay=0&delay=10",
+    );
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(from(&uri).convert_body_to("String").to("mock:result"));
+    })
+    .await;
+    let mock = t.mock("mock:result");
+    mock.expected_bodies_received_in_any_order(["Hello World", "Foo"]);
+    send(&t, &dir, "foo.txt", "Hello World").await;
+    send(&t, &dir, "bar.txt", "Foo").await;
+    mock.assert_is_satisfied().await;
+    mock.reset();
+    mock.expected_bodies_received(["Bye World"]);
+    send(&t, &dir, "foo.txt", "Bye World").await;
+    mock.assert_is_satisfied().await;
+}
+
+/// Port of `FileConsumeCharsetTest`.
+#[tokio::test]
+async fn test_consume_charset() {
+    let dir = TestDirectory::new("FileConsumeCharsetTest");
+    let t = ContextTestSupport::new();
+    t.context.start().await.unwrap();
+    t.template
+        .send_body_and_header(
+            &dir.file_uri("?charset=UTF-8"),
+            "Hello World \u{4f60}\u{597d}",
+            FILE_NAME,
+            "report.txt",
+        )
+        .await
+        .unwrap();
+    let uri =
+        dir.file_uri("?initialDelay=0&delay=10&fileName=report.txt&delete=true&charset=UTF-8");
+    t.context
+        .add_routes(move |r: &mut Routes| {
+            r.add(from(&uri).convert_body_to("String").to("mock:result"));
+        })
+        .await
+        .unwrap();
+    let mock = t.mock("mock:result");
+    mock.expected_bodies_received(["Hello World \u{4f60}\u{597d}"]);
+    mock.assert_is_satisfied().await;
+    let f = dir.test_file("report.txt");
+    support_wait(|| !f.exists()).await;
+    assert!(!f.exists(), "File should been deleted");
+}

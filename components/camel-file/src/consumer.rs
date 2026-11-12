@@ -231,6 +231,7 @@ fn named(endpoint: &FileEndpoint, path: &Path) -> CamelResult<bool> {
 pub(crate) struct Taken {
     file: GenericFile,
     key: String,
+    idempotent_key: String,
     idempotent: bool,
 }
 
@@ -251,17 +252,37 @@ pub(crate) fn begin(
     if !endpoint.in_progress.lock().unwrap().insert(key.clone()) {
         return Ok(None);
     }
-    if idempotent && !endpoint.idempotent.add(&key) {
+    // the key in the idempotent repository: the idempotentKey expression, or the path
+    let idempotent_key = match &c.idempotent_key {
+        Some(expr) if idempotent => {
+            let mut e = endpoint.create_exchange();
+            file.populate_headers(&mut e);
+            match endpoint
+                .expression(expr)
+                .and_then(|x| x.evaluate_mut(&mut e))
+            {
+                Ok(v) => v.to_string(),
+                Err(err) => {
+                    endpoint.in_progress.lock().unwrap().remove(&key);
+                    return Err(err);
+                }
+            }
+        }
+        _ => key.clone(),
+    };
+    if idempotent && !endpoint.idempotent.add(&idempotent_key) {
         endpoint.in_progress.lock().unwrap().remove(&key);
-        log::trace!("This consumer is idempotent and the file has been consumed before: {key}");
+        log::trace!(
+            "This consumer is idempotent and the file has been consumed before: {idempotent_key}"
+        );
         return Ok(None);
     }
-    match prepare(endpoint, file, &key, idempotent) {
+    match prepare(endpoint, file, &key, &idempotent_key, idempotent) {
         Ok(r) => Ok(Some(r)),
         Err(e) => {
             endpoint.in_progress.lock().unwrap().remove(&key);
             if idempotent {
-                endpoint.idempotent.remove(&key);
+                endpoint.idempotent.remove(&idempotent_key);
             }
             Err(e)
         }
@@ -273,6 +294,7 @@ fn prepare(
     endpoint: &Arc<FileEndpoint>,
     mut file: GenericFile,
     key: &str,
+    idempotent_key: &str,
     idempotent: bool,
 ) -> CamelResult<(Taken, Exchange)> {
     let c = &endpoint.config;
@@ -292,6 +314,7 @@ fn prepare(
         Taken {
             file,
             key,
+            idempotent_key: idempotent_key.to_string(),
             idempotent,
         },
         exchange,
@@ -312,7 +335,7 @@ pub(crate) fn commit(
     let failed = exchange.is_failed() || exchange.is_rollback_only();
     if failed {
         if taken.idempotent {
-            endpoint.idempotent.remove(&taken.key);
+            endpoint.idempotent.remove(&taken.idempotent_key);
         }
         if let Some(e) = exchange.exception() {
             log::warn!(
