@@ -408,6 +408,15 @@ pub enum Eip {
         /// Whether a body that cannot be converted fails (default `true`).
         mandatory: bool,
     },
+    /// Calls a method of a bean (`bean`): by name in the registry or the bean itself; the
+    /// result becomes the message body.
+    Bean {
+        /// The bean.
+        bean: camel_api::bean_binding::BeanReference,
+        /// The method (a method call such as `hello('World')`), `None` for the only method of
+        /// the bean.
+        method: Option<String>,
+    },
     /// `doTry` with its `doCatch` and `doFinally` clauses.
     DoTry {
         /// The steps of the try block.
@@ -449,6 +458,7 @@ impl Eip {
             Eip::WireTap { .. } => "wireTap",
             Eip::SetExchangePattern(_) => "setExchangePattern",
             Eip::ConvertBodyTo { .. } => "convertBodyTo",
+            Eip::Bean { .. } => "bean",
         }
     }
 }
@@ -529,6 +539,13 @@ impl fmt::Display for ProcessorDefinition {
             Eip::WireTap { uri, .. } => write!(f, "WireTap[{uri}]"),
             Eip::SetExchangePattern(p) => write!(f, "setExchangePattern[pattern: {p}]"),
             Eip::ConvertBodyTo { type_name, .. } => write!(f, "ConvertBodyTo[{type_name}]"),
+            Eip::Bean { bean, method } => match bean {
+                camel_api::bean_binding::BeanReference::Name(name) => match method {
+                    Some(m) => write!(f, "Bean[ref:{name} method:{m}]"),
+                    None => write!(f, "Bean[ref:{name}]"),
+                },
+                camel_api::bean_binding::BeanReference::Bean(b) => write!(f, "Bean[{b}]"),
+            },
             Eip::DoTry {
                 steps,
                 catches,

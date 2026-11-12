@@ -104,7 +104,10 @@ Crates live **in the directory of the Maven module they replace** (`core/camel-a
 - `components/camel-bean`: **in progress** — the bean language and `MethodBean`; beans implement
   `camel_api::bean_binding::ExchangeBean` (Java bean binding without reflection: each method reads
   its parameters from the `BeanInvocation`, `parameter(i)` = explicit parameter, else the body).
-  `camel_core::default_context()` registers the `bean` language.
+  `camel_core::default_context()` registers the `bean` language and component, and the
+  `Arc<dyn BeanProcessorFactory>` context plugin (`DefaultCamelContext::add_plugin`,
+  `camel_api::context::context_plugin`) the reifier uses for the bean EIP (`.bean(..)`,
+  `.bean_method(..)`; `method(..)`/`method_ref(..)` expressions).
 - Test helpers in `core/camel-core/tests/support`: `ContextTestSupport`, `cause_of` (Java
   `getCause()`), `await_until` (Awaitility; never a bare sleep loop), `body_in_aggregating_strategy`.
 - Unit of work: the exchange carries it (`Exchange::begin_unit_of_work`, `original_message`,

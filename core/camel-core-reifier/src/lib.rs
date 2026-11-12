@@ -7,7 +7,8 @@
 #![deny(missing_docs)]
 #![deny(rustdoc::broken_intra_doc_links)]
 
-use camel_api::context::CamelContext;
+use camel_api::bean_binding::BeanProcessorFactory;
+use camel_api::context::{context_plugin, CamelContext};
 use camel_api::error::{CamelError, CamelResult};
 use camel_api::processor::{
     ExpressionPredicate, Processor, SharedAggregationStrategy, SharedExpression, SharedPredicate,
@@ -402,6 +403,17 @@ impl<'a> RouteReifier<'a> {
                 type_name,
                 mandatory,
             } => Arc::new(ConvertBodyProcessor::new(type_name, *mandatory)?),
+            Eip::Bean { bean, method } => {
+                let factory = context_plugin::<Arc<dyn BeanProcessorFactory>>(
+                    self.context.as_ref(),
+                )
+                .ok_or_else(|| {
+                    CamelError::illegal_state(
+                        "Cannot create the bean processor: the context has no BeanProcessorFactory plugin (add the camel-bean crate, as camel_core::default_context() does)",
+                    )
+                })?;
+                factory.create_bean_processor(self.context, bean, method.as_deref())?
+            }
             Eip::DoTry {
                 steps,
                 catches,

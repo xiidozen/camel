@@ -9,7 +9,7 @@ use crate::spi::language::Language;
 use crate::spi::log_listener::LogListener;
 use crate::spi::registry::Registry;
 use crate::spi::uuid::{DefaultUuidGenerator, UuidGenerator};
-use std::any::Any;
+use std::any::{Any, TypeId};
 use std::sync::{Arc, OnceLock};
 
 /// The context of a Camel application: the registry of components, endpoints, routes and
@@ -59,8 +59,24 @@ pub trait CamelContext: Send + Sync {
         None
     }
 
+    /// The plugin of the type, if the context has one (Java
+    /// `getCamelContextExtension().getContextPlugin(type)`); see [`context_plugin`].
+    fn plugin(&self, type_id: TypeId) -> Option<Arc<dyn Any + Send + Sync>> {
+        let _ = type_id;
+        None
+    }
+
     /// The context as `Any`, to access the concrete implementation.
     fn as_any(&self) -> &dyn Any;
+}
+
+/// The plugin of the type `T` of the context (Java `getContextPlugin(type)`), such as the
+/// `Arc<dyn BeanProcessorFactory>` the bean EIP uses
+/// ([`crate::bean_binding::BeanProcessorFactory`]).
+pub fn context_plugin<T: Any + Send + Sync>(context: &dyn CamelContext) -> Option<Arc<T>> {
+    context
+        .plugin(TypeId::of::<T>())
+        .and_then(|p| p.downcast::<T>().ok())
 }
 
 /// A minimal [`CamelContext`] for tests and standalone use of exchanges, without any routes or

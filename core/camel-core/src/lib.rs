@@ -37,6 +37,7 @@
 #![deny(missing_docs)]
 #![deny(rustdoc::broken_intra_doc_links)]
 
+use camel_api::bean_binding::BeanProcessorFactory;
 use camel_api::endpoint::SharedComponent;
 use camel_api::spi::language::Language;
 use camel_base_engine::context::DefaultCamelContext;
@@ -66,8 +67,9 @@ pub mod prelude {
     pub use camel_util::value::{Value, ValueMap};
 }
 
-/// Registers the factories of the core components (`direct`, `mock`, `log`, `seda`) on the context, so they
-/// are created on first use (Rust has no classpath scanning).
+/// Registers the factories of the core components (`direct`, `mock`, `log`, `seda`, `bean`) on
+/// the context, so they are created on first use (Rust has no classpath scanning), and the
+/// bean processor factory of the bean EIP.
 pub fn register_core_components(context: &DefaultCamelContext) {
     context.register_component_factory(
         "direct",
@@ -85,6 +87,14 @@ pub fn register_core_components(context: &DefaultCamelContext) {
         "seda",
         Arc::new(|| Arc::new(camel_seda::SedaComponent::new()) as SharedComponent),
     );
+    context.register_component_factory(
+        "bean",
+        Arc::new(|| Arc::new(camel_bean::BeanComponent::new()) as SharedComponent),
+    );
+    // the factory of the processors of the bean EIP (Java BeanProcessorFactory plugin)
+    context.add_plugin::<Arc<dyn BeanProcessorFactory>>(Arc::new(
+        camel_bean::DefaultBeanProcessorFactory,
+    ));
 }
 
 /// Registers the factories of the core languages (`simple`, `constant`, `header`,

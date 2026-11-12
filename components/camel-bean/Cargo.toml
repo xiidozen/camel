@@ -16,3 +16,4 @@ indexmap = "2"
 
 [dev-dependencies]
 camel-core = { workspace = true }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros"] }

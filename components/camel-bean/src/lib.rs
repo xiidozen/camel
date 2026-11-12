@@ -1,6 +1,7 @@
-//! The bean language and bean binding (port of `components/camel-bean`): calling the methods
-//! of beans from the registry, as `${bean:greeter.hello}` in the simple language or the `bean`
-//! language itself (`greeter.hello`, `greeter?method=hello`, `greeter::hello('World')`).
+//! The bean component, language and EIP (port of `components/camel-bean`): calling the methods
+//! of beans from the registry, as `${bean:greeter.hello}` in the simple language, the `bean`
+//! language itself (`greeter.hello`, `greeter?method=hello`, `greeter::hello('World')`), the
+//! `bean:greeter?method=hello` endpoint and the `.bean("greeter")` step of routes.
 //!
 //! Java finds the methods of a bean by reflection; a Rust bean implements
 //! [`ExchangeBean`](camel_api::bean_binding::ExchangeBean), or is a [`MethodBean`] built from
@@ -32,8 +33,12 @@
 #![deny(missing_docs)]
 #![deny(rustdoc::broken_intra_doc_links)]
 
+pub mod component;
 pub mod language;
 pub mod method_bean;
+pub mod processor;
 
+pub use component::BeanComponent;
 pub use language::{BeanExpression, BeanLanguage};
 pub use method_bean::MethodBean;
+pub use processor::{processor_value, BeanProcessor, DefaultBeanProcessorFactory};

@@ -47,6 +47,7 @@ use crate::processor::{
     OnCompletionDefinition, ProcessRef, ProcessorDefinition, RepositoryRef, WhenDefinition,
 };
 use crate::route::RouteDefinition;
+use camel_api::bean_binding::BeanReference;
 use camel_api::enums::{ExchangePattern, LoggingLevel};
 use camel_api::error::{CamelError, CamelResult, ErrorType};
 use camel_api::exchange::Exchange;
@@ -67,6 +68,28 @@ pub fn simple(expression: &str) -> ExpressionDefinition {
 /// An expression in the language (Java `language("groovy", "...")`).
 pub fn language(language: &str, expression: &str) -> ExpressionDefinition {
     ExpressionDefinition::language(language, expression)
+}
+
+/// An expression calling the method of the bean in the registry (Java `method(ref,
+/// method)`), with the `bean` language.
+pub fn method(bean: &str, method: &str) -> ExpressionDefinition {
+    let bean = strip_bean_prefix(bean);
+    ExpressionDefinition::language("bean", &format!("{bean}::{method}"))
+}
+
+/// The bean name without its `ref:` or `bean:` prefix (Java `MethodCallExpression`).
+fn strip_bean_prefix(bean: &str) -> &str {
+    bean.strip_prefix("ref:")
+        .or_else(|| bean.strip_prefix("bean:"))
+        .unwrap_or(bean)
+}
+
+/// An expression calling the only method of the bean in the registry (Java `method(ref)`),
+/// with the `bean` language; the name may have a `ref:` or `bean:` prefix.
+pub fn method_ref(bean: &str) -> ExpressionDefinition {
+    // the query form keeps a bean name with dots whole
+    let bean = strip_bean_prefix(bean);
+    ExpressionDefinition::language("bean", &format!("{bean}?scope=Singleton"))
 }
 
 /// Starts a route consuming from the endpoint.
@@ -260,6 +283,25 @@ pub trait Dsl: Sized {
     /// Sets the exchange pattern (Java `.setExchangePattern(..)`).
     fn set_exchange_pattern(self, pattern: ExchangePattern) -> Self {
         self.eip(Eip::SetExchangePattern(pattern))
+    }
+
+    /// Calls the only method of the bean (Java `.bean(..)`): the name of a bean in the
+    /// registry, or the bean itself (such as a `camel_bean::MethodBean`); the result becomes
+    /// the message body.
+    fn bean(self, bean: impl Into<BeanReference>) -> Self {
+        self.eip(Eip::Bean {
+            bean: bean.into(),
+            method: None,
+        })
+    }
+
+    /// Calls the method of the bean (Java `.bean(bean, method)`); the method may have
+    /// parameters, such as `hello('World', ${header.name})`.
+    fn bean_method(self, bean: impl Into<BeanReference>, method: &str) -> Self {
+        self.eip(Eip::Bean {
+            bean: bean.into(),
+            method: Some(method.to_string()),
+        })
     }
 
     /// Converts the body to the Java type, such as `String` or `Integer` (Java

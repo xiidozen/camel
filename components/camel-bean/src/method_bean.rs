@@ -10,6 +10,13 @@ use std::sync::Arc;
 
 type MethodFn = Arc<dyn Fn(&mut BeanInvocation<'_>) -> CamelResult<Value> + Send + Sync>;
 
+/// A method: the closure, and whether it returns no value (Java `void`).
+#[derive(Clone)]
+struct Method {
+    f: MethodFn,
+    void: bool,
+}
+
 /// A bean made of closures, one per method.
 ///
 /// # Examples
@@ -21,13 +28,18 @@ type MethodFn = Arc<dyn Fn(&mut BeanInvocation<'_>) -> CamelResult<Value> + Send
 ///
 /// let bean = MethodBean::new("MyFileNameGenerator")
 ///     .method("generateFilename", |_| Ok(Value::from("abc")))
-///     .method("generateId", |_| Ok(Value::Int(123)));
-/// assert_eq!(vec!["generateFilename", "generateId"], bean.method_names());
+///     .method("generateId", |_| Ok(Value::Int(123)))
+///     .void_method("audit", |inv| {
+///         inv.exchange_mut().set_property("audited", true);
+///         Ok(())
+///     });
+/// assert_eq!(vec!["generateFilename", "generateId", "audit"], bean.method_names());
+/// assert!(bean.is_void("audit"));
 /// ```
 #[derive(Clone)]
 pub struct MethodBean {
     bean_type: String,
-    methods: IndexMap<String, MethodFn>,
+    methods: IndexMap<String, Method>,
 }
 
 impl MethodBean {
@@ -45,12 +57,35 @@ impl MethodBean {
     /// # Arguments
     ///
     /// * `name` - the name of the method
-    /// * `f` - the method, called with the invocation (the exchange and the parameters)
+    /// * `f` - the method, called with the invocation (the exchange and the parameters); its
+    ///   result is the new message body when called by the bean EIP or component
     pub fn method<F>(mut self, name: impl Into<String>, f: F) -> Self
     where
         F: Fn(&mut BeanInvocation<'_>) -> CamelResult<Value> + Send + Sync + 'static,
     {
-        self.methods.insert(name.into(), Arc::new(f));
+        self.methods.insert(
+            name.into(),
+            Method {
+                f: Arc::new(f),
+                void: false,
+            },
+        );
+        self
+    }
+
+    /// Adds a method that returns no value (a Java `void` method): the bean EIP and component
+    /// keep the message body.
+    pub fn void_method<F>(mut self, name: impl Into<String>, f: F) -> Self
+    where
+        F: Fn(&mut BeanInvocation<'_>) -> CamelResult<()> + Send + Sync + 'static,
+    {
+        self.methods.insert(
+            name.into(),
+            Method {
+                f: Arc::new(move |inv| f(inv).map(|_| Value::Null)),
+                void: true,
+            },
+        );
         self
     }
 
@@ -82,9 +117,13 @@ impl ExchangeBean for MethodBean {
         self.methods.contains_key(name)
     }
 
+    fn is_void(&self, method: &str) -> bool {
+        self.methods.get(method).is_some_and(|m| m.void)
+    }
+
     fn invoke(&self, invocation: &mut BeanInvocation<'_>) -> CamelResult<Value> {
         match self.methods.get(invocation.method()) {
-            Some(f) => f(invocation),
+            Some(m) => (m.f)(invocation),
             None => Err(method_not_found(
                 &self.bean_type,
                 &self.bean_type,

@@ -16,7 +16,7 @@ use camel_support::component_support;
 use camel_support::simple_registry::SimpleRegistry;
 use camel_util::uri_support::normalize_uri;
 use indexmap::IndexMap;
-use std::any::Any;
+use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
@@ -53,6 +53,7 @@ pub struct DefaultCamelContext {
     route_counter: AtomicU32,
     log_listeners: RwLock<Vec<Arc<dyn LogListener>>>,
     message_history: AtomicBool,
+    plugins: RwLock<HashMap<TypeId, Arc<dyn Any + Send + Sync>>>,
     state: ServiceState,
 }
 
@@ -80,6 +81,7 @@ impl DefaultCamelContext {
             route_counter: AtomicU32::new(0),
             log_listeners: RwLock::new(Vec::new()),
             message_history: AtomicBool::new(false),
+            plugins: RwLock::new(HashMap::new()),
             state: ServiceState::new(),
         })
     }
@@ -134,6 +136,15 @@ impl DefaultCamelContext {
     /// Adds a listener of the log messages (Java `addLogListener`).
     pub fn add_log_listener(&self, listener: Arc<dyn LogListener>) {
         self.log_listeners.write().unwrap().push(listener);
+    }
+
+    /// Adds the plugin of the type `T` (Java `CamelContextExtension.addContextPlugin`),
+    /// replacing an existing one; read with [`camel_api::context::context_plugin`].
+    pub fn add_plugin<T: Any + Send + Sync>(&self, plugin: T) {
+        self.plugins
+            .write()
+            .unwrap()
+            .insert(TypeId::of::<T>(), Arc::new(plugin));
     }
 
     /// Adds the language with the name (replacing an existing one).
@@ -511,6 +522,10 @@ impl CamelContext for DefaultCamelContext {
 
     fn endpoint(&self, uri: &str) -> CamelResult<SharedEndpoint> {
         self.resolve_endpoint(uri)
+    }
+
+    fn plugin(&self, type_id: TypeId) -> Option<Arc<dyn Any + Send + Sync>> {
+        self.plugins.read().unwrap().get(&type_id).cloned()
     }
 
     fn registry(&self) -> Option<Arc<dyn Registry>> {

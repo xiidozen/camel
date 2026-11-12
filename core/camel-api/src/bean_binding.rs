@@ -40,9 +40,11 @@
 //! assert_eq!("Greeter", value.to_string());
 //! ```
 
+use crate::context::CamelContext;
 use crate::convert::FromValue;
 use crate::error::{CamelError, CamelResult, ErrorKind};
 use crate::exchange::Exchange;
+use crate::processor::SharedProcessor;
 use camel_util::value::{ObjectRef, Value};
 use std::fmt;
 use std::sync::Arc;
@@ -135,6 +137,13 @@ pub trait ExchangeBean: Send + Sync + 'static {
         self.method_names().iter().any(|m| m == name)
     }
 
+    /// Whether the method returns no value (a Java `void` method): the bean EIP and component
+    /// then keep the message body, instead of setting the result as the body.
+    fn is_void(&self, method: &str) -> bool {
+        let _ = method;
+        false
+    }
+
     /// Calls the method of the invocation (one of [`method_names`](Self::method_names)).
     ///
     /// # Errors
@@ -170,6 +179,72 @@ pub fn exchange_bean(value: &Value) -> Option<Arc<dyn ExchangeBean>> {
         Value::Object(o) => o.downcast_ref::<BeanRef>().map(|b| b.0.clone()),
         _ => None,
     }
+}
+
+/// The bean of a bean EIP or method call expression: by name in the registry, or the bean
+/// itself (Java `ref` or `bean` of `BeanDefinition`).
+#[derive(Clone)]
+pub enum BeanReference {
+    /// The name of the bean in the registry.
+    Name(String),
+    /// The bean.
+    Bean(Value),
+}
+
+impl From<&str> for BeanReference {
+    fn from(name: &str) -> Self {
+        BeanReference::Name(name.to_string())
+    }
+}
+
+impl From<String> for BeanReference {
+    fn from(name: String) -> Self {
+        BeanReference::Name(name)
+    }
+}
+
+impl From<Value> for BeanReference {
+    fn from(bean: Value) -> Self {
+        BeanReference::Bean(bean)
+    }
+}
+
+impl fmt::Display for BeanReference {
+    /// The name, or the bean (its `to_string`).
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BeanReference::Name(n) => f.write_str(n),
+            BeanReference::Bean(b) => write!(f, "{b}"),
+        }
+    }
+}
+
+impl fmt::Debug for BeanReference {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BeanReference::Name(n) => write!(f, "Name({n})"),
+            BeanReference::Bean(b) => write!(f, "Bean({b})"),
+        }
+    }
+}
+
+/// Creates the processors of the bean EIP (Java `BeanProcessorFactory`, a context plugin):
+/// the `camel-bean` crate provides it, and `camel_core::default_context()` adds it to the
+/// context as an `Arc<dyn BeanProcessorFactory>` plugin
+/// ([`context_plugin`](crate::context::context_plugin)).
+pub trait BeanProcessorFactory: Send + Sync {
+    /// The processor calling the method of the bean (`None`: the only method of the bean).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the processor cannot be created, such as a `NoSuchBeanException`
+    /// for a bean not in the registry of the context, or a `MethodNotFoundException`.
+    fn create_bean_processor(
+        &self,
+        context: &Arc<dyn CamelContext>,
+        bean: &BeanReference,
+        method: Option<&str>,
+    ) -> CamelResult<SharedProcessor>;
 }
 
 /// A `MethodNotFoundException` (Java `Method with name: x not found on bean: y of type: z`).

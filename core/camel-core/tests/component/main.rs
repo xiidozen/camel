@@ -4,5 +4,6 @@
 #[path = "../support/mod.rs"]
 mod support;
 
+mod bean;
 mod log;
 mod seda;

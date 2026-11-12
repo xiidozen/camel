@@ -57,6 +57,7 @@ dependencies = [
  "camel-support",
  "camel-util",
  "indexmap",
+ "tokio",
 ]
 
 [[package]]
