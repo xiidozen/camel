@@ -37,6 +37,7 @@ mod route_policy_test;
 mod routing_slip_test;
 mod sampling_throttler_test;
 mod set_remove_transform_test;
+mod simple_routes_test;
 mod sort_step_script_test;
 mod split_parallel_test;
 mod split_tokenizer_test;
