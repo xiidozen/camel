@@ -598,3 +598,112 @@ async fn test_consume_charset() {
     support_wait(|| !f.exists()).await;
     assert!(!f.exists(), "File should been deleted");
 }
+
+/// Ports of `FileConsumeWithDollarInPathTest` and `FileConsumerPathWithAmpersandTest`.
+#[tokio::test]
+async fn test_special_characters_in_path() {
+    for (sub, option) in [
+        ("edi$/dev1", "?initialDelay=0&delay=10"),
+        ("file&stuff", "?delete=true&initialDelay=0&delay=10"),
+    ] {
+        let dir = TestDirectory::new("FileConsumeWithDollarInPathTest");
+        let uri = format!("{}{option}", dir.file_uri(sub));
+        let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+            r.add(from(&uri).convert_body_to("String").to("mock:result"));
+        })
+        .await;
+        t.mock("mock:result").expected_message_count(1);
+        send(&t, &dir, &format!("{sub}/hello.txt"), "Hello World").await;
+        t.assert_mock_endpoints_satisfied().await;
+    }
+}
+
+/// Port of `FileMoveErrorOnExceptionNotHandledTest`.
+#[tokio::test]
+async fn test_move_error_on_exception_not_handled() {
+    let dir = TestDirectory::new("FileMoveErrorOnExceptionNotHandledTest");
+    let uri = dir.file_uri("?moveFailed=error&initialDelay=0&delay=10");
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(
+            from(&uri)
+                .on_exception(
+                    on_exception(ErrorType::Kind(ErrorKind::IllegalArgument)).to("mock:damn"),
+                )
+                .to("mock:before")
+                .throw_exception(CamelError::illegal_argument("Damn"))
+                .to("mock:after"),
+        );
+    })
+    .await;
+    t.mock("mock:before").expected_message_count(1);
+    t.mock("mock:after").expected_message_count(0);
+    let damn = t.mock("mock:damn");
+    damn.expected_message_count(1);
+    damn.expected_file_exists(dir.test_file("error/hello.txt"), None);
+    send(&t, &dir, "hello.txt", "Hello World").await;
+    t.assert_mock_endpoints_satisfied().await;
+}
+
+/// Port of `FromFileMoveDoneCustomHeaderTest`.
+#[tokio::test]
+async fn test_move_done_custom_header() {
+    let dir = TestDirectory::new("FromFileMoveDoneCustomHeaderTest");
+    let (inbox, outbox) = (
+        dir.file_uri("inbox?initialDelay=0&delay=10&move=${header.bar}"),
+        dir.file_uri("outbox"),
+    );
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(
+            from(&inbox)
+                .set_header("bar", constant("dones/mydone.txt"))
+                .transform(constant("Bye World"))
+                .to("mock:result")
+                .to(&outbox),
+        );
+    })
+    .await;
+    let mock = t.mock("mock:result");
+    mock.expected_message_count(1);
+    mock.expected_file_exists(dir.test_file("outbox/hello.txt"), None);
+    mock.expected_file_exists(dir.test_file("inbox/dones/mydone.txt"), None);
+    send(&t, &dir, "inbox/hello.txt", "Hello World").await;
+    mock.assert_is_satisfied().await;
+}
+
+/// Ports of `FileConsumerNoopTest` and `FileConsumerIncludeNameTest`.
+#[tokio::test]
+async fn test_noop_and_include_name() {
+    let dir = TestDirectory::new("FileConsumerNoopTest");
+    let uri = dir.file_uri("?noop=true&initialDelay=0&delay=10");
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(from(&uri).convert_body_to("String").to("mock:result"));
+    })
+    .await;
+    t.mock("mock:result").expected_message_count(2);
+    send(&t, &dir, "hello.txt", "Hello World").await;
+    send(&t, &dir, "bye.txt", "Bye World").await;
+    t.assert_mock_endpoints_satisfied().await;
+    assert!(dir.test_file("hello.txt").exists());
+    assert!(dir.test_file("bye.txt").exists());
+
+    let dir = TestDirectory::new("FileConsumerIncludeNameTest");
+    let uri = dir.file_uri("?initialDelay=0&delay=10&include=^report.*txt$");
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(from(&uri).convert_body_to("String").to("mock:result"));
+    })
+    .await;
+    let mock = t.mock("mock:result");
+    mock.expected_bodies_received_in_any_order(["Reports1", "Reports2", "Reports3"]);
+    mock.expected_message_count(3);
+    for (name, body) in [
+        ("hello.xml", "Hello World"),
+        ("report1.txt", "Reports1"),
+        ("secret.txt", "Bye World"),
+        ("report2.txt", "Reports2"),
+        ("Report3.txt", "Reports3"),
+        ("Secret2.txt", "Secret2"),
+    ] {
+        send(&t, &dir, name, body).await;
+    }
+    mock.assert_is_satisfied().await;
+}

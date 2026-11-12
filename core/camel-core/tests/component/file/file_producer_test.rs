@@ -409,3 +409,41 @@ async fn test_temp_file_name() {
         .unwrap();
     assert!(dir.test_file("tempandrename/work").is_dir());
 }
+
+/// Ports of `FileMEPInOutTest` and `FileProduceAppendCharsEmptyMessageTest`.
+#[tokio::test]
+async fn test_in_out_and_append_chars_empty_message() {
+    let dir = TestDirectory::new("FileMEPInOutTest");
+    let (a, b) = (
+        dir.file_uri("?fileExist=Override"),
+        dir.file_uri("?fileExist=Append&appendChars=@@@"),
+    );
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(from("direct:in").to(&a).to("mock:result"));
+        r.add(
+            from("direct:start")
+                .set_header(FILE_NAME, constant("hello.txt"))
+                .to(&b)
+                .to("mock:result"),
+        );
+    })
+    .await;
+    let mock = t.mock("mock:result");
+    mock.expected_bodies_received(["Hello World"]);
+    mock.expected_file_exists(dir.test_file("FileMEPInOutTest.txt"), Some("Hello World"));
+    t.template
+        .request_body_and_header(
+            "direct:in",
+            "Hello World",
+            FILE_NAME,
+            "FileMEPInOutTest.txt",
+        )
+        .await
+        .unwrap();
+    mock.assert_is_satisfied().await;
+    mock.reset();
+    mock.expected_message_count(1);
+    mock.expected_file_exists(dir.test_file("hello.txt"), Some("@@@"));
+    t.template.send_body("direct:start", "").await.unwrap();
+    mock.assert_is_satisfied().await;
+}
