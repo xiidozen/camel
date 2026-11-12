@@ -260,6 +260,31 @@ fn filtered(endpoint: &FileEndpoint, path: &Path, is_file: bool) -> CamelResult<
     endpoint.predicate(filter)?.matches(&e)
 }
 
+/// Whether the file matches the Ant filter (Java `AntPathMatcherFileFilter`): not excluded,
+/// and included (when only excludes are set, any file not excluded).
+fn ant_accepted(endpoint: &FileEndpoint, path: &Path) -> bool {
+    let c = &endpoint.config;
+    if c.ant_include.is_none() && c.ant_exclude.is_none() {
+        return true;
+    }
+    let relative = path
+        .strip_prefix(&c.directory)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/");
+    let matcher = camel_util::ant_path_matcher::AntPathMatcher::new();
+    let cs = c.ant_filter_case_sensitive;
+    if let Some(excludes) = &c.ant_exclude {
+        if excludes.iter().any(|p| matcher.matches(p, &relative, cs)) {
+            return false;
+        }
+    }
+    match &c.ant_include {
+        Some(includes) => includes.iter().any(|p| matcher.matches(p, &relative, cs)),
+        None => true,
+    }
+}
+
 /// A file taken for routing: the file, the key in the idempotent repository.
 pub(crate) struct Taken {
     file: GenericFile,
@@ -567,6 +592,7 @@ pub(crate) fn candidates(endpoint: &FileEndpoint, filters: &Filters) -> CamelRes
             && named(endpoint, &path)?
             && done(endpoint, &path, &name)?
             && filtered(endpoint, &path, true)?
+            && ant_accepted(endpoint, &path)
         {
             answer.push(path);
         }

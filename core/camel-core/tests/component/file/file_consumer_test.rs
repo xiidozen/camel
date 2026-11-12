@@ -3084,3 +3084,59 @@ async fn test_move_expression() {
         mock.assert_is_satisfied().await;
     }
 }
+
+/// The `AntPathMatcherGenericFileFilterTest` cases of the antInclude, antExclude and
+/// antFilterCaseSensitive options.
+#[tokio::test]
+async fn test_ant_filter() {
+    let files = |names: &[&str]| -> Vec<(String, String)> {
+        names
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (format!("x/y/z/{n}"), format!("Hello World {}", i + 1)))
+            .collect()
+    };
+    for (option, names, expected) in [
+        (
+            "antInclude=**/*.txt&antFilterCaseSensitive=true",
+            files(&["report.txt", "b.TXT"]),
+            vec!["Hello World 1"],
+        ),
+        (
+            "antExclude=**/*.bak",
+            files(&["report.bak", "report.txt", "b.BAK", "b.TXT"]),
+            vec!["Hello World 2", "Hello World 3", "Hello World 4"],
+        ),
+        (
+            "antInclude=**/*.pdf,**/*.txt&antExclude=**/a*,**/b*",
+            files(&[
+                "a.pdf", "m.pdf", "b.txt", "m.txt", "b.bak", "m.bak", "ay.PDF", "my.Pdf", "by.TXT",
+                "my.TxT", "by.BAK", "my.BaK",
+            ]),
+            vec!["Hello World 2", "Hello World 4"],
+        ),
+        (
+            "antInclude=**/*.txt&antFilterCaseSensitive=false",
+            files(&["report.TXT"]),
+            vec!["Hello World 1"],
+        ),
+        (
+            "antExclude=**/*.bak&antFilterCaseSensitive=false",
+            files(&["report.bak", "report.txt", "b.BAK", "b.TXT"]),
+            vec!["Hello World 2", "Hello World 4"],
+        ),
+    ] {
+        let files: Vec<(&str, &str)> = names
+            .iter()
+            .map(|(n, b)| (n.as_str(), b.as_str()))
+            .collect();
+        consume(
+            "AntPathMatcherGenericFileFilterTest",
+            &format!("?initialDelay=0&delay=10&recursive=true&{option}"),
+            &files,
+            &expected,
+            &[],
+        )
+        .await;
+    }
+}

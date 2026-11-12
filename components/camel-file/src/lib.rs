@@ -128,6 +128,13 @@ pub struct FileConfiguration {
     /// dynamic parts): the producer writes it after the file, the consumer only takes the
     /// files with their done file, and deletes it with the file.
     pub done_file_name: Option<String>,
+    /// The Ant patterns of the files to include (`antInclude`, comma separated), matched on the
+    /// path relative to the starting directory.
+    pub ant_include: Option<Vec<String>>,
+    /// The Ant patterns of the files to exclude (`antExclude`, comma separated).
+    pub ant_exclude: Option<Vec<String>>,
+    /// Whether the Ant patterns are case sensitive (`antFilterCaseSensitive`, default `true`).
+    pub ant_filter_case_sensitive: bool,
     /// The algorithm of the checksum of the written files (`checksumFileAlgorithm`, such as
     /// `md5` or `sha256`), set as the `CamelFileChecksum` header.
     pub checksum_file_algorithm: Option<String>,
@@ -271,6 +278,9 @@ impl FileConfiguration {
             append_chars: None,
             allow_null_body: false,
             done_file_name: None,
+            ant_include: None,
+            ant_exclude: None,
+            ant_filter_case_sensitive: true,
             checksum_file_algorithm: None,
             checksum_write_file: true,
             chmod: None,
@@ -404,6 +414,12 @@ impl Component for FileComponent {
             c.allow_null_body = v;
         }
         c.done_file_name = param(parameters, "doneFileName")?;
+        let patterns = |v: String| v.split(',').map(str::to_string).collect::<Vec<_>>();
+        c.ant_include = param::<String>(parameters, "antInclude")?.map(patterns);
+        c.ant_exclude = param::<String>(parameters, "antExclude")?.map(patterns);
+        if let Some(v) = param(parameters, "antFilterCaseSensitive")? {
+            c.ant_filter_case_sensitive = v;
+        }
         c.checksum_file_algorithm = param(parameters, "checksumFileAlgorithm")?;
         if let Some(v) = param(parameters, "checksumWriteFile")? {
             c.checksum_write_file = v;

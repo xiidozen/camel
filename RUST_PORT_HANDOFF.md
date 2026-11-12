@@ -149,8 +149,8 @@ Crates live **in the directory of the Maven module they replace** (`core/camel-a
   producer (fileName/overrule, fileExist modes with moveExisting, temp names, done files, forceWrites,
   keepLastModified, jail), consumer (noop/idempotent/idempotentKey, delete, move/preMove/moveFailed, filters, hidden
   files/dirs, recursive/depth, sortBy groups, maxMessagesPerPoll with batch properties, done files, idle messages),
-  `ConsumerTemplate`, the `poll`/`pollEnrich` polling consumer, read locks (all but fileLock). Pending: the fileLock read lock, ant
-  filters, `filter=#bean`/sorter beans, checksum, permissions, bridgeErrorHandler, shareUnitOfWork (see the
+  `ConsumerTemplate`, the `poll`/`pollEnrich` polling consumer, read locks (all but fileLock). Pending: the fileLock read lock,
+  `filter=#bean`/sorter beans, bridgeErrorHandler, shareUnitOfWork (see the
   `components/camel-file` backlog row). Then the rest of the simple tests (`SimpleTest` cases, messageAs), the xpath
   language, camel-main component options.
 - Commit only when `etc/rust/check.sh` passes (chain the commit on its exit status).
