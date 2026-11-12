@@ -754,3 +754,128 @@ async fn test_throttling_exception_route_policy_suspend_route() {
     mock.assert_is_satisfied().await;
     assert_eq!("closed", policy.state_as_string());
 }
+
+/// Port of `CustomRoutePolicyDirectTest`: the callbacks of a sub route nest in the route.
+#[tokio::test]
+async fn test_custom_policy_direct() {
+    use std::sync::atomic::AtomicI32;
+    #[derive(Default)]
+    struct CountingPolicy {
+        foo: AtomicI32,
+        bar: AtomicI32,
+    }
+    impl CountingPolicy {
+        fn counter(&self, route: &SharedRoute) -> &AtomicI32 {
+            if route.id() == "foo" {
+                &self.foo
+            } else {
+                &self.bar
+            }
+        }
+        fn get(&self) -> (i32, i32) {
+            (
+                self.foo.load(Ordering::SeqCst),
+                self.bar.load(Ordering::SeqCst),
+            )
+        }
+    }
+    impl RoutePolicy for CountingPolicy {
+        fn on_exchange_begin(&self, route: &SharedRoute, _: &mut Exchange) {
+            self.counter(route).fetch_add(1, Ordering::SeqCst);
+        }
+        fn on_exchange_done(&self, route: &SharedRoute, _: &Exchange) {
+            self.counter(route).fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+    let policy = Arc::new(CountingPolicy::default());
+    let p: SharedRoutePolicy = policy.clone();
+    let (c1, c2, c3) = (policy.clone(), policy.clone(), policy.clone());
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        let (c1, c2, c3) = (c1.clone(), c2.clone(), c3.clone());
+        r.add(
+            from("direct:foo")
+                .route_id("foo")
+                .route_policy(p.clone())
+                .process_fn(move |_| {
+                    assert_eq!((1, 0), c1.get());
+                    Ok(())
+                })
+                .to("direct:bar")
+                .process_fn(move |_| {
+                    assert_eq!((1, 0), c2.get());
+                    Ok(())
+                })
+                .to("mock:result"),
+        );
+        r.add(
+            from("direct:bar")
+                .route_id("bar")
+                .route_policy(p.clone())
+                .process_fn(move |_| {
+                    assert_eq!((1, 1), c3.get());
+                    Ok(())
+                })
+                .to("mock:b"),
+        );
+    })
+    .await;
+    assert_eq!((0, 0), policy.get());
+    t.mock("mock:result").expected_message_count(1);
+    t.template
+        .send_body("direct:foo", "Hello World")
+        .await
+        .unwrap();
+    t.assert_mock_endpoints_satisfied().await;
+    assert_eq!((0, 0), policy.get());
+}
+
+/// Port of `FlipRoutePolicyTest` (and its `FlipRoutePolicy`): each exchange done stops its
+/// route and starts the other one.
+#[tokio::test]
+async fn test_flip_route_policy() {
+    struct FlipRoutePolicy(&'static str, &'static str);
+    impl RoutePolicy for FlipRoutePolicy {
+        fn on_exchange_done(&self, route: &SharedRoute, exchange: &Exchange) {
+            let (stop, start) = if route.id() == self.0 {
+                (self.0, self.1)
+            } else {
+                (self.1, self.0)
+            };
+            let context = exchange.context().clone();
+            tokio::spawn(async move {
+                if let Some(c) = context
+                    .as_any()
+                    .downcast_ref::<camel_core::engine::context::DefaultCamelContext>()
+                {
+                    let _ = c.stop_route(stop).await;
+                    let _ = c.start_route(start).await;
+                }
+            });
+        }
+    }
+    let policy: SharedRoutePolicy = Arc::new(FlipRoutePolicy("foo", "bar"));
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(
+            from("timer://foo?delay=0&period=10")
+                .route_id("foo")
+                .route_policy(policy.clone())
+                .set_body(constant("Foo message"))
+                .to("log:foo")
+                .to("mock:foo"),
+        );
+        r.add(
+            from("timer://bar?delay=0&period=10")
+                .route_id("bar")
+                .route_policy(policy.clone())
+                .auto_startup(false)
+                .set_body(constant("Bar message"))
+                .to("log:bar")
+                .to("mock:bar"),
+        );
+    })
+    .await;
+    t.mock("mock:foo").expected_minimum_message_count(3);
+    t.mock("mock:bar").expected_minimum_message_count(3);
+    t.assert_mock_endpoints_satisfied().await;
+    t.context.stop().await.unwrap();
+}
