@@ -560,6 +560,28 @@ impl<'a> Task<'a> {
             } else {
                 p.log_stack_trace
             };
+            // the message history table of an exhausted failure (Java logFailedDelivery)
+            let mut message = message.to_string();
+            if !should_redeliver && p.log_exhausted_message_history {
+                let formatter = p.log_exhausted_message_body.then(|| {
+                    camel_support::exchange_formatter::DefaultExchangeFormatter {
+                        show_exchange_id: true,
+                        multiline: true,
+                        show_headers: true,
+                        style: camel_support::exchange_formatter::OutputStyle::Fixed,
+                        ..Default::default()
+                    }
+                });
+                let table = camel_support::message_helper::dump_message_history_stacktrace(
+                    exchange,
+                    formatter
+                        .as_ref()
+                        .map(|f| f as &dyn camel_api::spi::exchange_formatter::ExchangeFormatter),
+                    !new_exception && error.is_some() && p.log_stack_trace,
+                );
+                message.push('\n');
+                message.push_str(&table);
+            }
             match error.filter(|_| stack) {
                 Some(e) => log::log!(target: &self.config.logger_name, l, "{message}\n{e:?}"),
                 None => log::log!(target: &self.config.logger_name, l, "{message}"),

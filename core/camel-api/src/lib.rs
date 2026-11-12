@@ -21,6 +21,7 @@ pub mod error;
 pub mod exchange;
 pub mod exchange_constants;
 pub mod message;
+pub mod message_history;
 pub mod processor;
 pub mod route;
 pub mod service;

@@ -103,6 +103,20 @@ pub trait RedeliveryOptions: Sized {
         self
     }
 
+    /// Whether the log of an exhausted failure has the message history table (default
+    /// `true`).
+    fn log_exhausted_message_history(mut self, log: bool) -> Self {
+        self.redelivery_mut().log_exhausted_message_history = Some(log);
+        self
+    }
+
+    /// Whether the message history table of an exhausted failure has the exchange (default
+    /// `false`).
+    fn log_exhausted_message_body(mut self, log: bool) -> Self {
+        self.redelivery_mut().log_exhausted_message_body = Some(log);
+        self
+    }
+
     /// A delay pattern such as `0:1000;5:5000`.
     fn delay_pattern(mut self, pattern: &str) -> Self {
         self.redelivery_mut().delay_pattern = Some(pattern.to_string());

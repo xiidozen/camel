@@ -14,6 +14,7 @@ pub mod exchange_formatter;
 pub mod exchange_helper;
 pub mod header_filter_strategy;
 pub mod idempotent;
+pub mod message_helper;
 pub mod object_helper;
 pub mod pattern_helper;
 pub mod resource_helper;

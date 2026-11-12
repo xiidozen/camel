@@ -31,6 +31,10 @@ pub struct RedeliveryPolicyDefinition {
     pub log_handled: Option<bool>,
     /// Whether to log exhausted failures.
     pub log_exhausted: Option<bool>,
+    /// Whether the log of an exhausted failure has the message history table.
+    pub log_exhausted_message_history: Option<bool>,
+    /// Whether the message history table has the exchange (its body, headers, ...).
+    pub log_exhausted_message_body: Option<bool>,
     /// A delay pattern such as `0:1000;5:5000`.
     pub delay_pattern: Option<String>,
 }

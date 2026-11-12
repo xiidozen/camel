@@ -136,3 +136,88 @@ fn test_logical_operators() {
         err.message
     );
 }
+
+/// The `SimpleFunctionArgumentsTest` cases (not `testBeanTypeWithPackage`: Java classes) and
+/// the `SimpleCacheExpressionTest` cases without a Java bean.
+#[test]
+fn test_function_arguments() {
+    use crate::simple_test::assert_expression;
+    use camel_core::prelude::*;
+    let (_t, mut e) = exchange();
+    let simple = e.context().resolve_language("simple").unwrap();
+    e.message_mut().set_body("a,b,c");
+    assert_expression(&e, "${size(${body.split(',')})}", 3);
+    e.message_mut().set_header("foo", " 42 ");
+    assert_expression(&e, "${convertTo(${header.foo.trim()},Integer)}", 42);
+    e.message_mut().set_body("World");
+    assert_expression(&e, "${concat('Hello, ')}", "WorldHello, ");
+    let err = simple
+        .create_expression("${throwException('Order failed, retry later')}")
+        .and_then(|x| x.evaluate(&e))
+        .unwrap_err();
+    assert_eq!(Some("Order failed, retry later"), err.message());
+    let hash = simple
+        .create_expression("${hash('a,b')}")
+        .unwrap()
+        .evaluate(&e)
+        .unwrap();
+    e.message_mut().set_body("a,b");
+    assert_eq!(
+        hash,
+        simple
+            .create_expression("${hash(${body})}")
+            .unwrap()
+            .evaluate(&e)
+            .unwrap()
+    );
+    // too few arguments (Rust reports them when parsing)
+    e.message_mut().set_header("foo", 1);
+    let err = simple
+        .create_expression("${iif(${header.foo} > 0,'yes')}")
+        .and_then(|x| x.evaluate(&e))
+        .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("Valid syntax: ${iif(predicate,trueExpression,falseExpression)}"),
+        "{err}"
+    );
+    let err = simple.create_expression("${replace(a)}").err().unwrap();
+    assert!(err.is(ErrorKind::ExpressionIllegalSyntax));
+    assert!(
+        err.to_string()
+            .contains("Valid syntax: ${replace(from,to)}"),
+        "{err}"
+    );
+    // a quoted key is not OGNL
+    e.message_mut().set_header("a", "xyz");
+    e.message_mut().set_header("a.b", "yes");
+    assert_expression(&e, "${header['a.b']}", "yes");
+    e.message_mut().remove_header("a.b");
+    assert_expression(&e, "${header['a.b']}", Value::Null);
+    e.set_variable("x.y", "var");
+    assert_expression(&e, "${variable['x.y']}", "var");
+    e.set_property("p.q", "prop");
+    assert_expression(&e, "${exchangeProperty['p.q']}", "prop");
+    // names must not be glued to a prefix
+    e.message_mut().set_header("foo", "bar");
+    for text in ["${headerfoo}", "${uuidv7}", "${exceptionInfo}"] {
+        assert!(simple
+            .create_expression(text)
+            .err()
+            .expect(text)
+            .is(ErrorKind::ExpressionIllegalSyntax));
+    }
+    for text in [
+        "${header.foo}",
+        "${header:foo}",
+        "${header[foo]}",
+        "${headers.foo}",
+    ] {
+        assert_expression(&e, text, "bar");
+    }
+    // the cache of plain text and functions (SimpleCacheExpressionTest)
+    e.message_mut().set_header("foo", 123);
+    assert_expression(&e, "header.foo", "header.foo");
+    assert_expression(&e, "${header.foo}", 123);
+    assert_expression(&e, "header.foo", "header.foo");
+}

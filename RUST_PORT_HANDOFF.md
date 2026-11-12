@@ -140,7 +140,11 @@ Crates live **in the directory of the Maven module they replace** (`core/camel-a
   `dynamic::send_to`).
 - threads EIP: `threads.rs`; the reifier runs the steps after a `threads` step on its pool (the caller waits:
   no early release of the consumer, see the module doc).
-- **Next:** the rest of the simple tests (`SimpleTest` cases, messageAs, message history), then the pending pieces
+- Message history: `camel_api::message_history`, recorded by the reifier (`with_message_history`) when
+  `context.set_message_history(true)` is set before the routes are added; dumped by
+  `camel_support::message_helper::dump_message_history_stacktrace` (simple `${messageHistory}`, exhausted
+  error logs).
+- **Next:** the rest of the simple tests (`SimpleTest` cases, messageAs), then the pending pieces
   of camel-main (component options from properties) and of the DSLs (rest, route templates, route
   configurations).
 - Java files still present in `core/camel-api/src/main/java` are the ones not ported yet.

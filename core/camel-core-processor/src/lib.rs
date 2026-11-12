@@ -23,6 +23,7 @@ pub mod idempotent;
 pub mod intercept;
 pub mod loadbalancer;
 pub mod log_processor;
+pub mod message_history;
 pub mod multicast;
 pub mod on_completion;
 pub mod pipeline;

@@ -18,6 +18,7 @@ mod idempotent_consumer_test;
 mod intercept;
 mod load_balancer_test;
 mod loop_test;
+mod message_history_test;
 mod multicast_parallel_test;
 mod multicast_test;
 mod on_completion_test;

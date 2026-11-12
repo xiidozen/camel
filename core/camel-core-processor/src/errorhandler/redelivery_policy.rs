@@ -40,6 +40,10 @@ pub struct RedeliveryPolicy {
     pub log_continued: bool,
     /// Whether to log exhausted failures.
     pub log_exhausted: bool,
+    /// Whether the log of an exhausted failure has the message history table.
+    pub log_exhausted_message_history: bool,
+    /// Whether the message history table has the exchange (its body, headers, ...).
+    pub log_exhausted_message_body: bool,
     /// Whether to log new exceptions of the failure processor.
     pub log_new_exception: bool,
     /// Whether to log redelivery attempts.
@@ -68,6 +72,8 @@ impl Default for RedeliveryPolicy {
             log_handled: false,
             log_continued: false,
             log_exhausted: true,
+            log_exhausted_message_history: true,
+            log_exhausted_message_body: false,
             log_new_exception: true,
             log_retry_attempted: true,
             delay_pattern: None,
@@ -182,6 +188,10 @@ pub struct RedeliveryPolicyOverrides {
     pub log_handled: Option<bool>,
     /// See [`RedeliveryPolicy::log_exhausted`].
     pub log_exhausted: Option<bool>,
+    /// See [`RedeliveryPolicy::log_exhausted_message_history`].
+    pub log_exhausted_message_history: Option<bool>,
+    /// See [`RedeliveryPolicy::log_exhausted_message_body`].
+    pub log_exhausted_message_body: Option<bool>,
     /// See [`RedeliveryPolicy::delay_pattern`].
     pub delay_pattern: Option<String>,
 }
@@ -220,6 +230,12 @@ impl RedeliveryPolicyOverrides {
         }
         if let Some(v) = self.log_exhausted {
             p.log_exhausted = v;
+        }
+        if let Some(v) = self.log_exhausted_message_history {
+            p.log_exhausted_message_history = v;
+        }
+        if let Some(v) = self.log_exhausted_message_body {
+            p.log_exhausted_message_body = v;
         }
         if let Some(v) = &self.delay_pattern {
             p.delay_pattern = Some(v.clone());

@@ -288,6 +288,9 @@ impl<'a> RouteReifier<'a> {
     /// Returns an error if the endpoint, expression or bean of the step cannot be resolved.
     pub fn step(&self, def: &ProcessorDefinition) -> CamelResult<SharedProcessor> {
         let mut p = self.create(def)?;
+        if self.context.is_message_history() {
+            p = self.with_message_history(def, p);
+        }
         if !self.intercepts.intercepts.is_empty() {
             p = Arc::new(InterceptProcessor::new(
                 self.intercepts.intercepts.clone(),
@@ -301,6 +304,57 @@ impl<'a> RouteReifier<'a> {
             Some(config) => Arc::new(RedeliveryErrorHandler::new(p, config.clone())),
             None => p,
         })
+    }
+
+    /// Records the step in the message history when its node matches the node pattern of the
+    /// `MessageHistoryFactory` (all nodes by default).
+    fn with_message_history(
+        &self,
+        def: &ProcessorDefinition,
+        p: SharedProcessor,
+    ) -> SharedProcessor {
+        use camel_api::message_history::MessageHistoryFactory;
+        use camel_core_processor::message_history::{HistoryNode, MessageHistoryProcessor};
+        let factory =
+            camel_api::context::context_plugin::<MessageHistoryFactory>(self.context.as_ref());
+        let short_name = def.eip.short_name().to_string();
+        let node_id = match (&def.id, &def.eip) {
+            (Some(id), _) => id.clone(),
+            (None, Eip::Step { id, .. }) => id.clone(),
+            (None, _) => match &factory {
+                Some(f) => f.next_node_id(&short_name),
+                None => short_name.clone(),
+            },
+        };
+        let pattern = factory.as_ref().and_then(|f| f.node_pattern());
+        if let Some(pattern) = pattern {
+            let matches = pattern.split(',').any(|pat| {
+                camel_support::pattern_helper::match_pattern(&short_name, pat.trim())
+                    || camel_support::pattern_helper::match_pattern(&node_id, pat.trim())
+            });
+            if !matches {
+                return p;
+            }
+        }
+        // the Java label: the short name with the text between the brackets of the node
+        let text = def.to_string();
+        let label = match (text.find('['), text.rfind(']')) {
+            (Some(start), Some(end)) if end > start => {
+                format!("{short_name}[{}]", &text[start + 1..end])
+            }
+            _ => short_name.clone(),
+        };
+        Arc::new(MessageHistoryProcessor::new(
+            HistoryNode {
+                route_id: self.route_id.to_string(),
+                node_id,
+                short_name,
+                label,
+                size_enabled: factory.as_ref().is_some_and(|f| f.is_size_enabled()),
+                copy_message: factory.is_some_and(|f| f.is_copy_message()),
+            },
+            p,
+        ))
     }
 
     /// Creates the processor of the steps: a pipeline (disabled steps are left out).
@@ -1117,6 +1171,8 @@ fn overrides(d: &RedeliveryPolicyDefinition) -> RedeliveryPolicyOverrides {
         log_stack_trace: d.log_stack_trace,
         log_handled: d.log_handled,
         log_exhausted: d.log_exhausted,
+        log_exhausted_message_history: d.log_exhausted_message_history,
+        log_exhausted_message_body: d.log_exhausted_message_body,
         delay_pattern: d.delay_pattern.clone(),
     }
 }

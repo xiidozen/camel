@@ -336,6 +336,31 @@ fn direct_function(function: &str) -> Option<SharedExpression> {
             Ok(Value::Int(e.message().message_timestamp()))
         }),
         "exchangeId" => named_expression("exchangeId", |e| Ok(Value::from(e.exchange_id()))),
+        // the message history table, with the exchange (Java messageHistoryExpression)
+        "messageHistory" | "messageHistory(true)" => {
+            named_expression("messageHistory(true)", |e| {
+                use camel_support::exchange_formatter::{DefaultExchangeFormatter, OutputStyle};
+                let formatter = DefaultExchangeFormatter {
+                    show_exchange_id: true,
+                    multiline: true,
+                    show_headers: true,
+                    style: OutputStyle::Fixed,
+                    ..Default::default()
+                };
+                Ok(Value::from(
+                    camel_support::message_helper::dump_message_history_stacktrace(
+                        e,
+                        Some(&formatter),
+                        false,
+                    ),
+                ))
+            })
+        }
+        "messageHistory(false)" => named_expression("messageHistory(false)", |e| {
+            Ok(Value::from(
+                camel_support::message_helper::dump_message_history_stacktrace(e, None, false),
+            ))
+        }),
         // the body of the in message when the unit of work started (Java
         // originalBodyExpression), null without one
         "originalBody" => named_expression("originalBody", |e| {
