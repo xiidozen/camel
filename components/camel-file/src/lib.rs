@@ -496,9 +496,13 @@ impl Component for FileComponent {
                 "You cannot set both noop=true and delete=true options",
             ));
         }
-        // accepted without effect (the Java scheduling, logging and cache options)
+        // accepted without effect (the Java scheduling, logging, backoff and buffer options)
         for name in [
             "runLoggingLevel",
+            "bufferSize",
+            "backoffMultiplier",
+            "backoffIdleThreshold",
+            "backoffErrorThreshold",
             "useFixedDelay",
             "synchronous",
             "bridgeErrorHandler",

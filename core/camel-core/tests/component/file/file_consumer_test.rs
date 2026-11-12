@@ -2254,3 +2254,104 @@ async fn test_new_file_consumer() {
     assert_eq!(Some("Hello World".to_string()), body);
     consumer.stop().await.unwrap();
 }
+
+/// Ports of `FileConsumeRunLoggingLevelTest`, `FileConsumeBackoffMultiplierTest` and
+/// `FileToFileNioLowBufferTest` (options without effect in the port).
+#[tokio::test]
+async fn test_accepted_options() {
+    consume(
+        "FileConsumeRunLoggingLevelTest",
+        "?runLoggingLevel=INFO&initialDelay=0&delay=10",
+        &[("hello.txt", "Hello World")],
+        &["Hello World"],
+        &[],
+    )
+    .await;
+    consume(
+        "FileConsumeBackoffMultiplierTest",
+        "?initialDelay=0&delay=10&delete=true&backoffMultiplier=4&backoffIdleThreshold=3",
+        &[("report.txt", "Hello World")],
+        &["Hello World"],
+        &[],
+    )
+    .await;
+
+    let dir = TestDirectory::new("FileToFileNioLowBufferTest");
+    let (from_uri, out) = (
+        dir.file_uri("in?initialDelay=0&delay=10"),
+        dir.file_uri("out?bufferSize=4"),
+    );
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(
+            from(&from_uri)
+                .convert_body_to("String")
+                .to(&out)
+                .to("mock:result"),
+        );
+    })
+    .await;
+    let body = "1234567890123456789012345678901234567890";
+    let mock = t.mock("mock:result");
+    mock.expected_message_count(1);
+    mock.expected_file_exists(dir.test_file("out/hello.txt"), Some(body));
+    send(&t, &dir, "in/hello.txt", body).await;
+    mock.assert_is_satisfied().await;
+}
+
+/// Port of `FilePollingConsumerTest`: a stopped polling consumer leaves the files.
+#[tokio::test]
+async fn test_polling_consumer() {
+    let dir = TestDirectory::new("FilePollingConsumerTest");
+    let t = ContextTestSupport::new();
+    t.context.start().await.unwrap();
+    send(&t, &dir, "hello.txt", "Hello World").await;
+    let consumer = t
+        .context
+        .endpoint(&dir.file_uri(""))
+        .unwrap()
+        .create_polling_consumer()
+        .unwrap();
+    consumer.start().await.unwrap();
+    let exchange = consumer
+        .receive_timeout(std::time::Duration::from_millis(5000))
+        .await
+        .unwrap()
+        .expect("an exchange");
+    assert_eq!("Hello World", exchange.message().body().to_string());
+    send(&t, &dir, "bye.txt", "Bye World").await;
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    assert!(
+        dir.test_file("bye.txt").exists(),
+        "File should exist bye.txt"
+    );
+    consumer.stop().await.unwrap();
+}
+
+/// Port of `FileRecursiveDepthTest`.
+#[tokio::test]
+async fn test_recursive_depth() {
+    let files = [
+        ("a.txt", "a"),
+        ("b.txt", "b"),
+        ("foo/a2.txt", "a2"),
+        ("foo/bar/a3.txt", "a3"),
+        ("bar/b2.txt", "b2"),
+        ("bar/foo/b3.txt", "b3"),
+    ];
+    for (option, expected) in [
+        (
+            "?initialDelay=0&delay=10&recursive=true&minDepth=2&maxDepth=2",
+            vec!["a2", "b2"],
+        ),
+        (
+            "?initialDelay=0&delay=10&recursive=true&minDepth=2&maxDepth=99",
+            vec!["a2", "b2", "a3", "b3"],
+        ),
+        (
+            "?initialDelay=0&delay=10&recursive=true&minDepth=1&maxDepth=1",
+            vec!["a", "b"],
+        ),
+    ] {
+        consume("FileRecursiveDepthTest", option, &files, &expected, &[]).await;
+    }
+}
