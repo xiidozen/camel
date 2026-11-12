@@ -133,3 +133,105 @@ async fn test_pretty() {
         mock.assert_is_satisfied().await;
     }
 }
+
+/// Port of `SimpleBackwardsCompatibleTest`.
+#[test]
+fn test_backwards_compatible() {
+    let (_t, mut e) = exchange();
+    crate::simple_test::assert_expression(&e, "${body}", "<hello id='m123'>world!</hello>");
+    assert_predicate(&e, "${body}", true);
+    e.message_mut().set_header("foo", 123);
+    crate::simple_test::assert_expression(&e, "${header.foo}", 123);
+    assert_predicate(&e, "${header.foo}", true);
+    assert_predicate(&e, "${header.unknown}", false);
+    e.message_mut().set_body("Hello");
+    e.message_mut().set_header("high", true);
+    assert_predicate(&e, "${header.high} == true && ${header.foo} == 123", true);
+    assert_predicate(&e, "${header.high} == false || ${header.foo} == 123", true);
+}
+
+/// Ports of `SimpleSetHeaderPredicateTest` and `SimpleRouteExpressionAsPredicateTest` (a
+/// boolean result type makes the expression a predicate).
+#[tokio::test]
+async fn test_boolean_result_type() {
+    let t = ContextTestSupport::with_routes(|r: &mut Routes| {
+        r.add(
+            from("direct:start")
+                .set_header(
+                    "bar",
+                    simple("${header.foo} == 'Camel'").result_type("boolean"),
+                )
+                .to("mock:result"),
+        );
+        r.add(
+            from("direct:other")
+                .set_header("param1", constant("hello"))
+                .log("param1 = ${header.param1}")
+                .set_header(
+                    "param2",
+                    simple("${header.param1} == 'hello'").result_type("Boolean"),
+                )
+                .log("param2 = ${header.param2}")
+                .to("mock:other"),
+        );
+        r.add(
+            from("direct:foo")
+                .set_body(simple("${header.foo} == ${header.foo}").result_type("boolean"))
+                .to("mock:foo"),
+        );
+        r.add(
+            from("direct:bar")
+                .set_body(simple("${header.bar} == ${header.bar}"))
+                .to("mock:bar"),
+        );
+    })
+    .await;
+    for (foo, expected) in [("World", false), ("Camel", true)] {
+        let m = t.mock("mock:result");
+        m.reset();
+        m.expected_header_received("bar", expected);
+        t.template
+            .send_body_and_header("direct:start", "Hello World", "foo", foo)
+            .await
+            .unwrap();
+        m.assert_is_satisfied().await;
+    }
+    let other = t.mock("mock:other");
+    other.expected_header_received("param1", "hello");
+    other.expected_header_received("param2", true);
+    t.template
+        .send_body("direct:other", "Hello World")
+        .await
+        .unwrap();
+    other.assert_is_satisfied().await;
+    t.mock("mock:foo").expected_bodies_received([true]);
+    t.mock("mock:bar").expected_bodies_received(["ABC == ABC"]);
+    t.template
+        .send_body_and_header("direct:foo", "Hello World", "foo", "ABC")
+        .await
+        .unwrap();
+    t.template
+        .send_body_and_header("direct:bar", "Hello World", "bar", "ABC")
+        .await
+        .unwrap();
+    t.assert_mock_endpoints_satisfied().await;
+}
+
+/// Port of `BodyOriginalMessageTest`.
+#[tokio::test]
+async fn test_original_body() {
+    let t = ContextTestSupport::with_routes(|r: &mut Routes| {
+        r.add(
+            from("direct:start")
+                .transform(simple("Bye ${body}"))
+                .to("mock:foo")
+                .set_body(simple("${originalBody}"))
+                .to("mock:result"),
+        );
+    })
+    .await;
+    t.mock("mock:foo").expected_bodies_received(["Bye World"]);
+    t.mock("mock:result").expected_bodies_received(["World"]);
+    t.template.send_body("direct:start", "World").await.unwrap();
+    t.assert_mock_endpoints_satisfied().await;
+}

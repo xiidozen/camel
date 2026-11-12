@@ -336,6 +336,13 @@ fn direct_function(function: &str) -> Option<SharedExpression> {
             Ok(Value::Int(e.message().message_timestamp()))
         }),
         "exchangeId" => named_expression("exchangeId", |e| Ok(Value::from(e.exchange_id()))),
+        // the body of the in message when the unit of work started (Java
+        // originalBodyExpression), null without one
+        "originalBody" => named_expression("originalBody", |e| {
+            Ok(e.original_message()
+                .map(|m| m.body().clone())
+                .unwrap_or_default())
+        }),
         // the exception object, whose text is the Java toString(): `type: message`
         "exception" => named_expression("exception", |e| {
             Ok(exchange_exception(e)

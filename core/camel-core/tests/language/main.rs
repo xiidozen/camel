@@ -10,6 +10,7 @@ mod date_function_factory_test;
 mod simple_custom_function_test;
 mod simple_init_block_test;
 mod simple_misc_test;
+mod simple_not_operator_test;
 mod simple_operator_test;
 mod simple_parser_edge_cases_test;
 mod simple_parser_expression_test;
