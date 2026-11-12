@@ -322,3 +322,80 @@ impl Processor for StepProcessor {
         })
     }
 }
+
+/// Lets one exchange through per number of messages, or per period, stopping the others (the
+/// sample EIP, Java `SamplingThrottler`).
+pub struct SamplingProcessor {
+    message_frequency: u64,
+    period: std::time::Duration,
+    state: std::sync::Mutex<SampleState>,
+}
+
+#[derive(Default)]
+struct SampleState {
+    count: u64,
+    last: Option<std::time::Instant>,
+}
+
+impl SamplingProcessor {
+    /// Lets one exchange through per period.
+    ///
+    /// # Errors
+    ///
+    /// A zero period.
+    pub fn per_period(period: std::time::Duration) -> CamelResult<Self> {
+        if period.is_zero() {
+            return Err(CamelError::illegal_argument(
+                "A positive value is required for the sampling period",
+            ));
+        }
+        Ok(SamplingProcessor {
+            message_frequency: 0,
+            period,
+            state: std::sync::Mutex::default(),
+        })
+    }
+
+    /// Lets one exchange through per number of messages.
+    ///
+    /// # Errors
+    ///
+    /// A zero frequency.
+    pub fn per_messages(message_frequency: u64) -> CamelResult<Self> {
+        if message_frequency == 0 {
+            return Err(CamelError::illegal_argument(
+                "A positive value is required for the sampling message frequency",
+            ));
+        }
+        Ok(SamplingProcessor {
+            message_frequency,
+            period: std::time::Duration::ZERO,
+            state: std::sync::Mutex::default(),
+        })
+    }
+}
+
+impl Processor for SamplingProcessor {
+    fn process<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>> {
+        let send = {
+            let mut s = self.state.lock().unwrap();
+            if self.message_frequency > 0 {
+                s.count += 1;
+                s.count % self.message_frequency == 0
+            } else {
+                let now = std::time::Instant::now();
+                match s.last {
+                    Some(last) if now < last + self.period => false,
+                    _ => {
+                        s.last = Some(now);
+                        true
+                    }
+                }
+            }
+        };
+        if !send {
+            exchange.set_route_stop(true);
+        }
+        Box::pin(std::future::ready(Ok(())))
+    }
+}

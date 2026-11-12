@@ -30,7 +30,8 @@
 
 use camel_api::context::{CamelContext, StandaloneContext};
 use camel_api::endpoint::{
-    Component, Consumer, Endpoint, Producer, SharedConsumer, SharedEndpoint, SharedProducer,
+    Component, Consumer, Endpoint, PollingConsumer, Producer, SharedConsumer, SharedEndpoint,
+    SharedProducer,
 };
 use camel_api::enums::WaitForTaskToComplete;
 use camel_api::error::{CamelError, CamelResult, ErrorKind};
@@ -322,6 +323,10 @@ impl Endpoint for SedaEndpoint {
         Ok(Arc::new(SedaProducer { endpoint: self }))
     }
 
+    fn create_polling_consumer(self: Arc<Self>) -> CamelResult<Arc<dyn PollingConsumer>> {
+        Ok(Arc::new(SedaPollingConsumer { endpoint: self }))
+    }
+
     fn create_consumer(self: Arc<Self>, processor: SharedProcessor) -> CamelResult<SharedConsumer> {
         Ok(Arc::new(SedaConsumer {
             endpoint: self,
@@ -547,5 +552,64 @@ impl Consumer for SedaConsumer {
 
     fn processor(&self) -> SharedProcessor {
         self.processor.clone()
+    }
+}
+
+/// A polling consumer of a seda queue (Java `SedaPollingConsumer`): takes the next exchange of
+/// the queue on demand. A producer waiting for the reply (`InOut`) gets the exchange as
+/// received.
+pub struct SedaPollingConsumer {
+    endpoint: Arc<SedaEndpoint>,
+}
+
+impl SedaPollingConsumer {
+    fn received(&self, item: Item) -> Exchange {
+        let mut exchange = *item.exchange;
+        exchange.set_from_endpoint(self.endpoint.uri.clone());
+        exchange.clear_from_route_id();
+        if let Some(tx) = item.reply {
+            let _ = tx.send(exchange.clone());
+        }
+        exchange
+    }
+}
+
+impl Service for SedaPollingConsumer {}
+
+impl PollingConsumer for SedaPollingConsumer {
+    fn endpoint(&self) -> SharedEndpoint {
+        self.endpoint.clone()
+    }
+
+    fn receive(&self) -> BoxFuture<'_, CamelResult<Option<Exchange>>> {
+        Box::pin(async move {
+            let never = AtomicBool::new(false);
+            Ok(self
+                .endpoint
+                .queue
+                .take(&never)
+                .await
+                .map(|i| self.received(i)))
+        })
+    }
+
+    fn receive_no_wait(&self) -> BoxFuture<'_, CamelResult<Option<Exchange>>> {
+        Box::pin(async move {
+            let item = self.endpoint.queue.items.lock().unwrap().pop_front();
+            if item.is_some() {
+                self.endpoint.queue.not_full.notify_one();
+            }
+            Ok(item.map(|i| self.received(i)))
+        })
+    }
+
+    fn receive_timeout(&self, timeout: Duration) -> BoxFuture<'_, CamelResult<Option<Exchange>>> {
+        Box::pin(async move {
+            let never = AtomicBool::new(false);
+            match tokio::time::timeout(timeout, self.endpoint.queue.take(&never)).await {
+                Ok(item) => Ok(item.map(|i| self.received(i))),
+                Err(_) => Ok(None),
+            }
+        })
     }
 }

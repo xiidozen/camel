@@ -30,6 +30,7 @@ use camel_core_processor::dynamic::{
     ConvertBodyProcessor, RecipientListProcessor, SendDynamicProcessor,
     SetExchangePatternProcessor, WireTapProcessor,
 };
+use camel_core_processor::enricher::{EnrichProcessor, PollEnrichProcessor};
 use camel_core_processor::errorhandler::exception_policy::ExceptionPolicy;
 use camel_core_processor::errorhandler::redelivery_policy::RedeliveryPolicyOverrides;
 use camel_core_processor::errorhandler::{ErrorHandlerConfig, RedeliveryErrorHandler};
@@ -43,7 +44,7 @@ use camel_core_processor::multicast::{
 use camel_core_processor::on_completion::{OnCompletionOptions, OnCompletionProcessor};
 use camel_core_processor::pipeline::Pipeline;
 use camel_core_processor::routing::{
-    LoopProcessor, RoutingSlipProcessor, SortProcessor, StepProcessor,
+    LoopProcessor, RoutingSlipProcessor, SamplingProcessor, SortProcessor, StepProcessor,
 };
 use camel_core_processor::send::SendProcessor;
 use camel_core_processor::transform::{
@@ -498,6 +499,45 @@ impl<'a> RouteReifier<'a> {
                 ))
             }
             Eip::Step { id, steps } => Arc::new(StepProcessor::new(id, self.step_list(steps)?)),
+            Eip::Enrich {
+                uri,
+                strategy,
+                aggregate_on_exception,
+                ignore_invalid_endpoint,
+            } => {
+                let strategy = resolve_aggregation(self.context, strategy)?;
+                Arc::new(EnrichProcessor::new(
+                    self.expr(uri)?,
+                    strategy,
+                    *aggregate_on_exception,
+                    *ignore_invalid_endpoint,
+                ))
+            }
+            Eip::PollEnrich {
+                uri,
+                timeout,
+                strategy,
+                aggregate_on_exception,
+                ignore_invalid_endpoint,
+            } => {
+                let strategy = resolve_aggregation(self.context, strategy)?;
+                Arc::new(PollEnrichProcessor::new(
+                    self.expr(uri)?,
+                    *timeout,
+                    strategy,
+                    *aggregate_on_exception,
+                    *ignore_invalid_endpoint,
+                ))
+            }
+            Eip::Sample {
+                message_frequency,
+                period_millis,
+            } => Arc::new(match message_frequency {
+                Some(n) => SamplingProcessor::per_messages(*n)?,
+                None => {
+                    SamplingProcessor::per_period(std::time::Duration::from_millis(*period_millis))?
+                }
+            }),
             Eip::Validate(p) => Arc::new(ValidateProcessor::new(reify_predicate(self.context, p)?)),
             Eip::IdempotentConsumer(i) => {
                 let repository = match &i.repository {

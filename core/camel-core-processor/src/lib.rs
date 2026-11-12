@@ -15,6 +15,7 @@
 pub mod aggregate;
 pub mod choice;
 pub mod dynamic;
+pub mod enricher;
 pub mod errorhandler;
 pub mod filter;
 pub mod idempotent;

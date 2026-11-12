@@ -638,6 +638,37 @@ pub enum Eip {
         /// The steps balanced over.
         steps: Vec<ProcessorDefinition>,
     },
+    /// Sends a copy to the endpoint and merges the reply (`enrich`).
+    Enrich {
+        /// The uri (an expression).
+        uri: ExpressionDefinition,
+        /// The strategy merging the reply (`None`: the reply replaces the message).
+        strategy: Option<AggregationRef>,
+        /// Whether a failed reply is merged too.
+        aggregate_on_exception: bool,
+        /// Whether an invalid endpoint uri is ignored.
+        ignore_invalid_endpoint: bool,
+    },
+    /// Polls a message from the endpoint and merges it (`pollEnrich`).
+    PollEnrich {
+        /// The uri (an expression).
+        uri: ExpressionDefinition,
+        /// The timeout in millis: negative waits without limit, `0` does not wait.
+        timeout: i64,
+        /// The strategy merging the polled message.
+        strategy: Option<AggregationRef>,
+        /// Whether a failed message is merged too.
+        aggregate_on_exception: bool,
+        /// Whether an invalid endpoint uri is ignored.
+        ignore_invalid_endpoint: bool,
+    },
+    /// Lets one exchange through per number of messages or per period (`sample`).
+    Sample {
+        /// The number of messages per sample.
+        message_frequency: Option<u64>,
+        /// The sample period in millis (default 1000).
+        period_millis: u64,
+    },
     /// `doTry` with its `doCatch` and `doFinally` clauses.
     DoTry {
         /// The steps of the try block.
@@ -692,6 +723,9 @@ impl Eip {
             Eip::Sort { .. } => "sort",
             Eip::Step { .. } => "step",
             Eip::Validate(_) => "validate",
+            Eip::Enrich { .. } => "enrich",
+            Eip::PollEnrich { .. } => "pollEnrich",
+            Eip::Sample { .. } => "sample",
             Eip::IdempotentConsumer(_) => "idempotentConsumer",
             Eip::LoadBalance { .. } => "loadBalance",
         }
@@ -808,6 +842,15 @@ impl fmt::Display for ProcessorDefinition {
             },
             Eip::Step { steps, .. } => write!(f, "Step[{}]", Steps(steps)),
             Eip::Validate(e) => write!(f, "Validate[{e} -> []]"),
+            Eip::Enrich { uri, .. } => write!(f, "Enrich[{uri}]"),
+            Eip::PollEnrich { uri, .. } => write!(f, "PollEnrich[{uri}]"),
+            Eip::Sample {
+                message_frequency,
+                period_millis,
+            } => match message_frequency {
+                Some(n) => write!(f, "Sample[1 Exchange per {n} messages received -> []]"),
+                None => write!(f, "Sample[1 Exchange per {period_millis} millis -> []]"),
+            },
             Eip::IdempotentConsumer(i) => {
                 write!(
                     f,

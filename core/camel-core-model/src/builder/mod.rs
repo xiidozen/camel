@@ -462,6 +462,72 @@ pub trait Dsl: Sized {
         })
     }
 
+    /// Sends a copy (`InOut`) of the exchange to the endpoint of the uri (a simple expression)
+    /// and merges the reply, by default the reply replaces the message (Java `.enrich(..)`);
+    /// see [`aggregation_strategy`](Self::aggregation_strategy) and
+    /// [`aggregate_on_exception`](Self::aggregate_on_exception).
+    fn enrich(self, uri: &str) -> Self {
+        self.eip(Eip::Enrich {
+            uri: ExpressionDefinition::language("simple", uri),
+            strategy: None,
+            aggregate_on_exception: false,
+            ignore_invalid_endpoint: false,
+        })
+    }
+
+    /// Polls a message from the endpoint of the uri (a simple expression), waiting up to the
+    /// timeout in millis (negative: without limit, `0`: not at all), and merges it (Java
+    /// `.pollEnrich(uri, timeout)`).
+    fn poll_enrich(self, uri: &str, timeout: i64) -> Self {
+        self.eip(Eip::PollEnrich {
+            uri: ExpressionDefinition::language("simple", uri),
+            timeout,
+            strategy: None,
+            aggregate_on_exception: false,
+            ignore_invalid_endpoint: false,
+        })
+    }
+
+    /// Whether the last enrich or pollEnrich merges a failed reply too (Java
+    /// `aggregateOnException`).
+    fn aggregate_on_exception(mut self, aggregate: bool) -> Self {
+        if let Some(
+            Eip::Enrich {
+                aggregate_on_exception,
+                ..
+            }
+            | Eip::PollEnrich {
+                aggregate_on_exception,
+                ..
+            },
+        ) = self.last_mut().map(|l| &mut l.eip)
+        {
+            *aggregate_on_exception = aggregate;
+        }
+        self
+    }
+
+    /// Lets one exchange through per second, stopping the others (Java `.sample()`).
+    fn sample(self) -> Self {
+        self.sample_period(1000)
+    }
+
+    /// Lets one exchange through per period in millis (Java `.sample(Duration)`).
+    fn sample_period(self, millis: u64) -> Self {
+        self.eip(Eip::Sample {
+            message_frequency: None,
+            period_millis: millis,
+        })
+    }
+
+    /// Lets one exchange through per number of messages (Java `.sample(long)`).
+    fn sample_messages(self, message_frequency: u64) -> Self {
+        self.eip(Eip::Sample {
+            message_frequency: Some(message_frequency),
+            period_millis: 1000,
+        })
+    }
+
     /// Fails the exchange with a `PredicateValidationException` when the predicate does not
     /// match (Java `.validate(..)`).
     fn validate(self, predicate: impl Into<ExpressionDefinition>) -> Self {
@@ -592,6 +658,16 @@ pub trait Dsl: Sized {
                 ignore_invalid_endpoint,
                 ..
             }) => *ignore_invalid_endpoint = true,
+            Some(
+                Eip::Enrich {
+                    ignore_invalid_endpoint,
+                    ..
+                }
+                | Eip::PollEnrich {
+                    ignore_invalid_endpoint,
+                    ..
+                },
+            ) => *ignore_invalid_endpoint = true,
             Some(
                 Eip::RoutingSlip {
                     ignore_invalid_endpoints,
@@ -797,7 +873,9 @@ pub trait Dsl: Sized {
         if let Some(
             Eip::Split { strategy: s, .. }
             | Eip::Multicast { strategy: s, .. }
-            | Eip::RecipientList { strategy: s, .. },
+            | Eip::RecipientList { strategy: s, .. }
+            | Eip::Enrich { strategy: s, .. }
+            | Eip::PollEnrich { strategy: s, .. },
         ) = self.last_mut().map(|l| &mut l.eip)
         {
             *s = Some(AggregationRef::Strategy(strategy));
@@ -810,7 +888,9 @@ pub trait Dsl: Sized {
         if let Some(
             Eip::Split { strategy: s, .. }
             | Eip::Multicast { strategy: s, .. }
-            | Eip::RecipientList { strategy: s, .. },
+            | Eip::RecipientList { strategy: s, .. }
+            | Eip::Enrich { strategy: s, .. }
+            | Eip::PollEnrich { strategy: s, .. },
         ) = self.last_mut().map(|l| &mut l.eip)
         {
             *s = Some(AggregationRef::Ref(name.to_string()));
