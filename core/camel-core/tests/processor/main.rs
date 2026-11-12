@@ -24,6 +24,7 @@ mod multicast_test;
 mod on_completion_test;
 mod onexception;
 mod pipeline_test;
+mod recipient_list_misc_test;
 mod recipient_list_parallel_test;
 mod recipient_list_test;
 mod resequencer_test;

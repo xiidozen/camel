@@ -157,12 +157,23 @@ pub(crate) async fn process_pairs(
     }
 }
 
-/// Stops on the failed copy (Java: the task callback when not continuing).
+/// Stops on the failed copy (Java: the task callback when not continuing): its error, wrapped,
+/// fails the original exchange; a failure handled by an error handler of the copy makes the
+/// copy the result (as the pipeline does), so the original exchange stops as handled.
 fn stop_on_failure(original: &mut Exchange, sub: &Exchange, index: usize) {
     let msg = format!("Multicast processing failed for number {index}");
-    if let Some(e) = sub.exception().cloned() {
-        let wrapped = CamelError::camel_exchange_cause(&msg, sub, e);
-        original.set_exception(Some(wrapped));
+    match sub.exception().cloned() {
+        Some(e) => {
+            let wrapped = CamelError::camel_exchange_cause(&msg, sub, e);
+            original.set_exception(Some(wrapped));
+        }
+        None => {
+            let correlation = original.remove_property(CORRELATION_ID);
+            copy_results(original, sub);
+            if let Some(c) = correlation {
+                original.set_property(CORRELATION_ID, c);
+            }
+        }
     }
     original.set_redelivery_exhausted(sub.exception().is_some() || sub.is_redelivery_exhausted());
 }
