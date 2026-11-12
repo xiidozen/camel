@@ -1323,3 +1323,33 @@ async fn test_producer_expression() {
         .unwrap();
     assert!(dir.test_file("myfile-abc.txt").exists());
 }
+
+/// The route cases of `FileProduceTempPrefixTest`.
+#[tokio::test]
+async fn test_temp_prefix() {
+    let dir = TestDirectory::new("FileProduceTempPrefixTest");
+    let uri = dir.file_uri("?tempPrefix=inprogress.");
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(from("direct:a").to(&uri));
+    })
+    .await;
+    t.template
+        .send_body_and_header("direct:a", "Hello World", FILE_NAME, "hello.txt")
+        .await
+        .unwrap();
+    assert_eq!(Some("Hello World".to_string()), dir.read("hello.txt"));
+    // a generated name
+    let dir2 = TestDirectory::new("FileProduceTempPrefixTest");
+    let uri = dir2.file_uri("?tempPrefix=inprogress.");
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(from("direct:a").to(&uri));
+    })
+    .await;
+    t.template.send_body("direct:a", "Bye World").await.unwrap();
+    let files: Vec<_> = std::fs::read_dir(dir2.path()).unwrap().flatten().collect();
+    assert_eq!(1, files.len(), "exactly one file should have been created");
+    assert_eq!(
+        "Bye World",
+        std::fs::read_to_string(files[0].path()).unwrap()
+    );
+}

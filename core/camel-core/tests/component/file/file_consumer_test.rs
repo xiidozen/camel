@@ -2712,3 +2712,115 @@ async fn test_file_expression() {
         .expected_bodies_received(["Goodday World"]);
     t.assert_mock_endpoints_satisfied().await;
 }
+
+/// Port of `FileConsumerIdempotentRefTest`: the idempotent repository of the registry.
+#[tokio::test]
+async fn test_idempotent_ref() {
+    use camel_core::api::spi::idempotent_repository::{
+        IdempotentRepository, SharedIdempotentRepository,
+    };
+    use std::sync::atomic::{AtomicBool, Ordering};
+    struct MyRepository {
+        invoked: AtomicBool,
+        expected: String,
+    }
+    impl IdempotentRepository for MyRepository {
+        fn add(&self, key: &str) -> bool {
+            assert_eq!(self.expected, key);
+            !self.invoked.swap(true, Ordering::SeqCst)
+        }
+        fn contains(&self, _: &str) -> bool {
+            self.invoked.load(Ordering::SeqCst)
+        }
+        fn remove(&self, _: &str) -> bool {
+            true
+        }
+        fn clear(&self) {}
+    }
+    let dir = TestDirectory::new("FileConsumerIdempotentRefTest");
+    let repository = std::sync::Arc::new(MyRepository {
+        invoked: AtomicBool::new(false),
+        expected: dir.test_file("report.txt").to_string_lossy().into_owned(),
+    });
+    let shared: SharedIdempotentRepository = repository.clone();
+    let t = ContextTestSupport::new();
+    t.context
+        .registry()
+        .unwrap()
+        .bind(
+            "myRepo",
+            camel_core::support::idempotent::repository_value(shared),
+        )
+        .unwrap();
+    let uri = dir.file_uri("?idempotent=true&idempotentRepository=#myRepo&move=done/${file:name}&initialDelay=0&delay=10");
+    t.context
+        .add_routes(move |r: &mut Routes| {
+            r.add(from(&uri).convert_body_to("String").to("mock:result"));
+        })
+        .await
+        .unwrap();
+    t.context.start().await.unwrap();
+    let mock = t.mock("mock:result");
+    mock.expected_bodies_received(["Hello World"]);
+    send(&t, &dir, "report.txt", "Hello World").await;
+    mock.assert_is_satisfied().await;
+    let done = dir.test_file("done/report.txt");
+    support_wait(|| done.exists()).await;
+    mock.reset();
+    mock.expected_message_count(0);
+    std::fs::rename(&done, dir.test_file("report.txt")).unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    mock.assert_is_satisfied().await;
+    assert!(
+        repository.invoked.load(Ordering::SeqCst),
+        "MyIdempotentRepository should have been invoked"
+    );
+}
+
+/// Port of `FileConsumerAutoCreateDirectoryTest`.
+#[tokio::test]
+async fn test_auto_create_directory() {
+    let t = ContextTestSupport::new();
+    let noop: camel_core::api::processor::SharedProcessor = std::sync::Arc::new(
+        camel_core::api::processor::processor_fn(|_: &mut Exchange| Ok(())),
+    );
+    for (path, absolute, exists) in [
+        ("foo", false, true),
+        ("foo", true, true),
+        ("foo?autoCreate=false", false, false),
+        ("foo.bar?autoCreate=true", false, true),
+    ] {
+        let dir = TestDirectory::new("FileConsumerAutoCreateDirectoryTest");
+        let uri = if absolute {
+            format!("file://{}/{path}", dir.path())
+        } else {
+            dir.file_uri(path)
+        };
+        let consumer = t
+            .context
+            .endpoint(&uri)
+            .unwrap()
+            .create_consumer(noop.clone())
+            .unwrap();
+        consumer.start().await.unwrap();
+        consumer.stop().await.unwrap();
+        let created = dir.test_file(path.split('?').next().unwrap());
+        assert_eq!(exists, created.is_dir(), "{uri}");
+    }
+    let dir = TestDirectory::new("FileConsumerAutoCreateDirectoryTest");
+    let consumer = t
+        .context
+        .endpoint(&dir.file_uri("foo?autoCreate=false&startingDirectoryMustExist=true"))
+        .unwrap()
+        .create_consumer(noop)
+        .unwrap();
+    let e = consumer.start().await.unwrap_err();
+    assert!(
+        e.to_string().contains("Starting directory does not exist"),
+        "{e}"
+    );
+    assert!(
+        !dir.test_file("foo").exists(),
+        "Directory should NOT be created"
+    );
+}
