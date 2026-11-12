@@ -32,6 +32,7 @@
 #![deny(missing_docs)]
 #![deny(rustdoc::broken_intra_doc_links)]
 
+pub mod consumer_template;
 pub mod context;
 pub mod producer_template;
 pub mod route;

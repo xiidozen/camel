@@ -381,3 +381,53 @@ async fn test_poll_enrich_simple_move() {
         .unwrap();
     mock.assert_is_satisfied().await;
 }
+
+/// Ports of `FileConsumeTemplateTest` and `FileConsumerTemplateTest` (a consumer template).
+#[tokio::test]
+async fn test_consumer_template() {
+    let dir = TestDirectory::new("FileConsumeTemplateTest");
+    let t = ContextTestSupport::new();
+    t.context.start().await.unwrap();
+    let consumer = t.context.create_consumer_template();
+    send(&t, &dir, "hello.txt", "Hello World").await;
+    send(&t, &dir, "bye.txt", "Bye World").await;
+    let uri = dir.file_uri("?sortBy=file:name&eagerMaxMessagesPerPoll=false");
+    let out = consumer.receive(&uri).await.unwrap().expect("a file");
+    let out2 = consumer.receive(&uri).await.unwrap().expect("another file");
+    assert_eq!(&Value::from("Bye World"), out.message().body());
+    assert_eq!(&Value::from("Hello World"), out2.message().body());
+    consumer.done_uow(out).await;
+    consumer.done_uow(out2).await;
+    consumer.stop().await.unwrap();
+
+    let dir = TestDirectory::new("FileConsumerTemplateTest");
+    send(&t, &dir, "hello.txt", "Hello World").await;
+    assert!(dir.test_file("hello.txt").exists(), "File should exist");
+    let body = consumer
+        .receive_body_timeout(&dir.file_uri("?delete=true"), 5000)
+        .await
+        .unwrap();
+    assert_eq!(Some(Value::from("Hello World")), body);
+    assert!(
+        !dir.test_file("hello.txt").exists(),
+        "File should be deleted"
+    );
+}
+
+/// Port of `ConsumerTemplateFileShutdownTest`.
+#[tokio::test]
+async fn test_consumer_template_file_shutdown() {
+    let dir = TestDirectory::new("ConsumerTemplateFileShutdownTest");
+    let t = ContextTestSupport::new();
+    t.context.start().await.unwrap();
+    let consumer = t.context.create_consumer_template();
+    send(&t, &dir, "hello.123.txt", "Hello World").await;
+    let exchange = consumer
+        .receive_timeout(&dir.file_uri("?fileName=hello.123.txt"), 5000)
+        .await
+        .unwrap()
+        .expect("the file");
+    assert_eq!(&Value::from("Hello World"), exchange.message().body());
+    consumer.done_uow(exchange).await;
+    consumer.stop().await.unwrap();
+}

@@ -679,6 +679,16 @@ impl DefaultCamelContext {
             .await
     }
 
+    /// Creates a consumer template to receive messages from endpoints (Java
+    /// `createConsumerTemplate`).
+    pub fn create_consumer_template(&self) -> crate::consumer_template::ConsumerTemplate {
+        crate::consumer_template::ConsumerTemplate::new(
+            self.this
+                .upgrade()
+                .expect("the DefaultCamelContext is held in an Arc"),
+        )
+    }
+
     /// Creates a producer template to send messages to endpoints.
     pub fn create_producer_template(&self) -> ProducerTemplate {
         ProducerTemplate::new(

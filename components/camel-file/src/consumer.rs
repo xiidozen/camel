@@ -242,14 +242,41 @@ pub(crate) fn begin(
     path: &Path,
 ) -> CamelResult<Option<(Taken, Exchange)>> {
     let c = &endpoint.config;
-    let mut file = GenericFile::of(&c.directory, path)
+    let file = GenericFile::of(&c.directory, path)
         .map_err(|e| operation_failed(format!("Cannot read file: {}: {e}", path.display())))?;
     let key = file.absolute_file_path().to_string_lossy().into_owned();
     let idempotent = c.idempotent.unwrap_or(c.noop);
+    // a file in progress (taken by a polling consumer, not done yet) is skipped (Java
+    // inProgressRepository)
+    if !endpoint.in_progress.lock().unwrap().insert(key.clone()) {
+        return Ok(None);
+    }
     if idempotent && !endpoint.idempotent.add(&key) {
+        endpoint.in_progress.lock().unwrap().remove(&key);
         log::trace!("This consumer is idempotent and the file has been consumed before: {key}");
         return Ok(None);
     }
+    match prepare(endpoint, file, &key, idempotent) {
+        Ok(r) => Ok(Some(r)),
+        Err(e) => {
+            endpoint.in_progress.lock().unwrap().remove(&key);
+            if idempotent {
+                endpoint.idempotent.remove(&key);
+            }
+            Err(e)
+        }
+    }
+}
+
+/// The exchange of the taken file (with the preMove).
+fn prepare(
+    endpoint: &Arc<FileEndpoint>,
+    mut file: GenericFile,
+    key: &str,
+    idempotent: bool,
+) -> CamelResult<(Taken, Exchange)> {
+    let c = &endpoint.config;
+    let key = key.to_string();
     let mut exchange = endpoint.create_exchange();
     file.populate_headers(&mut exchange);
     if let Some(pre) = &c.pre_move {
@@ -261,14 +288,14 @@ pub(crate) fn begin(
     }
     let body = read_body(&file.file_path, c.charset.as_deref())?;
     exchange.message_mut().set_body(body);
-    Ok(Some((
+    Ok((
         Taken {
             file,
             key,
             idempotent,
         },
         exchange,
-    )))
+    ))
 }
 
 /// Applies the process strategy after the routing (Java `GenericFileOnCompletion`): on
@@ -281,6 +308,7 @@ pub(crate) fn commit(
 ) -> CamelResult<()> {
     let c = &endpoint.config;
     let file = &taken.file;
+    endpoint.in_progress.lock().unwrap().remove(&taken.key);
     let failed = exchange.is_failed() || exchange.is_rollback_only();
     if failed {
         if taken.idempotent {
@@ -351,6 +379,9 @@ pub(crate) fn candidates(endpoint: &FileEndpoint, filters: &Filters) -> CamelRes
     let mut files = Vec::new();
     list_files(endpoint, dir, 1, &mut files)
         .map_err(|e| operation_failed(format!("Cannot list directory: {}: {e}", c.directory)))?;
+    if c.sort_reverse {
+        files.reverse();
+    }
     let mut answer = Vec::new();
     for path in files {
         let name = path

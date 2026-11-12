@@ -162,6 +162,9 @@ pub struct FileConfiguration {
     pub include_hidden_files: bool,
     /// The read lock (only `none` is available).
     pub read_lock: String,
+    /// Whether the files are taken in the reverse order of their names (`sortBy`
+    /// `reverse:file:name`; the default order is by name).
+    pub sort_reverse: bool,
 }
 
 impl FileConfiguration {
@@ -200,6 +203,7 @@ impl FileConfiguration {
             directory_must_exist: false,
             include_hidden_files: false,
             read_lock: "none".into(),
+            sort_reverse: false,
         }
     }
 }
@@ -318,6 +322,17 @@ impl Component for FileComponent {
             }
             c.read_lock = v;
         }
+        if let Some(sort) = param::<String>(parameters, "sortBy")? {
+            match sort.as_str() {
+                "file:name" | "file:onlyname" => {}
+                "reverse:file:name" | "reverse:file:onlyname" => c.sort_reverse = true,
+                other => {
+                    return Err(CamelError::illegal_argument(format!(
+                        "The sortBy {other} is not available in the Rust port yet (file:name, reverse:file:name)"
+                    )))
+                }
+            }
+        }
         if c.delete && c.move_to.is_some() {
             return Err(CamelError::illegal_argument(
                 "You cannot set both delete=true and move options",
@@ -331,6 +346,7 @@ impl Component for FileComponent {
         // accepted without effect (the Java scheduling, logging and cache options)
         for name in [
             "runLoggingLevel",
+            "eagerMaxMessagesPerPoll",
             "useFixedDelay",
             "synchronous",
             "bridgeErrorHandler",
@@ -346,6 +362,7 @@ impl Component for FileComponent {
             config: c,
             context: Arc::downgrade(context),
             idempotent: Arc::new(camel_support::idempotent::MemoryIdempotentRepository::default()),
+            in_progress: std::sync::Mutex::new(std::collections::HashSet::new()),
         }))
     }
 
@@ -364,6 +381,7 @@ pub struct FileEndpoint {
     config: FileConfiguration,
     context: Weak<dyn CamelContext>,
     idempotent: Arc<camel_support::idempotent::MemoryIdempotentRepository>,
+    in_progress: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 
 impl FileEndpoint {
