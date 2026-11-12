@@ -17,6 +17,8 @@ pub mod choice;
 pub mod dynamic;
 pub mod errorhandler;
 pub mod filter;
+pub mod idempotent;
+pub mod loadbalancer;
 pub mod log_processor;
 pub mod multicast;
 pub mod on_completion;

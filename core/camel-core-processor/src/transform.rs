@@ -322,3 +322,45 @@ impl Processor for ScriptProcessor {
         ready(self.expression.evaluate_mut(exchange).map(|_| ()))
     }
 }
+
+/// The Java class name of `org.apache.camel.support.processor.PredicateValidationException`.
+pub const PREDICATE_VALIDATION_EXCEPTION: &str =
+    "org.apache.camel.support.processor.PredicateValidationException";
+
+/// Fails the exchange with a `PredicateValidationException` when the predicate does not match
+/// (the validate EIP, Java `PredicateValidatingProcessor`).
+pub struct ValidateProcessor {
+    predicate: camel_api::processor::SharedPredicate,
+}
+
+impl ValidateProcessor {
+    /// Creates the processor.
+    pub fn new(predicate: camel_api::processor::SharedPredicate) -> Self {
+        ValidateProcessor { predicate }
+    }
+}
+
+impl Processor for ValidateProcessor {
+    fn process<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>> {
+        let result = self.predicate.matches(exchange).and_then(|matches| {
+            log::debug!(
+                "Validation {} for {exchange} with Predicate[{}]",
+                if matches { "succeed" } else { "failed" },
+                self.predicate.describe()
+            );
+            if matches {
+                Ok(())
+            } else {
+                Err(CamelError::validation(
+                    exchange,
+                    &format!(
+                        "Validation failed for Predicate[{}]",
+                        self.predicate.describe()
+                    ),
+                )
+                .with_subtype(PREDICATE_VALIDATION_EXCEPTION))
+            }
+        });
+        ready(result)
+    }
+}

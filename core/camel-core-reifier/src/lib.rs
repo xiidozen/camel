@@ -20,8 +20,8 @@ use camel_core_model::errorhandler::{
 };
 use camel_core_model::expression::ExpressionDefinition;
 use camel_core_model::processor::{
-    AggregationRef, Eip, MulticastOptions, OnCompletionDefinition, ProcessRef, ProcessorDefinition,
-    Steps,
+    AggregationRef, Eip, IdempotentRepositoryRef, LoadBalancerDefinition, MulticastOptions,
+    OnCompletionDefinition, ProcessRef, ProcessorDefinition, Steps,
 };
 use camel_core_model::route::RouteDefinition;
 use camel_core_processor::aggregate::{AggregateOptions, AggregateProcessor};
@@ -34,6 +34,8 @@ use camel_core_processor::errorhandler::exception_policy::ExceptionPolicy;
 use camel_core_processor::errorhandler::redelivery_policy::RedeliveryPolicyOverrides;
 use camel_core_processor::errorhandler::{ErrorHandlerConfig, RedeliveryErrorHandler};
 use camel_core_processor::filter::FilterProcessor;
+use camel_core_processor::idempotent::{IdempotentConsumerProcessor, IdempotentOptions};
+use camel_core_processor::loadbalancer::{FailoverOptions, LoadBalance, LoadBalancerProcessor};
 use camel_core_processor::log_processor::LogProcessor;
 use camel_core_processor::multicast::{
     DelayProcessor, MulticastConfig, MulticastProcessor, SplitProcessor,
@@ -48,7 +50,7 @@ use camel_core_processor::transform::{
     RemoveHeaderProcessor, RemoveHeadersProcessor, RemovePropertiesProcessor,
     RemovePropertyProcessor, RemoveVariableProcessor, ScriptProcessor, SetBodyProcessor,
     SetHeaderProcessor, SetHeadersProcessor, SetPropertyProcessor, SetVariableProcessor,
-    SetVariablesProcessor, StopProcessor, ThrowExceptionProcessor,
+    SetVariablesProcessor, StopProcessor, ThrowExceptionProcessor, ValidateProcessor,
 };
 use camel_core_processor::try_catch::{CatchProcessor, FinallyProcessor, TryProcessor};
 use camel_util::value::Value;
@@ -496,6 +498,80 @@ impl<'a> RouteReifier<'a> {
                 ))
             }
             Eip::Step { id, steps } => Arc::new(StepProcessor::new(id, self.step_list(steps)?)),
+            Eip::Validate(p) => Arc::new(ValidateProcessor::new(reify_predicate(self.context, p)?)),
+            Eip::IdempotentConsumer(i) => {
+                let repository = match &i.repository {
+                    IdempotentRepositoryRef::Repository(r) => r.clone(),
+                    IdempotentRepositoryRef::Ref(name) => self
+                        .context
+                        .registry()
+                        .and_then(|r| r.lookup_by_name(name))
+                        .and_then(|v| camel_support::idempotent::repository_of(&v))
+                        .ok_or_else(|| CamelError::no_such_bean(name))?,
+                };
+                let options = IdempotentOptions {
+                    eager: i.eager,
+                    completion_eager: i.completion_eager,
+                    skip_duplicate: i.skip_duplicate,
+                    remove_on_failure: i.remove_on_failure,
+                };
+                Arc::new(IdempotentConsumerProcessor::new(
+                    self.expr(&i.message_id)?,
+                    repository,
+                    options,
+                    self.steps(&i.steps)?,
+                ))
+            }
+            Eip::LoadBalance { balancer, steps } => {
+                let balance = match balancer {
+                    LoadBalancerDefinition::RoundRobin => LoadBalance::RoundRobin,
+                    LoadBalancerDefinition::Random => LoadBalance::Random,
+                    LoadBalancerDefinition::Sticky(e) => LoadBalance::Sticky(self.expr(e)?),
+                    LoadBalancerDefinition::Topic => LoadBalance::Topic,
+                    LoadBalancerDefinition::Failover {
+                        exceptions,
+                        round_robin,
+                        sticky,
+                        maximum_failover_attempts,
+                    } => LoadBalance::Failover(FailoverOptions {
+                        exceptions: exceptions.clone(),
+                        round_robin: *round_robin,
+                        sticky: *sticky,
+                        maximum_failover_attempts: *maximum_failover_attempts,
+                    }),
+                    LoadBalancerDefinition::Weighted {
+                        round_robin,
+                        distribution_ratio,
+                        delimiter,
+                    } => {
+                        let mut ratios = Vec::new();
+                        for r in distribution_ratio.split(delimiter.as_str()) {
+                            let r = r.trim();
+                            let v: i64 = r.parse().map_err(|_| {
+                                CamelError::illegal_argument(format!(
+                                    "Distribution ratio must be a number, was: {r}"
+                                ))
+                            })?;
+                            if v < 0 {
+                                return Err(CamelError::illegal_argument(format!(
+                                    "Distribution ratio must be zero or a positive number, was: {v}"
+                                )));
+                            }
+                            ratios.push(v as u32);
+                        }
+                        LoadBalance::Weighted {
+                            round_robin: *round_robin,
+                            ratios,
+                        }
+                    }
+                };
+                // each step is a processor of the balancer
+                let mut processors = Vec::new();
+                for s in steps.iter().filter(|s| !s.disabled) {
+                    processors.push(self.step(s)?);
+                }
+                Arc::new(LoadBalancerProcessor::new(balance, processors)?)
+            }
             Eip::Bean { bean, method } => {
                 let factory = context_plugin::<Arc<dyn BeanProcessorFactory>>(
                     self.context.as_ref(),

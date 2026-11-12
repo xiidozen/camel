@@ -12,6 +12,136 @@ use std::cmp::Ordering;
 use std::fmt;
 use std::sync::Arc;
 
+/// The idempotent repository of an idempotent consumer: a bean of the registry, or the
+/// repository itself.
+#[derive(Clone)]
+pub enum IdempotentRepositoryRef {
+    /// The name of the repository in the registry.
+    Ref(String),
+    /// The repository.
+    Repository(camel_api::spi::idempotent_repository::SharedIdempotentRepository),
+}
+
+impl fmt::Debug for IdempotentRepositoryRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            IdempotentRepositoryRef::Ref(r) => write!(f, "Ref({r})"),
+            IdempotentRepositoryRef::Repository(_) => f.write_str("Repository"),
+        }
+    }
+}
+
+impl From<&str> for IdempotentRepositoryRef {
+    fn from(name: &str) -> Self {
+        IdempotentRepositoryRef::Ref(name.to_string())
+    }
+}
+
+impl From<camel_api::spi::idempotent_repository::SharedIdempotentRepository>
+    for IdempotentRepositoryRef
+{
+    fn from(repository: camel_api::spi::idempotent_repository::SharedIdempotentRepository) -> Self {
+        IdempotentRepositoryRef::Repository(repository)
+    }
+}
+
+/// The idempotent consumer EIP (Java `IdempotentConsumerDefinition`).
+#[derive(Debug, Clone)]
+pub struct IdempotentConsumerDefinition {
+    /// The message id.
+    pub message_id: ExpressionDefinition,
+    /// The repository of the ids.
+    pub repository: IdempotentRepositoryRef,
+    /// Whether the id is added before processing (default `true`).
+    pub eager: bool,
+    /// Whether the completion work is done when the block ends (default `false`).
+    pub completion_eager: bool,
+    /// Whether duplicates are skipped (default `true`).
+    pub skip_duplicate: bool,
+    /// Whether the id is removed when the exchange fails (default `true`).
+    pub remove_on_failure: bool,
+    /// The steps of a new message.
+    pub steps: Vec<ProcessorDefinition>,
+}
+
+/// How a load balancer chooses the step (Java `LoadBalancerDefinition`s).
+#[derive(Debug, Clone)]
+pub enum LoadBalancerDefinition {
+    /// The steps in turn.
+    RoundRobin,
+    /// A step at random.
+    Random,
+    /// The same step for the same correlation key.
+    Sticky(ExpressionDefinition),
+    /// All the steps, one after the other, each with a copy.
+    Topic,
+    /// The first step, then the next one when it fails.
+    Failover {
+        /// The errors that fail over (empty: any error).
+        exceptions: Vec<ErrorType>,
+        /// Whether each message starts at the next step.
+        round_robin: bool,
+        /// Whether each message starts at the last step that succeeded.
+        sticky: bool,
+        /// The maximum number of failover attempts (`-1`: no limit).
+        maximum_failover_attempts: i32,
+    },
+    /// The steps by weights, such as `4,2,1`.
+    Weighted {
+        /// Whether the steps are chosen in turn, else at random.
+        round_robin: bool,
+        /// The distribution ratios, separated by the delimiter.
+        distribution_ratio: String,
+        /// The delimiter of the ratios (default `,`).
+        delimiter: String,
+    },
+}
+
+impl LoadBalancerDefinition {
+    /// A failover on any error, without limit.
+    pub fn failover() -> Self {
+        LoadBalancerDefinition::Failover {
+            exceptions: Vec::new(),
+            round_robin: false,
+            sticky: false,
+            maximum_failover_attempts: -1,
+        }
+    }
+
+    /// A weighted balancer of the ratios (such as `4,2,1`).
+    pub fn weighted(round_robin: bool, distribution_ratio: &str) -> Self {
+        LoadBalancerDefinition::Weighted {
+            round_robin,
+            distribution_ratio: distribution_ratio.to_string(),
+            delimiter: ",".to_string(),
+        }
+    }
+}
+
+impl fmt::Display for LoadBalancerDefinition {
+    /// Java `toString()` of the load balancer definitions.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LoadBalancerDefinition::RoundRobin => f.write_str("RoundRobinLoadBalancer"),
+            LoadBalancerDefinition::Random => f.write_str("RandomLoadBalancer"),
+            LoadBalancerDefinition::Sticky(e) => write!(f, "StickyLoadBalancer[{e}]"),
+            LoadBalancerDefinition::Topic => f.write_str("TopicLoadBalancer"),
+            LoadBalancerDefinition::Failover { .. } => f.write_str("FailoverLoadBalancer"),
+            LoadBalancerDefinition::Weighted {
+                round_robin,
+                distribution_ratio,
+                ..
+            } => {
+                if *round_robin {
+                    write!(f, "WeightedRoundRobinLoadBalancer[{distribution_ratio}]")
+                } else {
+                    write!(f, "WeightedRandomLoadBalancer[{distribution_ratio}]")
+                }
+            }
+        }
+    }
+}
+
 /// A comparator of the sort EIP.
 pub type SharedComparator = Arc<dyn Fn(&Value, &Value) -> Ordering + Send + Sync>;
 
@@ -60,11 +190,13 @@ impl ProcessorDefinition {
         match &self.eip {
             Eip::Filter { steps, .. }
             | Eip::Pipeline { steps }
+            | Eip::LoadBalance { steps, .. }
             | Eip::Loop { steps, .. }
             | Eip::Step { steps, .. }
             | Eip::Split { steps, .. }
             | Eip::Multicast { steps, .. } => steps.iter().collect(),
             Eip::Aggregate(a) => a.steps.iter().collect(),
+            Eip::IdempotentConsumer(i) => i.steps.iter().collect(),
             Eip::OnCompletion(c) => c.steps.iter().collect(),
             Eip::DoTry {
                 steps,
@@ -495,6 +627,17 @@ pub enum Eip {
         /// The steps.
         steps: Vec<ProcessorDefinition>,
     },
+    /// Fails the exchange when the predicate does not match (`validate`).
+    Validate(ExpressionDefinition),
+    /// Processes a message once per message id (`idempotentConsumer`).
+    IdempotentConsumer(Box<IdempotentConsumerDefinition>),
+    /// Sends each message to one of the steps (`loadBalance`).
+    LoadBalance {
+        /// How the step is chosen.
+        balancer: LoadBalancerDefinition,
+        /// The steps balanced over.
+        steps: Vec<ProcessorDefinition>,
+    },
     /// `doTry` with its `doCatch` and `doFinally` clauses.
     DoTry {
         /// The steps of the try block.
@@ -548,6 +691,9 @@ impl Eip {
             Eip::DynamicRouter { .. } => "dynamicRouter",
             Eip::Sort { .. } => "sort",
             Eip::Step { .. } => "step",
+            Eip::Validate(_) => "validate",
+            Eip::IdempotentConsumer(_) => "idempotentConsumer",
+            Eip::LoadBalance { .. } => "loadBalance",
         }
     }
 }
@@ -661,6 +807,18 @@ impl fmt::Display for ProcessorDefinition {
                 None => f.write_str("sort[body]"),
             },
             Eip::Step { steps, .. } => write!(f, "Step[{}]", Steps(steps)),
+            Eip::Validate(e) => write!(f, "Validate[{e} -> []]"),
+            Eip::IdempotentConsumer(i) => {
+                write!(
+                    f,
+                    "IdempotentConsumer[{} -> {}]",
+                    i.message_id,
+                    Steps(&i.steps)
+                )
+            }
+            Eip::LoadBalance { balancer, steps } => {
+                write!(f, "LoadBalanceType[{balancer}, {}]", Steps(steps))
+            }
             Eip::Bean { bean, method } => match bean {
                 camel_api::bean_binding::BeanReference::Name(name) => match method {
                     Some(m) => write!(f, "Bean[ref:{name} method:{m}]"),

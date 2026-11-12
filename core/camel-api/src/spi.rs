@@ -4,6 +4,7 @@
 pub mod aggregation_repository;
 pub mod exchange_formatter;
 pub mod header_filter;
+pub mod idempotent_repository;
 pub mod language;
 pub mod log_listener;
 pub mod properties;

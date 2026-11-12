@@ -42,6 +42,7 @@ pub use errorhandler::*;
 
 use crate::errorhandler::{ErrorHandlerDefinition, OnExceptionDefinition};
 use crate::expression::ExpressionDefinition;
+use crate::processor::IdempotentConsumerDefinition;
 use crate::processor::{
     AggregateDefinition, AggregationRef, CatchDefinition, Eip, MulticastOptions,
     OnCompletionDefinition, ProcessRef, ProcessorDefinition, RepositoryRef, SortComparator,
@@ -56,6 +57,7 @@ use camel_api::processor::{processor_fn, SharedAggregationStrategy, SharedProces
 use camel_api::spi::aggregation_repository::AggregationRepository;
 use std::sync::Arc;
 
+pub use crate::processor::{IdempotentRepositoryRef, LoadBalancerDefinition};
 pub use camel_support::builder::{
     and, body, constant, exchange_pattern, exchange_property, header, not, or, variable,
     ValueBuilder,
@@ -458,6 +460,84 @@ pub trait Dsl: Sized {
             id: id.to_string(),
             steps,
         })
+    }
+
+    /// Fails the exchange with a `PredicateValidationException` when the predicate does not
+    /// match (Java `.validate(..)`).
+    fn validate(self, predicate: impl Into<ExpressionDefinition>) -> Self {
+        self.eip(Eip::Validate(predicate.into()))
+    }
+
+    /// Processes the steps once per message id, skipping the duplicates (Java
+    /// `.idempotentConsumer(..)`); the repository is a bean name or an
+    /// `Arc<dyn IdempotentRepository>`, see [`eager`](Self::eager),
+    /// [`skip_duplicate`](Self::skip_duplicate), [`remove_on_failure`](Self::remove_on_failure),
+    /// [`completion_eager`](Self::completion_eager).
+    fn idempotent_consumer<F>(
+        self,
+        message_id: impl Into<ExpressionDefinition>,
+        repository: impl Into<IdempotentRepositoryRef>,
+        steps: F,
+    ) -> Self
+    where
+        F: FnOnce(StepsDsl) -> StepsDsl,
+    {
+        let steps = steps(StepsDsl::default()).steps;
+        self.eip(Eip::IdempotentConsumer(Box::new(
+            IdempotentConsumerDefinition {
+                message_id: message_id.into(),
+                repository: repository.into(),
+                eager: true,
+                completion_eager: false,
+                skip_duplicate: true,
+                remove_on_failure: true,
+                steps,
+            },
+        )))
+    }
+
+    /// Whether the last idempotent consumer adds the id before processing (default `true`).
+    fn eager(mut self, eager: bool) -> Self {
+        if let Some(Eip::IdempotentConsumer(i)) = self.last_mut().map(|l| &mut l.eip) {
+            i.eager = eager;
+        }
+        self
+    }
+
+    /// Whether the last idempotent consumer skips the duplicates (default `true`), else routes
+    /// them with the `CamelDuplicateMessage` property.
+    fn skip_duplicate(mut self, skip: bool) -> Self {
+        if let Some(Eip::IdempotentConsumer(i)) = self.last_mut().map(|l| &mut l.eip) {
+            i.skip_duplicate = skip;
+        }
+        self
+    }
+
+    /// Whether the last idempotent consumer removes the id when the exchange fails (default
+    /// `true`).
+    fn remove_on_failure(mut self, remove: bool) -> Self {
+        if let Some(Eip::IdempotentConsumer(i)) = self.last_mut().map(|l| &mut l.eip) {
+            i.remove_on_failure = remove;
+        }
+        self
+    }
+
+    /// Whether the last idempotent consumer completes when its block ends (default `false`).
+    fn completion_eager(mut self, eager: bool) -> Self {
+        if let Some(Eip::IdempotentConsumer(i)) = self.last_mut().map(|l| &mut l.eip) {
+            i.completion_eager = eager;
+        }
+        self
+    }
+
+    /// Sends each message to one of the steps of the block, chosen by the balancer (Java
+    /// `.loadBalance()`); see [`LoadBalancerDefinition`].
+    fn load_balance<F>(self, balancer: LoadBalancerDefinition, steps: F) -> Self
+    where
+        F: FnOnce(StepsDsl) -> StepsDsl,
+    {
+        let steps = steps(StepsDsl::default()).steps;
+        self.eip(Eip::LoadBalance { balancer, steps })
     }
 
     /// Calls the only method of the bean (Java `.bean(..)`): the name of a bean in the
