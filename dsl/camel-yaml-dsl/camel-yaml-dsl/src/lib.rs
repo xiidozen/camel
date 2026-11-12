@@ -811,6 +811,34 @@ fn step(
             }
         }
         "markRollbackOnly" => one(d.mark_rollback_only()),
+        "threads" => {
+            let mut s = d.threads();
+            if let Some(n) = node.number::<i32>("poolSize")? {
+                s = s.pool_size(n);
+            }
+            if let Some(n) = node.number::<i32>("maxPoolSize")? {
+                s = s.max_pool_size(n);
+            }
+            if let Some(n) = node.number::<i32>("maxQueueSize")? {
+                s = s.max_queue_size(n);
+            }
+            if let Some(n) = node.number::<u64>("keepAliveTime")? {
+                s = s.keep_alive_time(n);
+            }
+            if let Some(n) = node.text("threadName") {
+                s = s.thread_name(&n);
+            }
+            if let Some(p) = node.text("rejectedPolicy") {
+                let policy: camel_api::enums::ThreadPoolRejectedPolicy = p
+                    .parse()
+                    .map_err(|_| error(format!("threads: unknown rejectedPolicy {p}")))?;
+                s = s.rejected_policy(policy);
+            }
+            if let Some(b) = node.bool("callerRunsWhenRejected")? {
+                s = s.caller_runs_when_rejected(b);
+            }
+            one(s)
+        }
         other => {
             return Err(error(format!(
                 "Unknown or not yet supported YAML DSL node: {other}"

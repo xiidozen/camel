@@ -50,7 +50,9 @@ use crate::processor::{
     OnCompletionDefinition, ProcessRef, ProcessorDefinition, RepositoryRef, SortComparator,
     WhenDefinition,
 };
-use crate::processor::{IdempotentConsumerDefinition, ResequenceDefinition, ResequenceMode};
+use crate::processor::{
+    IdempotentConsumerDefinition, ResequenceDefinition, ResequenceMode, ThreadsDefinition,
+};
 use crate::route::RouteDefinition;
 use camel_api::bean_binding::BeanReference;
 use camel_api::enums::{ExchangePattern, LoggingLevel};
@@ -508,6 +510,69 @@ pub trait Dsl: Sized {
             *aggregate_on_exception = aggregate;
         }
         self
+    }
+
+    /// Continues the routing on a pool of tasks (Java `.threads()`): the following steps run
+    /// on another tokio task, at most `maxPoolSize` exchanges at a time, the others waiting up
+    /// to `maxQueueSize` before being rejected by the rejected policy.
+    fn threads(self) -> Self {
+        self.eip(Eip::Threads(ThreadsDefinition::default()))
+    }
+
+    /// `threads` with the pool size (Java `.threads(poolSize)`).
+    fn threads_pool(self, pool_size: i32) -> Self {
+        self.threads().pool_size(pool_size)
+    }
+
+    /// `threads` with the pool and max pool sizes (Java `.threads(poolSize, maxPoolSize)`).
+    fn threads_pools(self, pool_size: i32, max_pool_size: i32) -> Self {
+        self.threads()
+            .pool_size(pool_size)
+            .max_pool_size(max_pool_size)
+    }
+
+    /// Sets an option of the last `threads`.
+    #[doc(hidden)]
+    fn threads_option(mut self, f: impl FnOnce(&mut ThreadsDefinition)) -> Self {
+        if let Some(Eip::Threads(t)) = self.last_mut().map(|l| &mut l.eip) {
+            f(t);
+        }
+        self
+    }
+
+    /// The pool size of the last `threads`.
+    fn pool_size(self, size: i32) -> Self {
+        self.threads_option(|t| t.pool_size = Some(size))
+    }
+
+    /// The max pool size of the last `threads`.
+    fn max_pool_size(self, size: i32) -> Self {
+        self.threads_option(|t| t.max_pool_size = Some(size))
+    }
+
+    /// The max queue size of the last `threads`.
+    fn max_queue_size(self, size: i32) -> Self {
+        self.threads_option(|t| t.max_queue_size = Some(size))
+    }
+
+    /// The keep alive time (seconds) of the last `threads`.
+    fn keep_alive_time(self, seconds: u64) -> Self {
+        self.threads_option(|t| t.keep_alive_time = Some(seconds))
+    }
+
+    /// The pool name of the last `threads`.
+    fn thread_name(self, name: &str) -> Self {
+        self.threads_option(|t| t.thread_name = Some(name.to_string()))
+    }
+
+    /// The rejected policy of the last `threads`.
+    fn rejected_policy(self, policy: camel_api::enums::ThreadPoolRejectedPolicy) -> Self {
+        self.threads_option(|t| t.rejected_policy = Some(policy))
+    }
+
+    /// Whether the caller runs a rejected exchange of the last `threads`.
+    fn caller_runs_when_rejected(self, caller_runs: bool) -> Self {
+        self.threads_option(|t| t.caller_runs_when_rejected = Some(caller_runs))
     }
 
     /// Lets one exchange through per second, stopping the others (Java `.sample()`).

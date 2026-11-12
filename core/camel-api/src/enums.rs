@@ -391,6 +391,21 @@ java_enum! {
     }
 }
 
+java_enum! {
+    /// What a thread pool does with a task when it is full (Java `ThreadPoolRejectedPolicy`).
+    ThreadPoolRejectedPolicy {
+        /// The task fails with a `RejectedExecutionException`.
+        Abort,
+        /// The caller runs the task.
+        CallerRuns,
+        /// The task is discarded (in Camel: fails with a `RejectedExecutionException`).
+        Discard,
+        /// The oldest waiting task is discarded (in Camel: the new task fails with a
+        /// `RejectedExecutionException`).
+        DiscardOldest,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

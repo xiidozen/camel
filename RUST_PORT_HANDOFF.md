@@ -138,8 +138,11 @@ Crates live **in the directory of the Maven module they replace** (`core/camel-a
 - Events: `camel_api::spi::event` (`EventNotifier`, `notify(context, event)`), notifiers on
   `DefaultCamelContext::add_event_notifier`; new sending paths should send `ExchangeSending`/`ExchangeSent` (or use
   `dynamic::send_to`).
-- **Next:** threads, the rest of the simple functions (init blocks, type/message/output), then
-  camel-main and the YAML/XML DSLs.
+- threads EIP: `threads.rs`; the reifier runs the steps after a `threads` step on its pool (the caller waits:
+  no early release of the consumer, see the module doc).
+- **Next:** the rest of the simple functions (init blocks, type/message/output), then the pending pieces
+  of camel-main (component options from properties) and of the DSLs (rest, route templates, route
+  configurations).
 - Java files still present in `core/camel-api/src/main/java` are the ones not ported yet.
 - Everything else in the repository: **not started** (status `todo` in the backlog).
 

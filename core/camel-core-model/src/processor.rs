@@ -668,6 +668,9 @@ pub enum Eip {
     Validate(ExpressionDefinition),
     /// Processes a message once per message id (`idempotentConsumer`).
     IdempotentConsumer(Box<IdempotentConsumerDefinition>),
+    /// Continues the routing on a pool of tasks (`threads`): the following steps of the route
+    /// run on it.
+    Threads(ThreadsDefinition),
     /// Sends each message to one of the steps (`loadBalance`).
     LoadBalance {
         /// How the step is chosen.
@@ -821,8 +824,31 @@ impl Eip {
             Eip::Sample { .. } => "sample",
             Eip::IdempotentConsumer(_) => "idempotentConsumer",
             Eip::LoadBalance { .. } => "loadBalance",
+            Eip::Threads(_) => "threads",
         }
     }
+}
+
+/// The options of the `threads` EIP (Java `ThreadsDefinition`); unset options take the
+/// defaults of the default thread pool profile.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ThreadsDefinition {
+    /// The number of tasks kept running (default 10).
+    pub pool_size: Option<i32>,
+    /// The maximum number of tasks running (default 20).
+    pub max_pool_size: Option<i32>,
+    /// The maximum number of exchanges waiting for a task (default 1000, `-1` unbounded, `0`
+    /// none).
+    pub max_queue_size: Option<i32>,
+    /// The keep alive time of idle tasks in seconds (kept for the configuration).
+    pub keep_alive_time: Option<u64>,
+    /// The name of the pool (default `Threads`).
+    pub thread_name: Option<String>,
+    /// What happens to an exchange when the pool is full (default `CallerRuns`).
+    pub rejected_policy: Option<camel_api::enums::ThreadPoolRejectedPolicy>,
+    /// Whether the caller runs the exchange when the pool is full and the policy is
+    /// `CallerRuns` (default `true`; `false` rejects it).
+    pub caller_runs_when_rejected: Option<bool>,
 }
 
 /// Formats the steps like a Java list: `[a, b]`.
@@ -991,6 +1017,7 @@ impl fmt::Display for ProcessorDefinition {
             Eip::LoadBalance { balancer, steps } => {
                 write!(f, "LoadBalanceType[{balancer}, {}]", Steps(steps))
             }
+            Eip::Threads(_) => f.write_str("Threads[[]]"),
             Eip::Bean { bean, method } => match bean {
                 camel_api::bean_binding::BeanReference::Name(name) => match method {
                     Some(m) => write!(f, "Bean[ref:{name} method:{m}]"),

@@ -29,6 +29,7 @@ pub mod pipeline;
 pub mod resequence;
 pub mod routing;
 pub mod send;
+pub mod threads;
 pub mod throttle;
 pub mod transform;
 pub mod try_catch;

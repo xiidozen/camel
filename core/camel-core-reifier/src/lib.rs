@@ -53,6 +53,7 @@ use camel_core_processor::routing::{
     LoopProcessor, RoutingSlipProcessor, SamplingProcessor, SortProcessor, StepProcessor,
 };
 use camel_core_processor::send::SendProcessor;
+use camel_core_processor::threads::{ThreadsConfig, ThreadsProcessor};
 use camel_core_processor::throttle::{ThrottleProcessor, ThrottlingMode};
 use camel_core_processor::transform::{
     RemoveHeaderProcessor, RemoveHeadersProcessor, RemovePropertiesProcessor,
@@ -230,10 +231,7 @@ impl<'a> RouteReifier<'a> {
     ///
     /// Returns the error of the first step that cannot be created.
     pub fn steps(&self, steps: &[ProcessorDefinition]) -> CamelResult<SharedProcessor> {
-        let mut processors = Vec::new();
-        for s in steps.iter().filter(|s| !s.disabled) {
-            processors.push(self.step(s)?);
-        }
+        let mut processors = self.step_list(steps)?;
         Ok(if processors.len() == 1 {
             processors.pop().unwrap()
         } else {
@@ -241,9 +239,29 @@ impl<'a> RouteReifier<'a> {
         })
     }
 
+    /// The processor of a `threads` step running the following steps on its pool.
+    fn threads(
+        &self,
+        t: &camel_core_model::processor::ThreadsDefinition,
+        rest: &[ProcessorDefinition],
+    ) -> CamelResult<SharedProcessor> {
+        let rest = self.steps(rest)?;
+        let mut p: SharedProcessor = Arc::new(ThreadsProcessor::new(threads_config(t), rest)?);
+        if let Some(config) = &self.error_handler {
+            p = Arc::new(RedeliveryErrorHandler::new(p, config.clone()));
+        }
+        Ok(p)
+    }
+
+    /// The processors of the steps; a `threads` step takes the following steps (they run on
+    /// its pool).
     fn step_list(&self, steps: &[ProcessorDefinition]) -> CamelResult<Vec<SharedProcessor>> {
         let mut processors = Vec::new();
-        for s in steps.iter().filter(|s| !s.disabled) {
+        for (i, s) in steps.iter().enumerate().filter(|(_, s)| !s.disabled) {
+            if let Eip::Threads(t) = &s.eip {
+                processors.push(self.threads(t, &steps[i + 1..])?);
+                break;
+            }
             processors.push(self.step(s)?);
         }
         Ok(processors)
@@ -711,6 +729,10 @@ impl<'a> RouteReifier<'a> {
                     self.steps(&i.steps)?,
                 ))
             }
+            Eip::Threads(t) => Arc::new(ThreadsProcessor::new(
+                threads_config(t),
+                Arc::new(Pipeline::new(Vec::new())),
+            )?),
             Eip::LoadBalance { balancer, steps } => {
                 let balance = match balancer {
                     LoadBalancerDefinition::RoundRobin => LoadBalance::RoundRobin,
@@ -803,6 +825,28 @@ impl<'a> RouteReifier<'a> {
             }
         };
         Ok(p)
+    }
+}
+
+/// The pool configuration of a `threads` definition (the defaults of the default thread pool
+/// profile for the unset options).
+fn threads_config(t: &camel_core_model::processor::ThreadsDefinition) -> ThreadsConfig {
+    let d = ThreadsConfig::default();
+    let pool_size = t.pool_size.unwrap_or(d.pool_size);
+    ThreadsConfig {
+        pool_size,
+        // a pool size above the default max pool size raises it (Java ThreadsReifier)
+        max_pool_size: t.max_pool_size.unwrap_or(if pool_size > d.max_pool_size {
+            pool_size
+        } else {
+            d.max_pool_size
+        }),
+        max_queue_size: t.max_queue_size.unwrap_or(d.max_queue_size),
+        thread_name: t.thread_name.clone().unwrap_or(d.thread_name),
+        rejected_policy: t.rejected_policy.unwrap_or(d.rejected_policy),
+        caller_runs_when_rejected: t
+            .caller_runs_when_rejected
+            .unwrap_or(d.caller_runs_when_rejected),
     }
 }
 
@@ -913,12 +957,20 @@ pub fn reify_route(
         })?;
         processors.push(p);
     }
-    for step in def
+    let steps: Vec<ProcessorDefinition> = def
         .steps
         .iter()
         .filter(|s| !s.disabled && !matches!(s.eip, Eip::OnCompletion(_)))
-    {
-        let p = reifier.step(step).map_err(|e| {
+        .cloned()
+        .collect();
+    for (i, step) in steps.iter().enumerate() {
+        let p = match &step.eip {
+            // the following steps run on the pool of the threads step
+            Eip::Threads(t) => reifier.threads(t, &steps[i + 1..]),
+            _ => reifier.step(step),
+        };
+        let threads = matches!(step.eip, Eip::Threads(_));
+        let p = p.map_err(|e| {
             let mut route = def.clone();
             route.id = Some(route_id.to_string());
             CamelError::failed_to_create_route_at(
@@ -930,6 +982,9 @@ pub fn reify_route(
             )
         })?;
         processors.push(p);
+        if threads {
+            break;
+        }
     }
     Ok(Arc::new(Pipeline::new(processors)))
 }

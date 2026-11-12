@@ -437,3 +437,27 @@ fn empty_and_invalid_documents() {
     assert!(parse_error("- from: [").contains("Invalid YAML"));
     assert!(parse_error("- rest: {}").contains("not yet supported"));
 }
+
+#[tokio::test]
+async fn threads() {
+    let context = start(
+        r#"
+- from:
+    uri: "direct:start"
+    steps:
+      - threads:
+          poolSize: 2
+          maxPoolSize: 4
+          rejectedPolicy: Abort
+      - to: "mock:result"
+"#,
+    )
+    .await;
+    mock(&context, "mock:result").expected_bodies_received(["Hello"]);
+    context
+        .create_producer_template()
+        .send_body("direct:start", "Hello")
+        .await
+        .unwrap();
+    MockEndpoint::assert_is_satisfied_all(context.endpoints()).await;
+}
