@@ -128,6 +128,12 @@ pub struct FileConfiguration {
     /// dynamic parts): the producer writes it after the file, the consumer only takes the
     /// files with their done file, and deletes it with the file.
     pub done_file_name: Option<String>,
+    /// A simple predicate the directories must match to be polled (`filterDirectory`, with
+    /// the `CamelFile*` headers of the directory).
+    pub filter_directory: Option<String>,
+    /// A simple predicate the files must match to be consumed (`filterFile`, with the
+    /// `CamelFile*` headers and the content of the file as the body).
+    pub filter_file: Option<String>,
     /// Whether the written files are synced to the disk (default `true`).
     pub force_writes: bool,
     /// Whether a written file keeps the `CamelFileLastModified` of the message (default
@@ -252,6 +258,8 @@ impl FileConfiguration {
             append_chars: None,
             allow_null_body: false,
             done_file_name: None,
+            filter_directory: None,
+            filter_file: None,
             force_writes: true,
             keep_last_modified: false,
             send_empty_message_when_idle: false,
@@ -353,6 +361,8 @@ impl Component for FileComponent {
             c.allow_null_body = v;
         }
         c.done_file_name = param(parameters, "doneFileName")?;
+        c.filter_directory = param(parameters, "filterDirectory")?;
+        c.filter_file = param(parameters, "filterFile")?;
         if let Some(v) = param(parameters, "forceWrites")? {
             c.force_writes = v;
         }
@@ -608,6 +618,16 @@ impl FileEndpoint {
     /// The options.
     pub fn configuration(&self) -> &FileConfiguration {
         &self.config
+    }
+
+    /// The simple predicate of the text.
+    pub(crate) fn predicate(
+        &self,
+        text: &str,
+    ) -> CamelResult<camel_api::processor::SharedPredicate> {
+        self.camel_context()
+            .resolve_language("simple")?
+            .create_predicate(text)
     }
 
     /// The simple expression of the text.

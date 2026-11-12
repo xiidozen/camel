@@ -2111,3 +2111,146 @@ async fn test_relative_file_name() {
         names
     );
 }
+
+/// Port of `FileConsumerFilterDirectoryTest`.
+#[tokio::test]
+async fn test_filter_directory() {
+    for with_regular in [false, true] {
+        let dir = TestDirectory::new("FileConsumerFilterDirectoryTest");
+        let uri = dir.file_uri("?initialDelay=0&delay=10&recursive=true&filterDirectory=${header.CamelFileNameOnly.length()} > 4");
+        let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+            r.add(from(&uri).convert_body_to("String").to("mock:result"));
+        })
+        .await;
+        let mock = t.mock("mock:result");
+        send(&t, &dir, "foo/skipme.txt", "This is a file to be filtered").await;
+        if with_regular {
+            mock.expected_bodies_received(["Hello World"]);
+            send(&t, &dir, "barbar/hello.txt", "Hello World").await;
+        } else {
+            mock.expected_message_count(0);
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        mock.assert_is_satisfied().await;
+    }
+}
+
+/// Port of `FileConsumerFilterFileTest`.
+#[tokio::test]
+async fn test_filter_file() {
+    let routes = |dir: &TestDirectory| {
+        let (a, b) = (
+            dir.file_uri("?initialDelay=0&delay=10&filterFile=${bodyAs(String)} contains 'World'"),
+            dir.file_uri("?initialDelay=0&delay=10&filterFile=${file:modified} < ${date:now-2s}"),
+        );
+        move |r: &mut Routes| {
+            r.add(from(&a).convert_body_to("String").to("mock:result"));
+            r.add(from(&b).convert_body_to("String").to("mock:result2"));
+        }
+    };
+    let dir = TestDirectory::new("FileConsumerFilterFileTest");
+    let t = ContextTestSupport::with_routes(routes(&dir)).await;
+    let mock = t.mock("mock:result");
+    mock.expected_bodies_received(["Hello World"]);
+    send(&t, &dir, "skipme.txt", "This is a file to be filtered").await;
+    send(&t, &dir, "hello.txt", "Hello World").await;
+    mock.assert_is_satisfied().await;
+    // the older than 2 seconds file
+    let dir = TestDirectory::new("FileConsumerFilterFileTest");
+    let t = ContextTestSupport::with_routes(routes(&dir)).await;
+    let mock = t.mock("mock:result2");
+    mock.expected_bodies_received(["Something else"]);
+    mock.set_result_wait_time(5000);
+    send(&t, &dir, "hello2.txt", "Something else").await;
+    mock.assert_is_satisfied().await;
+}
+
+/// Port of `FileMarkerFileRecursiveDeleteOldLockFilesTest`.
+#[tokio::test]
+async fn test_marker_file_recursive_old_lock_files() {
+    use camel_core::api::exchange_constants::FILE_NAME_ONLY;
+    let dir = TestDirectory::new("FileMarkerFileRecursiveDeleteOldLockFilesTest");
+    let uri = dir.file_uri("?initialDelay=0&delay=10&recursive=true&sortBy=file:name");
+    let t = ContextTestSupport::new();
+    t.context
+        .add_routes(move |r: &mut Routes| {
+            r.add(
+                from(&uri)
+                    .route_id("foo")
+                    .auto_startup(false)
+                    .convert_body_to("String")
+                    .to("mock:result"),
+            );
+        })
+        .await
+        .unwrap();
+    t.context.start().await.unwrap();
+    let mock = t.mock("mock:result");
+    mock.expected_bodies_received(["Bye World", "Hi World"]);
+    mock.message_matches(0, header(FILE_NAME_ONLY).is_equal_to("bye.txt"));
+    mock.message_matches(1, header(FILE_NAME_ONLY).is_equal_to("hi.txt"));
+    send(&t, &dir, "hello.txt.camelLock", "locked").await;
+    send(&t, &dir, "bye.txt", "Bye World").await;
+    send(&t, &dir, "foo/gooday.txt.camelLock", "locked").await;
+    send(&t, &dir, "foo/hi.txt", "Hi World").await;
+    t.context.start_route("foo").await.unwrap();
+    mock.assert_is_satisfied().await;
+}
+
+/// Ports of `FileConsumerIdempotentKeyChangedIssueTest` and
+/// `FileConsumerIdempotentKeyChangedIssue2Test`: a changed file has another idempotent key.
+#[tokio::test]
+async fn test_idempotent_key_changed() {
+    for option in [
+        "?noop=true&readLock=changed&initialDelay=0&delay=10&readLockCheckInterval=100&idempotentKey=${file:onlyname}-${file:size}-${date:file:yyyyMMddHHmmss}",
+        "?noop=true&initialDelay=0&delay=100&idempotentKey=${file:name}-${file:size}-${file:modified}",
+    ] {
+        let dir = TestDirectory::new("FileConsumerIdempotentKeyChangedIssueTest");
+        let uri = dir.file_uri(option);
+        let t = ContextTestSupport::new();
+        t.context
+            .add_routes(move |r: &mut Routes| {
+                r.add(from(&uri).route_id("foo").auto_startup(false).convert_body_to("String").to("log:file").to("mock:file"));
+            })
+            .await
+            .unwrap();
+        t.context.start().await.unwrap();
+        let mock = t.mock("mock:file");
+        mock.expected_bodies_received(["Hello World"]);
+        send(&t, &dir, "hello.txt", "Hello World").await;
+        t.context.start_route("foo").await.unwrap();
+        mock.assert_is_satisfied().await;
+        mock.reset();
+        mock.expected_bodies_received(["Hello World Again"]);
+        send(&t, &dir, "hello.txt", "Hello World Again").await;
+        mock.assert_is_satisfied().await;
+    }
+}
+
+/// Port of `NewFileConsumeTest`: a consumer created from the endpoint with a processor.
+#[tokio::test]
+async fn test_new_file_consumer() {
+    let dir = TestDirectory::new("NewFileConsumeTest");
+    dir.write("hello.txt", "Hello World");
+    let t = ContextTestSupport::new();
+    t.context.start().await.unwrap();
+    let endpoint = t
+        .context
+        .endpoint(&dir.file_uri("?initialDelay=0&delay=10"))
+        .unwrap();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let processor: camel_core::api::processor::SharedProcessor = std::sync::Arc::new(
+        camel_core::api::processor::processor_fn(move |e: &mut Exchange| {
+            let _ = tx.send(e.message().body().to_string());
+            Ok(())
+        }),
+    );
+    let consumer = endpoint.create_consumer(processor).unwrap();
+    assert!(dir.test_file("hello.txt").exists());
+    consumer.start().await.unwrap();
+    let body = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+        .await
+        .unwrap();
+    assert_eq!(Some("Hello World".to_string()), body);
+    consumer.stop().await.unwrap();
+}

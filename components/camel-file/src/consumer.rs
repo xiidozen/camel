@@ -114,9 +114,12 @@ fn list_files(
     dir: &Path,
     depth: usize,
     out: &mut Vec<PathBuf>,
-) -> std::io::Result<()> {
+) -> CamelResult<()> {
     let c = &endpoint.config;
-    let mut entries: Vec<_> = std::fs::read_dir(dir)?.filter_map(|e| e.ok()).collect();
+    let mut entries: Vec<_> = std::fs::read_dir(dir)
+        .map_err(|e| operation_failed(format!("Cannot list directory: {}: {e}", dir.display())))?
+        .filter_map(|e| e.ok())
+        .collect();
     entries.sort_by_key(|e| e.file_name());
     for entry in entries {
         let name = entry.file_name().to_string_lossy().into_owned();
@@ -132,7 +135,7 @@ fn list_files(
             continue;
         }
         if dir {
-            if c.recursive && depth < c.max_depth {
+            if c.recursive && depth < c.max_depth && filtered(endpoint, &path, false)? {
                 list_files(endpoint, &path, depth + 1, out)?;
             }
         } else if !name.ends_with(".camelLock") && depth >= c.min_depth && depth <= c.max_depth {
@@ -232,6 +235,30 @@ fn named(endpoint: &FileEndpoint, path: &Path) -> CamelResult<bool> {
     file.populate_headers(&mut e);
     let name = endpoint.expression(expr)?.evaluate_mut(&mut e)?.to_string();
     Ok(name == file.file_name_only() || name == file.relative_file_path)
+}
+
+/// Whether the file (or directory) matches the `filterFile` (`filterDirectory`) predicate,
+/// evaluated with the headers of the file (Java `isMatched` with a dummy exchange).
+fn filtered(endpoint: &FileEndpoint, path: &Path, is_file: bool) -> CamelResult<bool> {
+    let c = &endpoint.config;
+    let filter = if is_file {
+        &c.filter_file
+    } else {
+        &c.filter_directory
+    };
+    let Some(filter) = filter else {
+        return Ok(true);
+    };
+    let Ok(file) = GenericFile::of(&c.directory, path) else {
+        return Ok(false);
+    };
+    let mut e = endpoint.create_exchange();
+    file.populate_headers(&mut e);
+    if is_file {
+        e.message_mut()
+            .set_body(read_body(path, c.charset.as_deref())?);
+    }
+    endpoint.predicate(filter)?.matches(&e)
 }
 
 /// A file taken for routing: the file, the key in the idempotent repository.
@@ -508,15 +535,18 @@ pub(crate) fn candidates(endpoint: &FileEndpoint, filters: &Filters) -> CamelRes
         return Ok(Vec::new());
     }
     let mut files = Vec::new();
-    list_files(endpoint, dir, 1, &mut files)
-        .map_err(|e| operation_failed(format!("Cannot list directory: {}: {e}", c.directory)))?;
+    list_files(endpoint, dir, 1, &mut files)?;
     let mut answer = Vec::new();
     for path in files {
         let name = path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        if filters.matches(&name) && named(endpoint, &path)? && done(endpoint, &path, &name)? {
+        if filters.matches(&name)
+            && named(endpoint, &path)?
+            && done(endpoint, &path, &name)?
+            && filtered(endpoint, &path, true)?
+        {
             answer.push(path);
         }
     }
