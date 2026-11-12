@@ -308,6 +308,18 @@ impl FileProducer {
             }
             None => self.write(exchange, &target, c.file_exist == FileExist::Append)?,
         }
+        // an empty done file next to the file (Java writeDoneFile)
+        if c.done_file_name.is_some() {
+            let done = self.endpoint.create_done_file_name(&target)?;
+            log::trace!("Writing done file: [{done}]");
+            if Path::new(&done).exists() {
+                std::fs::remove_file(&done).map_err(|_| {
+                    operation_failed(format!("Cannot delete existing done file: {done}"))
+                })?;
+            }
+            std::fs::write(&done, b"")
+                .map_err(|e| operation_failed(format!("Cannot write file: {done}: {e}")))?;
+        }
         exchange
             .message_mut()
             .set_header(FILE_NAME_PRODUCED, target);

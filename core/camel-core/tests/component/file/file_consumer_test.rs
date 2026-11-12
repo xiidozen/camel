@@ -1615,3 +1615,296 @@ async fn test_move_failure() {
         t.assert_mock_endpoints_satisfied().await;
     }
 }
+
+/// A file is consumed only once its done file exists; the files expected to exist (`true`)
+/// or not afterwards.
+async fn done_file(name: &str, option: &str, done: &str, after: &[(&str, bool)]) {
+    let dir = TestDirectory::new(name);
+    let uri = dir.file_uri(option);
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(from(&uri).convert_body_to("String").to("mock:result"));
+    })
+    .await;
+    let mock = t.mock("mock:result");
+    mock.expected_message_count(0);
+    send(&t, &dir, "hello.txt", "Hello World").await;
+    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    mock.assert_is_satisfied().await;
+    mock.reset();
+    mock.expected_bodies_received(["Hello World"]);
+    send(&t, &dir, done, "").await;
+    mock.assert_is_satisfied().await;
+    for (file, exists) in after {
+        let f = dir.test_file(file);
+        support_wait(|| f.exists() == *exists).await;
+        assert_eq!(*exists, f.exists(), "{name}: {file}");
+    }
+}
+
+/// Ports of `FilerConsumerDoneFileNameTest`, `FilerConsumerDoneFileNameDeleteTest`,
+/// `FilerConsumerDoneFileNamePrefixTest`, `FilerConsumerDoneFileNameSimplePrefixTest`,
+/// `FilerConsumerDoneFileNameSuffixTest` and `FilerConsumerDoneFileNoopTest`.
+#[tokio::test]
+async fn test_done_file_name() {
+    done_file(
+        "FilerConsumerDoneFileNameTest",
+        "?doneFileName=done&initialDelay=0&delay=10",
+        "done",
+        &[("done", false), (".camel/hello.txt", true)],
+    )
+    .await;
+    done_file(
+        "FilerConsumerDoneFileNameDeleteTest",
+        "?doneFileName=done&delete=true&initialDelay=0&delay=10",
+        "done",
+        &[("done", false), ("hello.txt", false)],
+    )
+    .await;
+    done_file(
+        "FilerConsumerDoneFileNamePrefixTest",
+        "?doneFileName=done-${file:name}&initialDelay=0&delay=10",
+        "done-hello.txt",
+        &[("done-hello.txt", false)],
+    )
+    .await;
+    done_file(
+        "FilerConsumerDoneFileNameSimplePrefixTest",
+        "?doneFileName=done-$simple{file:name}&initialDelay=0&delay=10",
+        "done-hello.txt",
+        &[("done-hello.txt", false)],
+    )
+    .await;
+    done_file(
+        "FilerConsumerDoneFileNameSuffixTest",
+        "?doneFileName=${file:name}.ready&initialDelay=0&delay=10",
+        "hello.txt.ready",
+        &[("hello.txt.ready", false)],
+    )
+    .await;
+    done_file(
+        "FilerConsumerDoneFileNoopTest",
+        "?initialDelay=0&delay=10&doneFileName=done&noop=true",
+        "done",
+        &[("done", true), ("hello.txt", true)],
+    )
+    .await;
+}
+
+/// Port of `FileConsumeDoneFileIssueTest`: a static done file is deleted with the last file
+/// of the batch, a dynamic one with its file.
+#[tokio::test]
+async fn test_consume_done_file_issue() {
+    for (option, files, done) in [
+        (
+            "?doneFileName=foo.done&initialDelay=0&delay=10",
+            vec![
+                ("foo-a.txt", "A"),
+                ("foo-b.txt", "B"),
+                ("foo-c.txt", "C"),
+                ("foo-d.txt", "D"),
+                ("foo-e.txt", "E"),
+            ],
+            vec!["foo.done"],
+        ),
+        (
+            "?doneFileName=${file:name}.done&initialDelay=0&delay=10",
+            vec![("a.txt", "A"), ("b.txt", "B"), ("c.txt", "C")],
+            vec!["a.txt.done", "b.txt.done", "c.txt.done"],
+        ),
+        (
+            "?doneFileName=${file:name}.done&initialDelay=0&delay=10",
+            vec![("$a$.txt", "A"), ("$b.txt", "B"), ("c$.txt", "C")],
+            vec!["$a$.txt.done", "$b.txt.done", "c$.txt.done"],
+        ),
+    ] {
+        let dir = TestDirectory::new("FileConsumeDoneFileIssueTest");
+        let uri = dir.file_uri(option);
+        let t = ContextTestSupport::new();
+        t.context
+            .add_routes(move |r: &mut Routes| {
+                r.add(
+                    from(&uri)
+                        .route_id("foo")
+                        .auto_startup(false)
+                        .convert_body_to("String")
+                        .to("mock:result"),
+                );
+            })
+            .await
+            .unwrap();
+        t.context.start().await.unwrap();
+        for (name, body) in &files {
+            send(&t, &dir, name, body).await;
+        }
+        for d in &done {
+            send(&t, &dir, d, "done").await;
+            assert!(dir.test_file(d).exists(), "Done file should exists");
+        }
+        let mock = t.mock("mock:result");
+        mock.expected_bodies_received_in_any_order(files.iter().map(|(_, b)| *b));
+        t.context.start_route("foo").await.unwrap();
+        mock.assert_is_satisfied().await;
+        for d in &done {
+            let f = dir.test_file(d);
+            support_wait(|| !f.exists()).await;
+            assert!(!f.exists(), "Done file should be deleted: {d}");
+        }
+    }
+}
+
+/// Ports of `FileConsumeDynamicDoneFileNameWithTwoDotsTest` and
+/// `FileConsumeSimpleDynamicDoneFileNameWithTwoDotsTest`.
+#[tokio::test]
+async fn test_dynamic_done_file_name_with_two_dots() {
+    for token in ["${file:name.noext}", "$simple{file:name.noext}"] {
+        let dir = TestDirectory::new("FileConsumeDynamicDoneFileNameWithTwoDotsTest");
+        let uri = dir.file_uri(&format!("?doneFileName={token}.done&initialDelay=0"));
+        let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+            r.add(from(&uri).convert_body_to("String").to("mock:result"));
+        })
+        .await;
+        let mock = t.mock("mock:result");
+        mock.expected_bodies_received_in_any_order(["input-body"]);
+        send(&t, &dir, "test.twodot.txt", "input-body").await;
+        send(&t, &dir, "test.twodot.done", "done-body").await;
+        mock.assert_is_satisfied().await;
+        for f in ["test.twodot.txt", "test.twodot.done"] {
+            let f = dir.test_file(f);
+            support_wait(|| !f.exists()).await;
+            assert!(!f.exists(), "{}", f.display());
+        }
+    }
+}
+
+/// Port of `FilerConsumerDualDoneFileNameTest` (the producer writes the done files).
+#[tokio::test]
+async fn test_dual_done_file_name() {
+    for missing in [false, true] {
+        let dir = TestDirectory::new("FilerConsumerDualDoneFileNameTest");
+        let uri = dir.file_uri("?doneFileName=${file:name}.ready&initialDelay=0&delay=10");
+        let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+            r.add(from(&uri).convert_body_to("String").to("mock:result"));
+        })
+        .await;
+        let mock = t.mock("mock:result");
+        let producer = dir.file_uri("?doneFileName=${file:name}.ready");
+        t.template
+            .send_body_and_header(&producer, "Hello World", FILE_NAME, "hello.txt")
+            .await
+            .unwrap();
+        let bye = if missing { dir.file_uri("") } else { producer };
+        t.template
+            .send_body_and_header(&bye, "Bye World", FILE_NAME, "bye.txt")
+            .await
+            .unwrap();
+        if missing {
+            mock.expected_bodies_received(["Hello World"]);
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        } else {
+            mock.expected_bodies_received_in_any_order(["Hello World", "Bye World"]);
+        }
+        mock.assert_is_satisfied().await;
+    }
+}
+
+/// Port of `FilerConsumerMoveFailedDoneFileNameTest`.
+#[tokio::test]
+async fn test_move_failed_done_file_name() {
+    let dir = TestDirectory::new("FilerConsumerMoveFailedDoneFileNameTest");
+    let uri = dir.file_uri("?doneFileName=done&initialDelay=0&delay=10&moveFailed=failed");
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(
+            from(&uri)
+                .to("mock:input")
+                .throw_exception(CamelError::illegal_argument("Forced")),
+        );
+    })
+    .await;
+    let mock = t.mock("mock:input");
+    mock.expected_message_count(1);
+    mock.expected_file_exists(dir.test_file("failed/hello.txt"), None);
+    send(&t, &dir, "hello.txt", "Hello World").await;
+    send(&t, &dir, "done", "").await;
+    mock.assert_is_satisfied().await;
+    let done = dir.test_file("done");
+    support_wait(|| !done.exists()).await;
+    assert!(!done.exists());
+}
+
+/// Port of `FilerConsumerPreMoveDoneFileNameTest`.
+#[tokio::test]
+async fn test_pre_move_done_file_name() {
+    done_file(
+        "FilerConsumerPreMoveDoneFileNameTest",
+        "?preMove=work/work-${file:name}&doneFileName=ready&initialDelay=0&delay=10",
+        "ready",
+        &[("ready", false)],
+    )
+    .await;
+}
+
+/// Port of `FilerConsumerRetryDoneFileNameTest`: a failure keeps the done file for the retry.
+#[tokio::test]
+async fn test_retry_done_file_name() {
+    let dir = TestDirectory::new("FilerConsumerRetryDoneFileNameTest");
+    let uri = dir.file_uri("?doneFileName=done&initialDelay=0&delay=10");
+    let done = dir.test_file("done");
+    let index = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        let (done, index) = (done.clone(), index.clone());
+        r.add(from(&uri).to("mock:input").process_fn(move |_| {
+            if index.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                assert!(done.exists());
+                return Err(CamelError::illegal_argument("Forced"));
+            }
+            Ok(())
+        }));
+    })
+    .await;
+    let mock = t.mock("mock:input");
+    mock.expected_message_count(2);
+    mock.expected_file_exists(dir.test_file(".camel/hello.txt"), None);
+    send(&t, &dir, "hello.txt", "Hello World").await;
+    send(&t, &dir, "done", "").await;
+    mock.assert_is_satisfied().await;
+    let done = dir.test_file("done");
+    support_wait(|| !done.exists()).await;
+    assert!(!done.exists());
+}
+
+/// Ports of `FilerConsumerShouldSkipDoneFileTest`, `FilerConsumerShouldSkipDoneFilePrefixTest`
+/// and `FilerConsumerShouldSkipDoneFileSuffixTest`: the done file alone is not consumed.
+#[tokio::test]
+async fn test_should_skip_done_file() {
+    for (option, done) in [
+        ("?doneFileName=done&initialDelay=0&delay=10", "done"),
+        (
+            "?doneFileName=done-${file:name}&initialDelay=0&delay=10",
+            "done-hello.txt",
+        ),
+        (
+            "?doneFileName=${file:name}.ready&initialDelay=0&delay=50",
+            "hello.txt.ready",
+        ),
+    ] {
+        let dir = TestDirectory::new("FilerConsumerShouldSkipDoneFileTest");
+        let uri = dir.file_uri(option);
+        let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+            r.add(from(&uri).convert_body_to("String").to("mock:result"));
+        })
+        .await;
+        let mock = t.mock("mock:result");
+        mock.expected_message_count(0);
+        send(&t, &dir, done, "").await;
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        mock.assert_is_satisfied().await;
+        mock.reset();
+        assert!(dir.test_file(done).exists());
+        mock.expected_bodies_received(["Hello World"]);
+        send(&t, &dir, "hello.txt", "Hello World").await;
+        mock.assert_is_satisfied().await;
+        let f = dir.test_file(done);
+        support_wait(|| !f.exists()).await;
+        assert!(!f.exists(), "{option}");
+    }
+}

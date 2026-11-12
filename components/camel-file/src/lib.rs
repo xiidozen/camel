@@ -122,6 +122,10 @@ pub struct FileConfiguration {
     pub append_chars: Option<String>,
     /// Whether a null body writes an empty file (default `false`: fails).
     pub allow_null_body: bool,
+    /// The name of the done file (`${file:name}` and `${file:name.noext}` are the only
+    /// dynamic parts): the producer writes it after the file, the consumer only takes the
+    /// files with their done file, and deletes it with the file.
+    pub done_file_name: Option<String>,
     /// Whether the written files are synced to the disk (default `true`).
     pub force_writes: bool,
     /// Whether a written file keeps the `CamelFileLastModified` of the message (default
@@ -195,6 +199,7 @@ impl FileConfiguration {
             eager_delete_target_file: true,
             append_chars: None,
             allow_null_body: false,
+            done_file_name: None,
             force_writes: true,
             keep_last_modified: false,
             send_empty_message_when_idle: false,
@@ -294,6 +299,7 @@ impl Component for FileComponent {
         if let Some(v) = param(parameters, "allowNullBody")? {
             c.allow_null_body = v;
         }
+        c.done_file_name = param(parameters, "doneFileName")?;
         if let Some(v) = param(parameters, "forceWrites")? {
             c.force_writes = v;
         }
@@ -415,6 +421,87 @@ pub struct FileEndpoint {
 }
 
 impl FileEndpoint {
+    /// The done file of the file (Java `createDoneFileName`): in the same directory, its name
+    /// the `doneFileName` pattern with `${file:name}` and `${file:name.noext}` of the file.
+    ///
+    /// # Errors
+    ///
+    /// No `doneFileName`, or a pattern with other dynamic parts.
+    pub fn create_done_file_name(&self, file_name: &str) -> CamelResult<String> {
+        let pattern = self
+            .config
+            .done_file_name
+            .as_deref()
+            .filter(|p| !p.is_empty())
+            .ok_or_else(|| {
+                CamelError::illegal_argument("doneFileName must be specified and not empty")
+            })?;
+        let (path, only) = match file_name.rfind(['/', '\\']) {
+            Some(i) => (&file_name[..i], &file_name[i + 1..]),
+            None => ("", file_name),
+        };
+        let noext = camel_util::file_util::strip_ext_mode(only, true);
+        let mut name = pattern.to_string();
+        for (token, value) in [
+            ("${file:name}", only),
+            ("$simple{file:name}", only),
+            ("${file:name.noext}", noext),
+            ("$simple{file:name.noext}", noext),
+        ] {
+            name = name.replacen(token, value, 1);
+        }
+        if has_simple_token(&name) {
+            return Err(CamelError::expression_illegal_syntax(&format!(
+                "{file_name}. Cannot resolve reminder: {name}"
+            )));
+        }
+        Ok(if path.is_empty() || name.is_empty() {
+            name
+        } else {
+            format!("{path}/{name}")
+        })
+    }
+
+    /// Whether the file name is a done file (Java `isDoneFile`): the pattern without dynamic
+    /// parts, else the static part as prefix or suffix.
+    ///
+    /// # Errors
+    ///
+    /// No `doneFileName`, or a pattern with other dynamic parts.
+    pub fn is_done_file(&self, file_name: &str) -> CamelResult<bool> {
+        let pattern = self
+            .config
+            .done_file_name
+            .as_deref()
+            .filter(|p| !p.is_empty())
+            .ok_or_else(|| {
+                CamelError::illegal_argument("doneFileName must be specified and not empty")
+            })?;
+        if !has_simple_token(pattern) {
+            return Ok(pattern == file_name);
+        }
+        let prefix = pattern.find("${").is_some_and(|i| i > 0);
+        let mut rest = pattern.to_string();
+        for token in [
+            "${file:name}",
+            "$simple{file:name}",
+            "${file:name.noext}",
+            "$simple{file:name.noext}",
+        ] {
+            rest = rest.replacen(token, "", 1);
+        }
+        if has_simple_token(&rest) {
+            return Err(CamelError::expression_illegal_syntax(&format!(
+                "{file_name}. Cannot resolve reminder: {rest}"
+            )));
+        }
+        Ok(if prefix {
+            file_name.starts_with(&rest)
+        } else {
+            file_name.ends_with(&rest)
+        })
+    }
+
     /// The options.
     pub fn configuration(&self) -> &FileConfiguration {
         &self.config
@@ -557,6 +644,11 @@ impl GenericFile {
         m.set_header(FILE_RELATIVE_PATH, self.relative_file_path.as_str());
         m.set_header(FILE_PARENT, parent);
     }
+}
+
+/// Whether the text has a simple start token (`${` or `$simple{`).
+fn has_simple_token(text: &str) -> bool {
+    text.contains("${") || text.contains("$simple{")
 }
 
 /// A `GenericFileOperationFailedException`.

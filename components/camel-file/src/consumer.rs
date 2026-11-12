@@ -352,11 +352,14 @@ pub(crate) fn commit(
             );
         }
         if let Some(failed_to) = &c.move_failed {
+            // the done file is kept for a retry unless the file is moved away
+            delete_done_file(endpoint, taken, exchange);
             let to = rename_target(endpoint, exchange, file, failed_to)?;
             rename(&file.file_path, &to)?;
         }
         return Ok(());
     }
+    delete_done_file(endpoint, taken, exchange);
     if c.noop {
         return Ok(());
     }
@@ -403,6 +406,51 @@ async fn process_file(
 }
 
 /// The candidate files of a poll, filtered (Java `pollDirectory` with `isValidFile`).
+/// With `doneFileName`: whether the file is not a done file and its done file exists (Java
+/// `isValidFile`).
+fn done(endpoint: &FileEndpoint, path: &Path, name: &str) -> CamelResult<bool> {
+    if endpoint.config.done_file_name.is_none() {
+        return Ok(true);
+    }
+    if endpoint.is_done_file(name)? {
+        log::trace!("Skipping done file: {}", path.display());
+        return Ok(false);
+    }
+    let done = endpoint.create_done_file_name(&path.to_string_lossy())?;
+    if Path::new(&done).exists() {
+        return Ok(true);
+    }
+    log::trace!("Done file: {done} does not exist");
+    Ok(false)
+}
+
+/// Deletes the done file of the taken file (Java `handleDoneFile`): with a dynamic done file
+/// name, or for the last file of the batch.
+fn delete_done_file(endpoint: &FileEndpoint, taken: &Taken, exchange: &Exchange) {
+    let c = &endpoint.config;
+    let Some(pattern) = &c.done_file_name else {
+        return;
+    };
+    if c.noop {
+        return;
+    }
+    let complete = matches!(
+        exchange.property(camel_api::exchange_constants::BATCH_COMPLETE),
+        Some(Value::Bool(true))
+    );
+    if !pattern.contains("{file:name") && !complete {
+        return;
+    }
+    match endpoint.create_done_file_name(&taken.key) {
+        Ok(done) => {
+            if let Err(e) = std::fs::remove_file(&done) {
+                log::warn!("Done file: {done} could not be deleted: {e}");
+            }
+        }
+        Err(e) => log::warn!("Error deleting done file: {e}"),
+    }
+}
+
 pub(crate) fn candidates(endpoint: &FileEndpoint, filters: &Filters) -> CamelResult<Vec<PathBuf>> {
     let c = &endpoint.config;
     let dir = Path::new(&c.directory);
@@ -427,7 +475,7 @@ pub(crate) fn candidates(endpoint: &FileEndpoint, filters: &Filters) -> CamelRes
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        if filters.matches(&name) && named(endpoint, &path)? {
+        if filters.matches(&name) && named(endpoint, &path)? && done(endpoint, &path, &name)? {
             answer.push(path);
         }
     }

@@ -741,3 +741,89 @@ async fn test_directory_create_issue() {
             .is_file());
     }
 }
+
+/// Ports of `FilerProducerDoneFileNameTest` and `FilerProducerDoneFileNameRouteTest`.
+#[tokio::test]
+async fn test_producer_done_file_name() {
+    let t = ContextTestSupport::new();
+    for (option, done) in [
+        ("?doneFileName=xdone", "xdone"),
+        ("?doneFileName=done-${file:name}", "done-hello.foo.txt"),
+        ("?doneFileName=${file:name}.done", "hello.foo.txt.done"),
+        ("?doneFileName=${file:name.noext}.done", "hello.foo.done"),
+    ] {
+        let dir = TestDirectory::new("FilerProducerDoneFileNameTest");
+        put(&t, &dir, option, "Hello World", "hello.foo.txt")
+            .await
+            .unwrap();
+        assert!(dir.test_file("hello.foo.txt").exists());
+        assert!(dir.test_file(done).exists(), "{option}");
+    }
+    // invalid and empty done file names
+    let dir = TestDirectory::new("FilerProducerDoneFileNameTest");
+    let e = put(
+        &t,
+        &dir,
+        "?doneFileName=${file:parent}/foo",
+        "Hello World",
+        "hello.txt",
+    )
+    .await
+    .unwrap_err();
+    let cause = crate::support::cause_of(&e);
+    assert!(cause.is(ErrorKind::ExpressionIllegalSyntax), "{e}");
+    assert!(
+        cause
+            .message()
+            .unwrap_or_default()
+            .ends_with("Cannot resolve reminder: ${file:parent}/foo"),
+        "{e}"
+    );
+    let e = put(&t, &dir, "?doneFileName=", "Hello World", "hello.txt")
+        .await
+        .unwrap_err();
+    let cause = crate::support::cause_of(&e);
+    assert!(cause.is(ErrorKind::IllegalArgument), "{e}");
+    assert!(
+        cause
+            .message()
+            .unwrap_or_default()
+            .starts_with("doneFileName must be specified and not empty"),
+        "{e}"
+    );
+    // a placeholder in the uri, sent directly and from a route
+    let dir = TestDirectory::new("FilerProducerDoneFileNameTest");
+    t.context
+        .properties()
+        .add_initial_property("myDir", dir.path());
+    t.template
+        .send_body_and_header(
+            "file:{{myDir}}?doneFileName=done-${file:name}",
+            "Hello World",
+            FILE_NAME,
+            "hello.txt",
+        )
+        .await
+        .unwrap();
+    assert!(dir.test_file("hello.txt").exists());
+    assert!(dir.test_file("done-hello.txt").exists());
+    t.context
+        .add_routes(|r: &mut Routes| {
+            r.add(
+                from("direct:start")
+                    .to("file:{{myDir}}?doneFileName=done-${file:name}")
+                    .to("mock:result"),
+            );
+        })
+        .await
+        .unwrap();
+    t.context.start().await.unwrap();
+    t.mock("mock:result").expected_message_count(1);
+    t.template
+        .send_body_and_header("direct:start", "Hello World", FILE_NAME, "route.txt")
+        .await
+        .unwrap();
+    t.assert_mock_endpoints_satisfied().await;
+    assert!(dir.test_file("route.txt").exists());
+    assert!(dir.test_file("done-route.txt").exists());
+}
