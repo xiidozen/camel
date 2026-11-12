@@ -18,6 +18,7 @@ members = [
     "components/camel-seda",
     "components/camel-bean",
     "components/camel-timer",
+    "dsl/camel-yaml-dsl/camel-yaml-dsl",
 ]
 
 [workspace.package]
@@ -45,3 +46,4 @@ camel-log = { path = "components/camel-log" }
 camel-seda = { path = "components/camel-seda" }
 camel-bean = { path = "components/camel-bean" }
 camel-timer = { path = "components/camel-timer" }
+camel-yaml-dsl = { path = "dsl/camel-yaml-dsl/camel-yaml-dsl" }

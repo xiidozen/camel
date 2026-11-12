@@ -1,0 +1,19 @@
+[package]
+name = "camel-yaml-dsl"
+description = "Camel :: YAML DSL — routes in YAML (port of dsl/camel-yaml-dsl/camel-yaml-dsl)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+camel-api = { workspace = true }
+camel-util = { workspace = true }
+camel-support = { workspace = true }
+camel-core-model = { workspace = true }
+serde_yaml = "0.9"
+
+[dev-dependencies]
+camel-core = { workspace = true }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros"] }

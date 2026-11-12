@@ -120,7 +120,7 @@ progress and what is still to do. Update it in the same commit as each port.
 | `dsl/camel-xml-jaxb-dsl-test/definition` | 0 | 9 | todo | |
 | `dsl/camel-xml-jaxb-dsl-test/spring` | 0 | 1 | todo | |
 | `dsl/camel-yaml-dsl` | 0 | 18 | todo | |
-| `dsl/camel-yaml-dsl/camel-yaml-dsl` | 3 | 141 | todo | |
+| `dsl/camel-yaml-dsl/camel-yaml-dsl` | 3 | 141 | wip | Rust crate `camel-yaml-dsl` (`YamlRoutes`, a `RouteBuilder`, on serde_yaml): the top level `route`, `from`, `errorHandler`, `onException`, `intercept`, `interceptFrom`, `interceptSendToEndpoint`, `beans` (known framework types); the steps of the EIPs of the Rust model with camelCase/kebab-case keys, expressions inline or in an `expression` block (exactly one, the Java schema errors), endpoint `parameters`, an EIP with outputs without `steps` taking the following steps (as Java). Pending: rest, routeTemplate, routeConfiguration, kamelets, data formats, the schema validation of all options, YAML dumping, route reloading. Tests: ToTest, LoopTest, PipelineTest, SetHeadersTest, ThrowExceptionTest, RemovePropertyTest, IdempotentConsumerTest, InterceptTest, InterceptFromTest (Java removed), and the ExpressionTest, RecipientListTest, ThrottleTest, DelayTest cases (`tests/yaml_dsl.rs`). |
 | `dsl/camel-yaml-dsl/camel-yaml-dsl-common` | 21 | 2 | todo | |
 | `dsl/camel-yaml-dsl/camel-yaml-dsl-deserializers` | 15 | 1 | todo | |
 | `dsl/camel-yaml-dsl/camel-yaml-dsl-maven-plugin` | 9 | 0 | todo | |
