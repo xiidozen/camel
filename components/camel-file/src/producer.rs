@@ -5,7 +5,7 @@ use camel_api::endpoint::{Producer, SharedEndpoint};
 use camel_api::error::{CamelError, CamelResult};
 use camel_api::exchange::Exchange;
 use camel_api::exchange_constants::{
-    FILE_NAME, FILE_NAME_ONLY, FILE_NAME_PRODUCED, FILE_PARENT, OVERRULE_FILE_NAME,
+    FILE_CHECKSUM, FILE_NAME, FILE_NAME_ONLY, FILE_NAME_PRODUCED, FILE_PARENT, OVERRULE_FILE_NAME,
 };
 use camel_api::processor::{BoxFuture, Processor};
 use camel_api::service::Service;
@@ -134,7 +134,12 @@ impl FileProducer {
         Ok(bytes)
     }
 
-    fn write(&self, exchange: &Exchange, path: &str, append: bool) -> CamelResult<()> {
+    /// Writes the content of the message to the file.
+    ///
+    /// # Returns
+    ///
+    /// The bytes written.
+    fn write(&self, exchange: &Exchange, path: &str, append: bool) -> CamelResult<Vec<u8>> {
         let c = &self.endpoint.config;
         if c.auto_create {
             if let Some(parent) = Path::new(path)
@@ -196,7 +201,7 @@ impl FileProducer {
             }
         }
         log::debug!("Wrote [{path}] to [{}]", self.endpoint.uri);
-        Ok(())
+        Ok(bytes)
     }
 
     /// Moves the existing file away (Java `GenericFileDefaultMoveExistingFileStrategy`).
@@ -298,20 +303,20 @@ impl FileProducer {
             FileExist::Move if exists => self.move_existing(exchange, &target)?,
             _ => {}
         }
-        match &temp {
+        let written = match &temp {
             Some(temp) => {
                 if c.file_exist != FileExist::TryRename && Path::new(temp).exists() {
                     let _ = std::fs::remove_file(temp);
                 }
-                if c.file_exist == FileExist::Append && exists {
+                let written = if c.file_exist == FileExist::Append && exists {
                     // append to a copy of the target
                     std::fs::copy(&target, temp).map_err(|e| {
                         operation_failed(format!("Cannot copy file: {target} to {temp}: {e}"))
                     })?;
-                    self.write(exchange, temp, true)?;
+                    self.write(exchange, temp, true)?
                 } else {
-                    self.write(exchange, temp, false)?;
-                }
+                    self.write(exchange, temp, false)?
+                };
                 if c.file_exist != FileExist::TryRename && Path::new(&target).exists() {
                     std::fs::remove_file(&target).map_err(|e| {
                         operation_failed(format!("Cannot delete file: {target}: {e}"))
@@ -320,8 +325,21 @@ impl FileProducer {
                 std::fs::rename(temp, &target).map_err(|_| {
                     operation_failed(format!("Cannot rename file from: {temp} to: {target}"))
                 })?;
+                written
             }
             None => self.write(exchange, &target, c.file_exist == FileExist::Append)?,
+        };
+        // the checksum of the written content, and its file (Java writeChecksumFile)
+        if let Some(algorithm) = &c.checksum_file_algorithm {
+            let hash = checksum(algorithm, &written)?;
+            if c.checksum_write_file {
+                let file = format!("{target}.{algorithm}");
+                log::trace!("Writing checksum file: [{file}]");
+                std::fs::write(&file, hash.as_bytes()).map_err(|_| {
+                    operation_failed(format!("Error writing checksum file [{file}]"))
+                })?;
+            }
+            exchange.message_mut().set_header(FILE_CHECKSUM, hash);
         }
         // an empty done file next to the file (Java writeDoneFile)
         if c.done_file_name.is_some() {
@@ -340,6 +358,29 @@ impl FileProducer {
             .set_header(FILE_NAME_PRODUCED, target);
         Ok(())
     }
+}
+
+/// The lower case hex digest of the bytes (Java `MessageDigest` of the algorithm, such as `md5`,
+/// `sha1`, `sha256` or `SHA-512`).
+fn checksum(algorithm: &str, bytes: &[u8]) -> CamelResult<String> {
+    use sha2::Digest;
+    let name = algorithm.to_ascii_lowercase().replace(['-', '_'], "");
+    let digest: Vec<u8> = match name.as_str() {
+        "md5" => md5::Md5::digest(bytes).to_vec(),
+        "sha1" | "sha" => sha1::Sha1::digest(bytes).to_vec(),
+        "sha224" => sha2::Sha224::digest(bytes).to_vec(),
+        "sha256" => sha2::Sha256::digest(bytes).to_vec(),
+        "sha384" => sha2::Sha384::digest(bytes).to_vec(),
+        "sha512" => sha2::Sha512::digest(bytes).to_vec(),
+        "sha512/224" => sha2::Sha512_224::digest(bytes).to_vec(),
+        "sha512/256" => sha2::Sha512_256::digest(bytes).to_vec(),
+        _ => {
+            return Err(CamelError::illegal_argument(format!(
+                "{algorithm} MessageDigest not available"
+            )))
+        }
+    };
+    Ok(digest.iter().map(|b| format!("{b:02x}")).collect())
 }
 
 /// The name of a file written without a name (Java `getGeneratedFileName`): the message id,

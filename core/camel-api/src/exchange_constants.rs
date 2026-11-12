@@ -103,6 +103,8 @@ pub const FILE_LOCAL_WORK_PATH: &str = "CamelFileLocalWorkPath";
 pub const FILE_NAME: &str = "CamelFileName";
 /// The `CamelFileNameOnly` header or exchange property.
 pub const FILE_NAME_ONLY: &str = "CamelFileNameOnly";
+/// The checksum of the written file (`checksumFileAlgorithm`).
+pub const FILE_CHECKSUM: &str = "CamelFileChecksum";
 /// The `CamelFileNameProduced` header or exchange property.
 pub const FILE_NAME_PRODUCED: &str = "CamelFileNameProduced";
 /// The `CamelFileNameConsumed` header or exchange property.

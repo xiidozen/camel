@@ -175,7 +175,10 @@ dependencies = [
  "camel-support",
  "camel-util",
  "log",
+ "md-5",
  "regex",
+ "sha1",
+ "sha2",
  "tokio",
 ]
 

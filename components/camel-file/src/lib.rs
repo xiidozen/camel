@@ -128,6 +128,12 @@ pub struct FileConfiguration {
     /// dynamic parts): the producer writes it after the file, the consumer only takes the
     /// files with their done file, and deletes it with the file.
     pub done_file_name: Option<String>,
+    /// The algorithm of the checksum of the written files (`checksumFileAlgorithm`, such as
+    /// `md5` or `sha256`), set as the `CamelFileChecksum` header.
+    pub checksum_file_algorithm: Option<String>,
+    /// Whether the checksum is written to `<file>.<algorithm>` (`checksumWriteFile`, default
+    /// `true`).
+    pub checksum_write_file: bool,
     /// The permissions of the written files (`chmod`, octal such as `644`).
     pub chmod: Option<u32>,
     /// The permissions of the directories the producer creates (`chmodDirectory`).
@@ -262,6 +268,8 @@ impl FileConfiguration {
             append_chars: None,
             allow_null_body: false,
             done_file_name: None,
+            checksum_file_algorithm: None,
+            checksum_write_file: true,
             chmod: None,
             chmod_directory: None,
             filter_directory: None,
@@ -392,6 +400,10 @@ impl Component for FileComponent {
             c.allow_null_body = v;
         }
         c.done_file_name = param(parameters, "doneFileName")?;
+        c.checksum_file_algorithm = param(parameters, "checksumFileAlgorithm")?;
+        if let Some(v) = param(parameters, "checksumWriteFile")? {
+            c.checksum_write_file = v;
+        }
         c.chmod = chmod(param(parameters, "chmod")?, "chmod")?;
         c.chmod_directory = chmod(param(parameters, "chmodDirectory")?, "chmodDirectory")?;
         c.filter_directory = param(parameters, "filterDirectory")?;

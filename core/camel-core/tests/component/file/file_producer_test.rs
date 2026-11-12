@@ -1527,3 +1527,66 @@ async fn test_chmod() {
         );
     }
 }
+
+/// The `FileProducerChecksumFileAlgorithmTest` cases with a text or bytes body.
+#[tokio::test]
+async fn test_checksum_file_algorithm() {
+    let t = ContextTestSupport::new();
+    for (algorithm, body, hash) in [
+        (
+            "md5",
+            Value::from("Hello World"),
+            "b10a8db164e0754105b7a99be72e3fe5",
+        ),
+        (
+            "sha256",
+            Value::from("Hello World"),
+            "a591a6d40bf420404a011733cfb7b190d62c65bf0bcda32b57b277d9ad9f146e",
+        ),
+        (
+            "sha256",
+            Value::Bytes(b"Hello World".to_vec()),
+            "a591a6d40bf420404a011733cfb7b190d62c65bf0bcda32b57b277d9ad9f146e",
+        ),
+    ] {
+        let dir = TestDirectory::new("FileProducerChecksumFileAlgorithmTest");
+        let mut exchange = t
+            .template
+            .create_exchange(&dir.file_uri(""), ExchangePattern::InOnly)
+            .unwrap();
+        exchange.message_mut().set_body(body);
+        exchange.message_mut().set_header(FILE_NAME, "hello.txt");
+        let exchange = t
+            .template
+            .send(
+                &dir.file_uri(&format!("?checksumFileAlgorithm={algorithm}")),
+                exchange,
+            )
+            .await
+            .unwrap();
+        assert!(dir.test_file("hello.txt").exists());
+        assert_eq!(
+            Some(hash.to_string()),
+            dir.read(&format!("hello.txt.{algorithm}"))
+        );
+        assert_eq!(
+            Some(hash.to_string()),
+            exchange
+                .message()
+                .header(camel_core::api::exchange_constants::FILE_CHECKSUM)
+                .map(|v| v.to_string())
+        );
+    }
+    // without the checksum file
+    let dir = TestDirectory::new("FileProducerChecksumFileAlgorithmTest");
+    put(
+        &t,
+        &dir,
+        "?checksumFileAlgorithm=md5&checksumWriteFile=false",
+        "Hello World",
+        "hello.txt",
+    )
+    .await
+    .unwrap();
+    assert!(!dir.test_file("hello.txt.md5").exists());
+}
