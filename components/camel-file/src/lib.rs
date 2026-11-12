@@ -170,6 +170,8 @@ pub struct FileConfiguration {
     pub directory_must_exist: bool,
     /// Whether hidden files (starting with `.`) are consumed (default `false`).
     pub include_hidden_files: bool,
+    /// Whether the hidden directories (starting with a dot) are polled (default `false`).
+    pub include_hidden_dirs: bool,
     /// The read lock (only `none` is available).
     pub read_lock: String,
     /// Whether the files are taken in the reverse order of their names (`sortBy`
@@ -216,6 +218,7 @@ impl FileConfiguration {
             starting_directory_must_exist: false,
             directory_must_exist: false,
             include_hidden_files: false,
+            include_hidden_dirs: false,
             read_lock: "none".into(),
             sort_reverse: false,
         }
@@ -337,6 +340,9 @@ impl Component for FileComponent {
         }
         if let Some(v) = param(parameters, "includeHiddenFiles")? {
             c.include_hidden_files = v;
+        }
+        if let Some(v) = param(parameters, "includeHiddenDirs")? {
+            c.include_hidden_dirs = v;
         }
         if let Some(v) = param::<String>(parameters, "readLock")? {
             if v != "none" {

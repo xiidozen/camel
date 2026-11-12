@@ -340,7 +340,18 @@ impl Service for FileProducer {}
 
 impl Processor for FileProducer {
     fn process<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>> {
-        Box::pin(std::future::ready(self.process_exchange(exchange)))
+        // the file name header is kept, the overrule used once (Java doProcess)
+        let existing = exchange.message().header(FILE_NAME).cloned();
+        let result = self.process_exchange(exchange);
+        let m = exchange.message_mut();
+        m.remove_header(OVERRULE_FILE_NAME);
+        match existing {
+            Some(v) => m.set_header(FILE_NAME, v),
+            None => {
+                m.remove_header(FILE_NAME);
+            }
+        }
+        Box::pin(std::future::ready(result))
     }
 }
 

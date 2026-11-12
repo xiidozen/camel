@@ -1216,3 +1216,105 @@ async fn test_no_forced_writes() {
     assert_eq!(Some("Hello World".to_string()), dir.read("output.txt"));
     assert_eq!(Some("Hello World".to_string()), dir.read("output2.txt"));
 }
+
+/// Ports of `FileConsumeFilesAndDeleteTest`, `FileConsumeHiddenDirsTest` and
+/// `FileConsumerSkipDotFilesTest`.
+#[tokio::test]
+async fn test_delete_hidden_dirs_and_dot_files() {
+    consume(
+        "FileConsumeFilesAndDeleteTest",
+        "?initialDelay=0&delay=2000&fileName=report.txt&delete=true",
+        &[
+            ("report2.txt", "Bye World"),
+            ("report.txt", "Hello World"),
+            ("2008/report2008.txt", "2008 Report"),
+        ],
+        &["Hello World"],
+        &[],
+    )
+    .await;
+    consume(
+        "FileConsumeHiddenDirsTest",
+        "?initialDelay=0&delay=10&delete=true&includeHiddenDirs=true&recursive=true",
+        &[
+            (".hidden/report1.txt", "Report 123"),
+            ("obvious/report2.txt", "Report 456"),
+        ],
+        &["Report 123", "Report 456"],
+        &[],
+    )
+    .await;
+    consume(
+        "FileConsumerSkipDotFilesTest",
+        "?initialDelay=0&delay=10",
+        &[
+            (".skipme", "This is a dot file"),
+            ("hello.txt", "Hello World"),
+        ],
+        &["Hello World"],
+        &[],
+    )
+    .await;
+}
+
+/// Ports of `FromFileDoNotDeleteFileIfProcessFailsTest` and
+/// `FromFileDoNotMoveFileIfProcessFailsTest`.
+#[tokio::test]
+async fn test_do_not_delete_or_move_if_process_fails() {
+    for option in [
+        "?initialDelay=0&delay=10&delete=true",
+        "?initialDelay=0&delay=10&move=done",
+    ] {
+        let dir = TestDirectory::new("FromFileDoNotDeleteFileIfProcessFailsTest");
+        let uri = dir.file_uri(option);
+        let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+            r.on_exception(
+                on_exception(ErrorType::Kind(ErrorKind::IllegalArgument)).to("mock:error"),
+            );
+            r.add(
+                from(&uri).process_fn(|_| Err(CamelError::illegal_argument("Forced by unittest"))),
+            );
+        })
+        .await;
+        let mock = t.mock("mock:error");
+        mock.expected_minimum_message_count(1);
+        send(
+            &t,
+            &dir,
+            "hello.txt",
+            "Hello World this file will NOT be deleted",
+        )
+        .await;
+        mock.assert_is_satisfied().await;
+        t.context.stop().await.unwrap();
+        assert!(dir.test_file("hello.txt").exists(), "{option}");
+    }
+}
+
+/// Port of `FileAbsolutePathIssueTest`.
+#[tokio::test]
+async fn test_absolute_path_issue() {
+    let dir = TestDirectory::new("FileAbsolutePathIssueTest");
+    let (start, done) = (
+        format!("{}/issue", dir.path()),
+        format!("{}/done", dir.path()),
+    );
+    let uri = format!("file:{start}?initialDelay=0&delay=10&move={done}/${{file:name}}");
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(from(&uri).to("mock:result"));
+    })
+    .await;
+    let mock = t.mock("mock:result");
+    mock.expected_message_count(1);
+    mock.expected_file_exists(dir.test_file("done/hello.txt"), None);
+    t.template
+        .send_body_and_header(
+            &format!("file:{start}"),
+            "Hello World",
+            FILE_NAME,
+            "hello.txt",
+        )
+        .await
+        .unwrap();
+    mock.assert_is_satisfied().await;
+}

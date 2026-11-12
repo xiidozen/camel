@@ -120,11 +120,18 @@ fn list_files(
     entries.sort_by_key(|e| e.file_name());
     for entry in entries {
         let name = entry.file_name().to_string_lossy().into_owned();
-        if name.starts_with('.') && !c.include_hidden_files {
+        let path = entry.path();
+        let dir = path.is_dir();
+        // hidden files and directories are skipped unless included (Java isValidFile)
+        let included = if dir {
+            c.include_hidden_dirs
+        } else {
+            c.include_hidden_files
+        };
+        if name.starts_with('.') && !included {
             continue;
         }
-        let path = entry.path();
-        if path.is_dir() {
+        if dir {
             if c.recursive && depth < c.max_depth {
                 list_files(endpoint, &path, depth + 1, out)?;
             }

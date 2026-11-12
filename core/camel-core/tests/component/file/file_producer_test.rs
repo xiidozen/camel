@@ -4,7 +4,7 @@
 //! `FileHeaderFileNameProducedTest`.
 
 use crate::support::{ContextTestSupport, TestDirectory};
-use camel_core::api::exchange_constants::{FILE_NAME, FILE_NAME_PRODUCED};
+use camel_core::api::exchange_constants::{FILE_NAME, FILE_NAME_PRODUCED, OVERRULE_FILE_NAME};
 use camel_core::prelude::*;
 
 #[tokio::test]
@@ -517,4 +517,102 @@ async fn test_to_d_move_existing() {
     t.assert_mock_endpoints_satisfied().await;
     assert!(dir.test_file("out/old-hello.txt").exists());
     assert!(dir.test_file("out/hello.txt").exists());
+}
+
+/// Port of `FileProduceOverruleOnlyOnceTest`.
+#[tokio::test]
+async fn test_overrule_only_once() {
+    let dir = TestDirectory::new("FileProduceOverruleOnlyOnceTest");
+    let (write, again) = (dir.file_uri("write"), dir.file_uri("again"));
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(from("direct:start").to(&write).to(&again).to("mock:result"));
+    })
+    .await;
+    let mock = t.mock("mock:result");
+    mock.expected_message_count(1);
+    mock.expected_header_received(FILE_NAME, "hello.txt");
+    mock.message_matches(0, header(OVERRULE_FILE_NAME).is_null());
+    mock.expected_file_exists(dir.test_file("write/ruled.txt"), Some("Hello World"));
+    mock.expected_file_exists(dir.test_file("again/hello.txt"), Some("Hello World"));
+    t.template
+        .send_body_and_headers(
+            "direct:start",
+            "Hello World",
+            vec![
+                (FILE_NAME.into(), "hello.txt".into()),
+                (OVERRULE_FILE_NAME.into(), "ruled.txt".into()),
+            ],
+        )
+        .await
+        .unwrap();
+    mock.assert_is_satisfied().await;
+}
+
+/// Port of `FilerProducerFileNamesTest`.
+#[tokio::test]
+async fn test_producer_file_names() {
+    let dir = TestDirectory::new("FilerProducerFileNamesTest");
+    let (reports, root) = (dir.file_uri("reports"), dir.file_uri(""));
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(from("direct:report").to(&reports));
+        r.add(
+            from("direct:report2")
+                .set_header(FILE_NAME, constant("report-super.txt"))
+                .to(&root),
+        );
+    })
+    .await;
+    let mut exchange = t
+        .template
+        .create_exchange("direct:report", ExchangePattern::InOnly)
+        .unwrap();
+    exchange.message_mut().set_body("This is a good report");
+    let id = camel_file::generated_file_name(&exchange);
+    t.template.send("direct:report", exchange).await.unwrap();
+    assert!(dir.test_file(&format!("reports/{id}")).exists());
+    t.template
+        .send_body("direct:report2", "This is super good report")
+        .await
+        .unwrap();
+    assert!(dir.test_file("report-super.txt").exists());
+}
+
+/// Port of `FileProducerJailStartingDirectoryTest`.
+#[tokio::test]
+async fn test_jail_starting_directory() {
+    let dir = TestDirectory::new("FileProducerJailStartingDirectoryTest");
+    let outbox = dir.file_uri("outbox");
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(
+            from("direct:start")
+                .set_header(FILE_NAME, simple("../${file:name}"))
+                .to(&outbox)
+                .to("mock:result"),
+        );
+    })
+    .await;
+    let mock = t.mock("mock:result");
+    mock.expected_message_count(0);
+    let e = t
+        .template
+        .send_body_and_header("direct:start", "Hello World", FILE_NAME, "hello.txt")
+        .await
+        .unwrap_err();
+    let cause = crate::support::cause_of(&e);
+    assert!(cause.is(ErrorKind::IllegalArgument), "{e}");
+    assert!(
+        cause
+            .message()
+            .unwrap_or_default()
+            .contains("as the filename is jailed to the starting directory"),
+        "{e}"
+    );
+    mock.assert_is_satisfied().await;
+    mock.reset();
+    mock.expected_message_count(1);
+    t.template
+        .send_body_and_header("direct:start", "Bye World", FILE_NAME, "outbox/bye.txt")
+        .await
+        .unwrap();
+    mock.assert_is_satisfied().await;
 }
