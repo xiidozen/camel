@@ -29,6 +29,13 @@ pub struct Target {
     producer: SharedProducer,
 }
 
+impl Target {
+    /// The uri of the endpoint.
+    pub fn uri(&self) -> &str {
+        &self.uri
+    }
+}
+
 impl ProducerCache {
     /// Resolves the endpoint of the uri and acquires its producer (started on first use).
     ///
@@ -103,7 +110,7 @@ pub async fn send_to(target: &Target, pattern: Option<ExchangePattern>, exchange
 }
 
 /// The recipient text of a value: trimmed, `None` when empty (Java `prepareRecipient`).
-fn recipient(value: &Value) -> Option<String> {
+pub(crate) fn recipient(value: &Value) -> Option<String> {
     if value.is_null() {
         return None;
     }

@@ -40,10 +40,15 @@ use camel_core_processor::multicast::{
 };
 use camel_core_processor::on_completion::{OnCompletionOptions, OnCompletionProcessor};
 use camel_core_processor::pipeline::Pipeline;
+use camel_core_processor::routing::{
+    LoopProcessor, RoutingSlipProcessor, SortProcessor, StepProcessor,
+};
 use camel_core_processor::send::SendProcessor;
 use camel_core_processor::transform::{
-    RemoveHeaderProcessor, RemoveHeadersProcessor, SetBodyProcessor, SetHeaderProcessor,
-    SetPropertyProcessor, SetVariableProcessor, StopProcessor, ThrowExceptionProcessor,
+    RemoveHeaderProcessor, RemoveHeadersProcessor, RemovePropertiesProcessor,
+    RemovePropertyProcessor, RemoveVariableProcessor, ScriptProcessor, SetBodyProcessor,
+    SetHeaderProcessor, SetHeadersProcessor, SetPropertyProcessor, SetVariableProcessor,
+    SetVariablesProcessor, StopProcessor, ThrowExceptionProcessor,
 };
 use camel_core_processor::try_catch::{CatchProcessor, FinallyProcessor, TryProcessor};
 use camel_util::value::Value;
@@ -417,6 +422,80 @@ impl<'a> RouteReifier<'a> {
                 type_name,
                 mandatory,
             } => Arc::new(ConvertBodyProcessor::new(type_name, *mandatory)?),
+            Eip::SetHeaders(headers) => {
+                let mut list = Vec::new();
+                for (n, e) in headers {
+                    list.push((n.clone(), self.expr(e)?));
+                }
+                Arc::new(SetHeadersProcessor::new(list))
+            }
+            Eip::SetVariables(variables) => {
+                let mut list = Vec::new();
+                for (n, e) in variables {
+                    list.push((n.clone(), self.expr(e)?));
+                }
+                Arc::new(SetVariablesProcessor::new(list))
+            }
+            Eip::RemoveProperty(name) => Arc::new(RemovePropertyProcessor::new(name)),
+            Eip::RemoveProperties {
+                pattern,
+                exclude_patterns,
+            } => {
+                let excludes: Vec<&str> = exclude_patterns.iter().map(String::as_str).collect();
+                Arc::new(RemovePropertiesProcessor::new(pattern, &excludes))
+            }
+            Eip::RemoveVariable(name) => Arc::new(RemoveVariableProcessor::new(name)),
+            Eip::Script(e) => Arc::new(ScriptProcessor::new(self.expr(e)?)),
+            Eip::Loop {
+                count,
+                while_predicate,
+                copy,
+                steps,
+            } => {
+                let body = self.steps(steps)?;
+                let p = match (count, while_predicate) {
+                    (_, Some(w)) => {
+                        LoopProcessor::do_while(reify_predicate(self.context, w)?, body)
+                    }
+                    (Some(c), None) => LoopProcessor::count(self.expr(c)?, body),
+                    (None, None) => {
+                        return Err(CamelError::illegal_argument(
+                            "A loop needs a count or a while predicate",
+                        ))
+                    }
+                };
+                Arc::new(p.with_copy(*copy))
+            }
+            Eip::RoutingSlip {
+                expression,
+                delimiter,
+                ignore_invalid_endpoints,
+            } => Arc::new(
+                RoutingSlipProcessor::new(self.expr(expression)?, delimiter.as_deref())
+                    .with_ignore_invalid_endpoints(*ignore_invalid_endpoints),
+            ),
+            Eip::DynamicRouter {
+                expression,
+                delimiter,
+                ignore_invalid_endpoints,
+            } => Arc::new(
+                RoutingSlipProcessor::dynamic_router(self.expr(expression)?, delimiter.as_deref())
+                    .with_ignore_invalid_endpoints(*ignore_invalid_endpoints),
+            ),
+            Eip::Sort {
+                expression,
+                comparator,
+            } => {
+                let e = match expression {
+                    Some(e) => self.expr(e)?,
+                    None => camel_support::builder::body_expression(),
+                };
+                Arc::new(SortProcessor::new(
+                    e,
+                    comparator.as_ref().map(|c| c.0.clone()),
+                ))
+            }
+            Eip::Step { id, steps } => Arc::new(StepProcessor::new(id, self.step_list(steps)?)),
             Eip::Bean { bean, method } => {
                 let factory = context_plugin::<Arc<dyn BeanProcessorFactory>>(
                     self.context.as_ref(),

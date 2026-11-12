@@ -44,7 +44,8 @@ use crate::errorhandler::{ErrorHandlerDefinition, OnExceptionDefinition};
 use crate::expression::ExpressionDefinition;
 use crate::processor::{
     AggregateDefinition, AggregationRef, CatchDefinition, Eip, MulticastOptions,
-    OnCompletionDefinition, ProcessRef, ProcessorDefinition, RepositoryRef, WhenDefinition,
+    OnCompletionDefinition, ProcessRef, ProcessorDefinition, RepositoryRef, SortComparator,
+    WhenDefinition,
 };
 use crate::route::RouteDefinition;
 use camel_api::bean_binding::BeanReference;
@@ -285,6 +286,180 @@ pub trait Dsl: Sized {
         self.eip(Eip::SetExchangePattern(pattern))
     }
 
+    /// Sets several headers, in order (Java `.setHeaders(..)`); an expression sees the
+    /// headers set before it.
+    fn set_headers<I, N, E>(self, headers: I) -> Self
+    where
+        I: IntoIterator<Item = (N, E)>,
+        N: Into<String>,
+        E: Into<ExpressionDefinition>,
+    {
+        let headers = headers
+            .into_iter()
+            .map(|(n, e)| (n.into(), e.into()))
+            .collect();
+        self.eip(Eip::SetHeaders(headers))
+    }
+
+    /// Sets several variables, in order (Java `.setVariables(..)`).
+    fn set_variables<I, N, E>(self, variables: I) -> Self
+    where
+        I: IntoIterator<Item = (N, E)>,
+        N: Into<String>,
+        E: Into<ExpressionDefinition>,
+    {
+        let variables = variables
+            .into_iter()
+            .map(|(n, e)| (n.into(), e.into()))
+            .collect();
+        self.eip(Eip::SetVariables(variables))
+    }
+
+    /// Removes the exchange property (Java `.removeProperty(..)`).
+    fn remove_property(self, name: &str) -> Self {
+        self.eip(Eip::RemoveProperty(name.to_string()))
+    }
+
+    /// Removes the exchange properties matching the pattern (Java `.removeProperties(..)`).
+    fn remove_properties(self, pattern: &str) -> Self {
+        self.remove_properties_excluding(pattern, &[])
+    }
+
+    /// Removes the exchange properties matching the pattern, except those matching an exclude
+    /// pattern.
+    fn remove_properties_excluding(self, pattern: &str, exclude_patterns: &[&str]) -> Self {
+        self.eip(Eip::RemoveProperties {
+            pattern: pattern.to_string(),
+            exclude_patterns: exclude_patterns.iter().map(|s| s.to_string()).collect(),
+        })
+    }
+
+    /// Removes the variable, all of them with `*` (Java `.removeVariable(..)`).
+    fn remove_variable(self, name: &str) -> Self {
+        self.eip(Eip::RemoveVariable(name.to_string()))
+    }
+
+    /// Evaluates the expression for its side effects, keeping the message (Java
+    /// `.script(..)`).
+    fn script(self, expression: impl Into<ExpressionDefinition>) -> Self {
+        self.eip(Eip::Script(expression.into()))
+    }
+
+    /// Processes the steps the number of times (Java `.loop(count)`); see [`copy`](Self::copy).
+    fn loop_count<F>(self, count: impl Into<ExpressionDefinition>, steps: F) -> Self
+    where
+        F: FnOnce(StepsDsl) -> StepsDsl,
+    {
+        let steps = steps(StepsDsl::default()).steps;
+        self.eip(Eip::Loop {
+            count: Some(count.into()),
+            while_predicate: None,
+            copy: false,
+            steps,
+        })
+    }
+
+    /// Processes the steps while the predicate matches (Java `.loopDoWhile(..)`).
+    fn loop_do_while<F>(self, predicate: impl Into<ExpressionDefinition>, steps: F) -> Self
+    where
+        F: FnOnce(StepsDsl) -> StepsDsl,
+    {
+        let steps = steps(StepsDsl::default()).steps;
+        self.eip(Eip::Loop {
+            count: None,
+            while_predicate: Some(predicate.into()),
+            copy: false,
+            steps,
+        })
+    }
+
+    /// Each iteration of the last loop starts from a copy of the original exchange (Java
+    /// `.loop(..).copy()`).
+    fn copy(mut self) -> Self {
+        if let Some(Eip::Loop { copy, .. }) = self.last_mut().map(|l| &mut l.eip) {
+            *copy = true;
+        }
+        self
+    }
+
+    /// Sends to the endpoints of the slip (uris separated by `,`) one after the other (Java
+    /// `.routingSlip(..)`); see [`uri_delimiter`](Self::uri_delimiter).
+    fn routing_slip(self, expression: impl Into<ExpressionDefinition>) -> Self {
+        self.eip(Eip::RoutingSlip {
+            expression: expression.into(),
+            delimiter: None,
+            ignore_invalid_endpoints: false,
+        })
+    }
+
+    /// Sends to the endpoints the expression answers, evaluated again after each endpoint
+    /// until it answers nothing (Java `.dynamicRouter(..)`).
+    fn dynamic_router(self, expression: impl Into<ExpressionDefinition>) -> Self {
+        self.eip(Eip::DynamicRouter {
+            expression: expression.into(),
+            delimiter: None,
+            ignore_invalid_endpoints: false,
+        })
+    }
+
+    /// The delimiter of the uris of the last routing slip, dynamic router or recipient list
+    /// (Java `uriDelimiter` / `delimiter`).
+    fn uri_delimiter(mut self, delimiter: &str) -> Self {
+        if let Some(
+            Eip::RoutingSlip { delimiter: d, .. }
+            | Eip::DynamicRouter { delimiter: d, .. }
+            | Eip::RecipientList { delimiter: d, .. },
+        ) = self.last_mut().map(|l| &mut l.eip)
+        {
+            *d = Some(delimiter.to_string());
+        }
+        self
+    }
+
+    /// Sorts the list of the body, by the natural order (Java `.sort(body())`).
+    fn sort_body(self) -> Self {
+        self.eip(Eip::Sort {
+            expression: None,
+            comparator: None,
+        })
+    }
+
+    /// Sorts the list of the expression, as the body (Java `.sort(expression)`).
+    fn sort(self, expression: impl Into<ExpressionDefinition>) -> Self {
+        self.eip(Eip::Sort {
+            expression: Some(expression.into()),
+            comparator: None,
+        })
+    }
+
+    /// Sorts the list of the expression with the comparator (Java `.sort(expression,
+    /// comparator)`).
+    fn sort_with(
+        self,
+        expression: impl Into<ExpressionDefinition>,
+        comparator: impl Fn(&camel_util::value::Value, &camel_util::value::Value) -> std::cmp::Ordering
+            + Send
+            + Sync
+            + 'static,
+    ) -> Self {
+        self.eip(Eip::Sort {
+            expression: Some(expression.into()),
+            comparator: Some(SortComparator(Arc::new(comparator))),
+        })
+    }
+
+    /// The steps of the block as a step with the id (Java `.step(id)`).
+    fn step<F>(self, id: &str, steps: F) -> Self
+    where
+        F: FnOnce(StepsDsl) -> StepsDsl,
+    {
+        let steps = steps(StepsDsl::default()).steps;
+        self.eip(Eip::Step {
+            id: id.to_string(),
+            steps,
+        })
+    }
+
     /// Calls the only method of the bean (Java `.bean(..)`): the name of a bean in the
     /// registry, or the bean itself (such as a `camel_bean::MethodBean`); the result becomes
     /// the message body.
@@ -337,6 +512,16 @@ pub trait Dsl: Sized {
                 ignore_invalid_endpoint,
                 ..
             }) => *ignore_invalid_endpoint = true,
+            Some(
+                Eip::RoutingSlip {
+                    ignore_invalid_endpoints,
+                    ..
+                }
+                | Eip::DynamicRouter {
+                    ignore_invalid_endpoints,
+                    ..
+                },
+            ) => *ignore_invalid_endpoints = true,
             _ => {}
         }
         self

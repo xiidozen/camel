@@ -1,7 +1,9 @@
 //! Message translators: set body, headers, properties and variables, remove headers, stop and
 //! throw exception (Java `SetBodyProcessor`, `TransformProcessor`, `SetHeaderProcessor`,
 //! `SetPropertyProcessor`, `SetVariableProcessor`, `RemoveHeaderProcessor`,
-//! `RemoveHeadersProcessor`, `StopProcessor`, `ThrowExceptionProcessor`).
+//! `RemoveHeadersProcessor`, `StopProcessor`, `ThrowExceptionProcessor`, `SetHeadersProcessor`,
+//! `SetVariablesProcessor`, `RemovePropertyProcessor`, `RemovePropertiesProcessor`,
+//! `RemoveVariableProcessor`, `ScriptProcessor`).
 
 use camel_api::error::{CamelError, CamelResult};
 use camel_api::exchange::Exchange;
@@ -184,5 +186,139 @@ impl ThrowExceptionProcessor {
 impl Processor for ThrowExceptionProcessor {
     fn process<'a>(&'a self, _exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>> {
         ready(Err(self.error.clone()))
+    }
+}
+
+/// Sets several headers, in order, each to the value of its expression (the setHeaders EIP);
+/// an expression sees the headers set before it.
+pub struct SetHeadersProcessor {
+    headers: Vec<(String, SharedExpression)>,
+}
+
+impl SetHeadersProcessor {
+    /// Creates the processor.
+    pub fn new(headers: Vec<(String, SharedExpression)>) -> Self {
+        SetHeadersProcessor { headers }
+    }
+}
+
+impl Processor for SetHeadersProcessor {
+    fn process<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>> {
+        for (name, expression) in &self.headers {
+            match expression.evaluate_mut(exchange) {
+                Ok(v) => exchange.message_mut().set_header(name, v),
+                Err(e) => return ready(Err(e)),
+            }
+        }
+        ready(Ok(()))
+    }
+}
+
+/// Sets several variables, in order (the setVariables EIP).
+pub struct SetVariablesProcessor {
+    variables: Vec<(String, SharedExpression)>,
+}
+
+impl SetVariablesProcessor {
+    /// Creates the processor.
+    pub fn new(variables: Vec<(String, SharedExpression)>) -> Self {
+        SetVariablesProcessor { variables }
+    }
+}
+
+impl Processor for SetVariablesProcessor {
+    fn process<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>> {
+        for (name, expression) in &self.variables {
+            match expression.evaluate_mut(exchange) {
+                Ok(v) => exchange.set_variable(name, v),
+                Err(e) => return ready(Err(e)),
+            }
+        }
+        ready(Ok(()))
+    }
+}
+
+/// Removes an exchange property (the removeProperty EIP).
+pub struct RemovePropertyProcessor {
+    name: String,
+}
+
+impl RemovePropertyProcessor {
+    /// Creates the processor.
+    pub fn new(name: &str) -> Self {
+        RemovePropertyProcessor {
+            name: name.to_string(),
+        }
+    }
+}
+
+impl Processor for RemovePropertyProcessor {
+    fn process<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>> {
+        exchange.remove_property(&self.name);
+        ready(Ok(()))
+    }
+}
+
+/// Removes the exchange properties matching a pattern, except those matching an exclude
+/// pattern (the removeProperties EIP).
+pub struct RemovePropertiesProcessor {
+    pattern: String,
+    exclude_patterns: Vec<String>,
+}
+
+impl RemovePropertiesProcessor {
+    /// Creates the processor.
+    pub fn new(pattern: &str, exclude_patterns: &[&str]) -> Self {
+        RemovePropertiesProcessor {
+            pattern: pattern.to_string(),
+            exclude_patterns: exclude_patterns.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+}
+
+impl Processor for RemovePropertiesProcessor {
+    fn process<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>> {
+        let excludes: Vec<&str> = self.exclude_patterns.iter().map(String::as_str).collect();
+        exchange.remove_properties(&self.pattern, &excludes);
+        ready(Ok(()))
+    }
+}
+
+/// Removes a variable, or all of them with `*` (the removeVariable EIP).
+pub struct RemoveVariableProcessor {
+    name: String,
+}
+
+impl RemoveVariableProcessor {
+    /// Creates the processor.
+    pub fn new(name: &str) -> Self {
+        RemoveVariableProcessor {
+            name: name.to_string(),
+        }
+    }
+}
+
+impl Processor for RemoveVariableProcessor {
+    fn process<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>> {
+        exchange.remove_variable(&self.name);
+        ready(Ok(()))
+    }
+}
+
+/// Evaluates an expression for its side effects, keeping the message (the script EIP).
+pub struct ScriptProcessor {
+    expression: SharedExpression,
+}
+
+impl ScriptProcessor {
+    /// Creates the processor.
+    pub fn new(expression: SharedExpression) -> Self {
+        ScriptProcessor { expression }
+    }
+}
+
+impl Processor for ScriptProcessor {
+    fn process<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>> {
+        ready(self.expression.evaluate_mut(exchange).map(|_| ()))
     }
 }

@@ -7,8 +7,23 @@ use camel_api::error::{CamelError, ErrorType};
 use camel_api::processor::{SharedAggregationStrategy, SharedProcessor};
 use camel_api::spi::aggregation_repository::AggregationRepository;
 use camel_util::uri_support::sanitize_uri;
+use camel_util::value::Value;
+use std::cmp::Ordering;
 use std::fmt;
 use std::sync::Arc;
+
+/// A comparator of the sort EIP.
+pub type SharedComparator = Arc<dyn Fn(&Value, &Value) -> Ordering + Send + Sync>;
+
+/// The comparator of a sort step.
+#[derive(Clone)]
+pub struct SortComparator(pub SharedComparator);
+
+impl fmt::Debug for SortComparator {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SortComparator")
+    }
+}
 
 /// A step of a route: what it does ([`Eip`]) and its common options.
 #[derive(Clone, Debug)]
@@ -45,6 +60,8 @@ impl ProcessorDefinition {
         match &self.eip {
             Eip::Filter { steps, .. }
             | Eip::Pipeline { steps }
+            | Eip::Loop { steps, .. }
+            | Eip::Step { steps, .. }
             | Eip::Split { steps, .. }
             | Eip::Multicast { steps, .. } => steps.iter().collect(),
             Eip::Aggregate(a) => a.steps.iter().collect(),
@@ -417,6 +434,67 @@ pub enum Eip {
         /// the bean.
         method: Option<String>,
     },
+    /// Sets several headers, in order (`setHeaders`).
+    SetHeaders(Vec<(String, ExpressionDefinition)>),
+    /// Sets several variables, in order (`setVariables`).
+    SetVariables(Vec<(String, ExpressionDefinition)>),
+    /// Removes an exchange property (`removeProperty`).
+    RemoveProperty(String),
+    /// Removes the exchange properties matching the pattern (`removeProperties`).
+    RemoveProperties {
+        /// The pattern of the names.
+        pattern: String,
+        /// The patterns of the names to keep.
+        exclude_patterns: Vec<String>,
+    },
+    /// Removes a variable, all of them with `*` (`removeVariable`).
+    RemoveVariable(String),
+    /// Evaluates an expression for its side effects (`script`).
+    Script(ExpressionDefinition),
+    /// Processes the steps a number of times or while a predicate matches (`loop`).
+    Loop {
+        /// The number of iterations.
+        count: Option<ExpressionDefinition>,
+        /// The predicate of `loopDoWhile`.
+        while_predicate: Option<ExpressionDefinition>,
+        /// Whether each iteration starts from a copy of the original exchange.
+        copy: bool,
+        /// The steps of each iteration.
+        steps: Vec<ProcessorDefinition>,
+    },
+    /// Sends to the endpoints of the slip one after the other (`routingSlip`).
+    RoutingSlip {
+        /// The uris of the slip.
+        expression: ExpressionDefinition,
+        /// The delimiter of the uris (default `,`).
+        delimiter: Option<String>,
+        /// Whether invalid endpoint uris are skipped.
+        ignore_invalid_endpoints: bool,
+    },
+    /// Sends to the endpoints the expression answers, evaluated again after each one
+    /// (`dynamicRouter`).
+    DynamicRouter {
+        /// The uris of the next endpoints, nothing to end.
+        expression: ExpressionDefinition,
+        /// The delimiter of the uris (default `,`).
+        delimiter: Option<String>,
+        /// Whether invalid endpoint uris are skipped.
+        ignore_invalid_endpoints: bool,
+    },
+    /// Sorts the list of the expression, by default the body, as the body (`sort`).
+    Sort {
+        /// The list to sort (`None`: the body).
+        expression: Option<ExpressionDefinition>,
+        /// The comparator (`None`: the natural order).
+        comparator: Option<SortComparator>,
+    },
+    /// The steps as a step with an id (`step`).
+    Step {
+        /// The id of the step.
+        id: String,
+        /// The steps.
+        steps: Vec<ProcessorDefinition>,
+    },
     /// `doTry` with its `doCatch` and `doFinally` clauses.
     DoTry {
         /// The steps of the try block.
@@ -459,6 +537,17 @@ impl Eip {
             Eip::SetExchangePattern(_) => "setExchangePattern",
             Eip::ConvertBodyTo { .. } => "convertBodyTo",
             Eip::Bean { .. } => "bean",
+            Eip::SetHeaders(_) => "setHeaders",
+            Eip::SetVariables(_) => "setVariables",
+            Eip::RemoveProperty(_) => "removeProperty",
+            Eip::RemoveProperties { .. } => "removeProperties",
+            Eip::RemoveVariable(_) => "removeVariable",
+            Eip::Script(_) => "script",
+            Eip::Loop { .. } => "loop",
+            Eip::RoutingSlip { .. } => "routingSlip",
+            Eip::DynamicRouter { .. } => "dynamicRouter",
+            Eip::Sort { .. } => "sort",
+            Eip::Step { .. } => "step",
         }
     }
 }
@@ -539,6 +628,39 @@ impl fmt::Display for ProcessorDefinition {
             Eip::WireTap { uri, .. } => write!(f, "WireTap[{uri}]"),
             Eip::SetExchangePattern(p) => write!(f, "setExchangePattern[pattern: {p}]"),
             Eip::ConvertBodyTo { type_name, .. } => write!(f, "ConvertBodyTo[{type_name}]"),
+            Eip::SetHeaders(h) | Eip::SetVariables(h) => {
+                let kind = if matches!(self.eip, Eip::SetHeaders(_)) {
+                    "SetHeaders"
+                } else {
+                    "SetVariables"
+                };
+                let items: Vec<String> = h.iter().map(|(n, e)| format!("{n}={e}")).collect();
+                write!(f, "{kind}[{}]", items.join(", "))
+            }
+            Eip::RemoveProperty(name) => write!(f, "RemoveProperty[{name}]"),
+            Eip::RemoveProperties { pattern, .. } => write!(f, "RemoveProperties[{pattern}]"),
+            Eip::RemoveVariable(name) => write!(f, "RemoveVariable[{name}]"),
+            Eip::Script(e) => write!(f, "Script[{e}]"),
+            Eip::Loop {
+                count,
+                while_predicate,
+                steps,
+                ..
+            } => {
+                let e = count
+                    .as_ref()
+                    .or(while_predicate.as_ref())
+                    .map(|e| e.to_string())
+                    .unwrap_or_default();
+                write!(f, "Loop[{e} -> {}]", Steps(steps))
+            }
+            Eip::RoutingSlip { expression, .. } => write!(f, "RoutingSlip[{expression}]"),
+            Eip::DynamicRouter { expression, .. } => write!(f, "DynamicRouter[{expression}]"),
+            Eip::Sort { expression, .. } => match expression {
+                Some(e) => write!(f, "sort[{e}]"),
+                None => f.write_str("sort[body]"),
+            },
+            Eip::Step { steps, .. } => write!(f, "Step[{}]", Steps(steps)),
             Eip::Bean { bean, method } => match bean {
                 camel_api::bean_binding::BeanReference::Name(name) => match method {
                     Some(m) => write!(f, "Bean[ref:{name} method:{m}]"),
