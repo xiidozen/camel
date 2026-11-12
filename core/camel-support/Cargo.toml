@@ -13,4 +13,4 @@ camel-util = { workspace = true }
 indexmap = "2"
 log = "0.4"
 regex = "1"
-tokio = { version = "1", features = ["rt"] }
+tokio = { version = "1", features = ["rt", "time"] }

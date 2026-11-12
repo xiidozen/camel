@@ -8,7 +8,7 @@ use camel_api::exchange::Exchange;
 use camel_api::processor::{
     start_processors, stop_processors, BoxFuture, Processor, SharedProcessor,
 };
-use camel_api::route::Route;
+use camel_api::route::{Route, SharedRoute};
 use camel_api::service::ServiceState;
 use camel_api::service::{Service, StatefulService, SuspendableService};
 use camel_api::spi::route_policy::SharedRoutePolicy;
@@ -124,9 +124,10 @@ impl Processor for RouteProcessor {
             if let Some(i) = &inflight {
                 i.add_to_route(exchange, &self.route_id);
             }
+            let route: Option<SharedRoute> = route.map(|r| r as SharedRoute);
             if let Some(route) = &route {
                 for p in &self.policies {
-                    p.on_exchange_begin(route.as_ref(), exchange);
+                    p.on_exchange_begin(route, exchange);
                 }
             }
             let result = self.processor.process(exchange).await;
@@ -135,7 +136,7 @@ impl Processor for RouteProcessor {
             }
             if let Some(route) = &route {
                 for p in &self.policies {
-                    p.on_exchange_done(route.as_ref(), exchange);
+                    p.on_exchange_done(route, exchange);
                 }
             }
             result
@@ -195,9 +196,10 @@ impl DefaultRoute {
     /// its policies (Java `onInit` and the start of the policy services).
     pub fn init(self: &Arc<Self>) {
         let _ = self.this.set(Arc::downgrade(self));
+        let route: SharedRoute = self.clone();
         for p in &self.policies {
             p.start();
-            p.on_init(self.as_ref());
+            p.on_init(&route);
         }
     }
 
@@ -207,9 +209,13 @@ impl DefaultRoute {
     }
 
     /// Calls the policies.
-    fn policies(&self, f: impl Fn(&SharedRoutePolicy, &dyn Route)) {
+    fn policies(&self, f: impl Fn(&SharedRoutePolicy, &SharedRoute)) {
+        let Some(route) = self.this.get().and_then(Weak::upgrade) else {
+            return;
+        };
+        let route: SharedRoute = route;
         for p in &self.policies {
-            f(p, self);
+            f(p, &route);
         }
     }
 

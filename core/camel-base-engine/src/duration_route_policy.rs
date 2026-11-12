@@ -5,7 +5,7 @@ use crate::context::DefaultCamelContext;
 use camel_api::context::CamelContext;
 use camel_api::error::{CamelError, CamelResult};
 use camel_api::exchange::Exchange;
-use camel_api::route::Route;
+use camel_api::route::SharedRoute;
 use camel_api::spi::route_policy::{RoutePolicy, RoutePolicyFactory, SharedRoutePolicy};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak};
@@ -116,7 +116,7 @@ async fn run_action(
 }
 
 impl RoutePolicy for DurationRoutePolicy {
-    fn on_init(&self, route: &dyn Route) {
+    fn on_init(&self, route: &SharedRoute) {
         if let Err(e) = self.check() {
             log::warn!("{e}");
             return;
@@ -147,7 +147,7 @@ impl RoutePolicy for DurationRoutePolicy {
         }
     }
 
-    fn on_exchange_done(&self, _: &dyn Route, _: &Exchange) {
+    fn on_exchange_done(&self, _: &SharedRoute, _: &Exchange) {
         let done = self.done_messages.fetch_add(1, Ordering::SeqCst) + 1;
         if self.max_messages > 0
             && done >= self.max_messages

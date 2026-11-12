@@ -3,7 +3,7 @@
 //! `impl.RoutePolicyFactoryTest`.
 
 use crate::support::ContextTestSupport;
-use camel_core::api::route::Route;
+use camel_core::api::route::SharedRoute;
 use camel_core::api::spi::route_policy::{
     route_policy_value, RoutePolicy, RoutePolicyFactory, SharedRoutePolicy,
 };
@@ -18,7 +18,7 @@ struct StopPolicy {
 }
 
 impl RoutePolicy for StopPolicy {
-    fn on_exchange_done(&self, route: &dyn Route, exchange: &Exchange) {
+    fn on_exchange_done(&self, route: &SharedRoute, exchange: &Exchange) {
         if matches!(exchange.message().body(), Value::Text(t) if t == "stop") {
             self.stopped.store(true, Ordering::SeqCst);
             if let Some(consumer) = route.consumer() {
@@ -59,7 +59,7 @@ async fn test_custom_policy() {
 struct HeaderPolicy(String);
 
 impl RoutePolicy for HeaderPolicy {
-    fn on_exchange_begin(&self, _: &dyn Route, exchange: &mut Exchange) {
+    fn on_exchange_begin(&self, _: &SharedRoute, exchange: &mut Exchange) {
         exchange.message_mut().set_header(&self.0, self.0.clone());
     }
 }
@@ -127,28 +127,28 @@ impl CallbackPolicy {
 }
 
 impl RoutePolicy for CallbackPolicy {
-    fn on_init(&self, _: &dyn Route) {
+    fn on_init(&self, _: &SharedRoute) {
         self.add("init");
     }
-    fn on_remove(&self, _: &dyn Route) {
+    fn on_remove(&self, _: &SharedRoute) {
         self.add("remove");
     }
-    fn on_start(&self, _: &dyn Route) {
+    fn on_start(&self, _: &SharedRoute) {
         self.add("start");
     }
-    fn on_stop(&self, _: &dyn Route) {
+    fn on_stop(&self, _: &SharedRoute) {
         self.add("stop");
     }
-    fn on_suspend(&self, _: &dyn Route) {
+    fn on_suspend(&self, _: &SharedRoute) {
         self.add("suspend");
     }
-    fn on_resume(&self, _: &dyn Route) {
+    fn on_resume(&self, _: &SharedRoute) {
         self.add("resume");
     }
-    fn on_exchange_begin(&self, _: &dyn Route, _: &mut Exchange) {
+    fn on_exchange_begin(&self, _: &SharedRoute, _: &mut Exchange) {
         self.add("begin");
     }
-    fn on_exchange_done(&self, _: &dyn Route, _: &Exchange) {
+    fn on_exchange_done(&self, _: &SharedRoute, _: &Exchange) {
         self.add("done");
     }
     fn start(&self) {
@@ -229,7 +229,7 @@ impl RoutePolicyFactory for MyRoutePolicyFactory {
     ) -> Option<SharedRoutePolicy> {
         struct IdPolicy(String);
         impl RoutePolicy for IdPolicy {
-            fn on_exchange_begin(&self, _: &dyn Route, exchange: &mut Exchange) {
+            fn on_exchange_begin(&self, _: &SharedRoute, exchange: &mut Exchange) {
                 exchange
                     .message_mut()
                     .set_header("RoutePolicy", self.0.clone());
@@ -342,5 +342,151 @@ async fn test_duration_route_policy() {
             context.route_status("foo").unwrap().is_stopped()
         })
         .await;
+    }
+}
+
+/// Fails the exchanges (as the Java tests throwing a `ThrottlingException`).
+fn failing() -> camel_core::api::processor::SharedProcessor {
+    Arc::new(camel_core::api::processor::processor_fn(
+        |e: &mut Exchange| Err(CamelError::runtime(e.message().body().to_string())),
+    ))
+}
+
+/// Port of `throttle.ThrottlingExceptionRoutePolicyTest`.
+#[tokio::test]
+async fn test_throttling_exception_route_policy() {
+    use camel_core::support::throttling::{
+        ThrottlingExceptionHalfOpenHandler, ThrottlingExceptionRoutePolicy,
+    };
+    struct NeverCloseHandler;
+    impl ThrottlingExceptionHalfOpenHandler for NeverCloseHandler {
+        fn is_ready_to_be_closed(&self) -> bool {
+            false
+        }
+    }
+    let url = "seda:foo?concurrentConsumers=2";
+    for open in [false, true] {
+        let policy: SharedRoutePolicy = Arc::new(
+            ThrottlingExceptionRoutePolicy::new(2, 30, 1000, Vec::new())
+                .with_half_open_handler(Arc::new(NeverCloseHandler)),
+        );
+        let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+            r.add(
+                from(url)
+                    .route_id("foo")
+                    .route_policy(policy.clone())
+                    .log("${body}")
+                    .to("log:foo?groupSize=10")
+                    .to("mock:result"),
+            );
+        })
+        .await;
+        let result = t.mock("mock:result");
+        if !open {
+            // closed: all the messages
+            result.expected_minimum_message_count(100);
+            for i in 0..100 {
+                t.template
+                    .send_body(url, format!("Message {i}"))
+                    .await
+                    .unwrap();
+            }
+            result.assert_is_satisfied().await;
+            continue;
+        }
+        // two failures open the circuit before the third message
+        result.expected_bodies_received_in_any_order(["Message One", "Message Two"]);
+        result.when_any_exchange_received(failing());
+        t.template.send_body(url, "Message One").await.unwrap();
+        t.template.send_body(url, "Message Two").await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        t.template.send_body(url, "Message Three").await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        result.assert_is_satisfied().await;
+        assert_eq!(2, result.received_counter());
+    }
+}
+
+/// Port of `throttle.ThrottlingExceptionRoutePolicyHalfOpenTest`: after the half open delay
+/// the consumer is started again.
+#[tokio::test]
+async fn test_throttling_exception_route_policy_half_open() {
+    use camel_core::support::throttling::ThrottlingExceptionRoutePolicy;
+    let url = "direct:start?block=false";
+    let policy: SharedRoutePolicy =
+        Arc::new(ThrottlingExceptionRoutePolicy::new(2, 30, 250, Vec::new()));
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(
+            from(url)
+                .route_id("foo")
+                .route_policy(policy.clone())
+                .to("log:foo?groupSize=10")
+                .to("mock:result"),
+        );
+    })
+    .await;
+    let result = t.mock("mock:result");
+    result.expected_bodies_received_in_any_order(["Message One", "Message Two"]);
+    result.when_any_exchange_received(failing());
+    let _ = t.template.send_body(url, "Message One").await;
+    let _ = t.template.send_body(url, "Message Two").await;
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    // the circuit is open: no consumer
+    let _ = t.template.send_body(url, "Message Three").await;
+    result.assert_is_satisfied().await;
+    assert_eq!(2, result.received_counter());
+    // half opened: the consumer is back
+    result.reset();
+    result.expected_bodies_received(["Message Four"]);
+    let mut delivered = false;
+    for _ in 0..40 {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        if t.template.send_body(url, "Message Four").await.is_ok() || result.received_counter() > 0
+        {
+            delivered = true;
+            break;
+        }
+    }
+    assert!(delivered, "the consumer should be started again");
+    result.assert_is_satisfied().await;
+}
+
+/// Port of `throttle.ThrottlingExceptionRoutePolicyKeepOpenOnInitTest`.
+#[tokio::test]
+async fn test_throttling_exception_route_policy_keep_open() {
+    use camel_core::support::throttling::ThrottlingExceptionRoutePolicy;
+    let url = "seda:foo?concurrentConsumers=20";
+    for close in [false, true] {
+        let policy = Arc::new(
+            ThrottlingExceptionRoutePolicy::new(2, 30, 100, Vec::new()).with_keep_open(true),
+        );
+        let p: SharedRoutePolicy = policy.clone();
+        let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+            r.add(
+                from(url)
+                    .route_policy(p.clone())
+                    .log("${body}")
+                    .to("log:foo?groupSize=10")
+                    .to("mock:result"),
+            );
+        })
+        .await;
+        // the consumer is stopped on another task when the route starts
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        for i in 0..5 {
+            t.template
+                .send_body(url, format!("Message {i}"))
+                .await
+                .unwrap();
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        let result = t.mock("mock:result");
+        assert_eq!(0, result.received_counter());
+        if close {
+            policy.set_keep_open(false);
+            result.expected_message_count(5);
+            result.set_result_wait_time(1500);
+            result.assert_is_satisfied().await;
+        }
     }
 }

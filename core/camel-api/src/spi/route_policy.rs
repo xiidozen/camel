@@ -4,7 +4,7 @@
 
 use crate::context::CamelContext;
 use crate::exchange::Exchange;
-use crate::route::Route;
+use crate::route::SharedRoute;
 use camel_util::value::{ObjectRef, Value};
 use std::sync::Arc;
 
@@ -12,42 +12,42 @@ use std::sync::Arc;
 /// `RoutePolicySupport`).
 pub trait RoutePolicy: Send + Sync {
     /// The route is added to the context.
-    fn on_init(&self, route: &dyn Route) {
+    fn on_init(&self, route: &SharedRoute) {
         let _ = route;
     }
 
     /// The route is removed from the context.
-    fn on_remove(&self, route: &dyn Route) {
+    fn on_remove(&self, route: &SharedRoute) {
         let _ = route;
     }
 
     /// The route is started.
-    fn on_start(&self, route: &dyn Route) {
+    fn on_start(&self, route: &SharedRoute) {
         let _ = route;
     }
 
     /// The route is stopped.
-    fn on_stop(&self, route: &dyn Route) {
+    fn on_stop(&self, route: &SharedRoute) {
         let _ = route;
     }
 
     /// The route is suspended.
-    fn on_suspend(&self, route: &dyn Route) {
+    fn on_suspend(&self, route: &SharedRoute) {
         let _ = route;
     }
 
     /// The route is resumed.
-    fn on_resume(&self, route: &dyn Route) {
+    fn on_resume(&self, route: &SharedRoute) {
         let _ = route;
     }
 
     /// An exchange enters the route.
-    fn on_exchange_begin(&self, route: &dyn Route, exchange: &mut Exchange) {
+    fn on_exchange_begin(&self, route: &SharedRoute, exchange: &mut Exchange) {
         let _ = (route, exchange);
     }
 
     /// An exchange is done with the route (completed or failed).
-    fn on_exchange_done(&self, route: &dyn Route, exchange: &Exchange) {
+    fn on_exchange_done(&self, route: &SharedRoute, exchange: &Exchange) {
         let _ = (route, exchange);
     }
 

@@ -3658,14 +3658,14 @@ async fn test_poll_strategy_rollback() {
 /// Port of `FileConsumerSuspendTest`: a route policy stops the consumer after the first file.
 #[tokio::test]
 async fn test_consumer_suspend() {
-    use camel_core::api::route::Route;
+    use camel_core::api::route::SharedRoute;
     use camel_core::api::spi::route_policy::{RoutePolicy, SharedRoutePolicy};
     #[derive(Default)]
     struct MyPolicy {
         counter: std::sync::atomic::AtomicUsize,
     }
     impl RoutePolicy for MyPolicy {
-        fn on_exchange_done(&self, route: &dyn Route, _: &Exchange) {
+        fn on_exchange_done(&self, route: &SharedRoute, _: &Exchange) {
             if self
                 .counter
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst)

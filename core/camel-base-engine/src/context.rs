@@ -551,8 +551,9 @@ impl DefaultCamelContext {
                 if let Some(i) = self.inflight_repository() {
                     i.remove_route(id);
                 }
+                let shared: camel_api::route::SharedRoute = route.clone();
                 for p in route.route_policies() {
-                    p.on_remove(route.as_ref());
+                    p.on_remove(&shared);
                 }
                 if self.announced_routes.lock().unwrap().remove(id) {
                     self.notify(CamelEvent::RouteRemoved(id));
