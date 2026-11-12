@@ -340,12 +340,9 @@ pub fn generated_file_name(exchange: &Exchange) -> String {
 /// The bytes of the text in the charset (UTF-8 by default, ISO-8859-1/US-ASCII as one byte per
 /// character).
 fn encode(text: &str, charset: Option<&str>) -> Vec<u8> {
-    match charset.map(|c| c.to_ascii_uppercase()) {
-        Some(c) if c == "ISO-8859-1" || c == "LATIN1" || c == "US-ASCII" => text
-            .chars()
-            .map(|ch| if (ch as u32) < 256 { ch as u8 } else { b'?' })
-            .collect(),
-        _ => text.as_bytes().to_vec(),
+    match charset.and_then(|c| camel_util::charset::Charset::for_name(c).ok()) {
+        Some(cs) => cs.encode(text),
+        None => text.as_bytes().to_vec(),
     }
 }
 

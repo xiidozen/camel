@@ -422,6 +422,7 @@ impl Processor for SetExchangePatternProcessor {
 pub struct ConvertBodyProcessor {
     type_name: String,
     mandatory: bool,
+    charset: Option<camel_util::charset::Charset>,
 }
 
 impl ConvertBodyProcessor {
@@ -435,7 +436,36 @@ impl ConvertBodyProcessor {
         Ok(ConvertBodyProcessor {
             type_name: type_name.to_string(),
             mandatory,
+            charset: None,
         })
+    }
+
+    /// With the charset of the conversions between text and bytes (Java `charset`).
+    ///
+    /// # Errors
+    ///
+    /// An unsupported charset (Java `UnsupportedCharsetException`).
+    pub fn with_charset(mut self, charset: Option<&str>) -> CamelResult<Self> {
+        self.charset = match charset {
+            Some(c) => Some(
+                camel_util::charset::Charset::for_name(c)
+                    .map_err(|e| CamelError::illegal_argument(e.to_string()))?,
+            ),
+            None => None,
+        };
+        Ok(self)
+    }
+
+    /// The conversion between text and bytes in the charset, if it is one.
+    fn convert_charset(&self, body: &Value) -> Option<Value> {
+        let cs = self.charset?;
+        let to_bytes = matches!(self.type_name.as_str(), "byte[]" | "[B");
+        let to_text = matches!(self.type_name.as_str(), "String" | "java.lang.String");
+        match body {
+            Value::Text(t) if to_bytes => Some(Value::Bytes(cs.encode(t))),
+            Value::Bytes(b) if to_text => Some(Value::Text(cs.decode(b))),
+            _ => None,
+        }
     }
 }
 
@@ -443,6 +473,10 @@ impl Processor for ConvertBodyProcessor {
     fn process<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>> {
         let body = exchange.message().body().clone();
         if body.is_null() || exchange.exception().is_some() {
+            return Box::pin(std::future::ready(Ok(())));
+        }
+        if let Some(v) = self.convert_charset(&body) {
+            exchange.message_mut().set_body(v);
             return Box::pin(std::future::ready(Ok(())));
         }
         let converted = camel_support::type_conversion::convert_to_type(&body, &self.type_name);

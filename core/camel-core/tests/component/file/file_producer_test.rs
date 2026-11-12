@@ -1353,3 +1353,89 @@ async fn test_temp_prefix() {
         std::fs::read_to_string(files[0].path()).unwrap()
     );
 }
+
+/// Ports of `FileProducerCharsetUTFtoISOTest`, `FileProducerCharsetUTFtoISOConfiguredTest` and
+/// `FileProducerCharsetUTFtoUTFTest`: an UTF-8 file written in the charset of the producer.
+#[tokio::test]
+async fn test_producer_charset() {
+    let data = "ABC\u{e6}";
+    for (consumer, producer, expected) in [
+        ("", "&charset=iso-8859-1", vec![b'A', b'B', b'C', 0xe6]),
+        (
+            "&charset=utf-8",
+            "&charset=iso-8859-1",
+            vec![b'A', b'B', b'C', 0xe6],
+        ),
+        ("", "&charset=utf-8", data.as_bytes().to_vec()),
+    ] {
+        let dir = TestDirectory::new("FileProducerCharsetUTFtoISOTest");
+        let (from_uri, to_uri) = (
+            dir.file_uri(&format!(
+                "?initialDelay=0&delay=10&fileName=input.txt{consumer}"
+            )),
+            dir.file_uri(&format!("?fileName=output.txt{producer}")),
+        );
+        let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+            r.add(from(&from_uri).to(&to_uri).to("mock:result"));
+        })
+        .await;
+        let mock = t.mock("mock:result");
+        mock.expected_message_count(1);
+        std::fs::write(dir.test_file("input.txt"), data.as_bytes()).unwrap();
+        mock.assert_is_satisfied().await;
+        assert_eq!(
+            expected,
+            std::fs::read(dir.test_file("output.txt")).unwrap(),
+            "{consumer} {producer}"
+        );
+    }
+}
+
+/// Ports of `FileProducerCharsetUTFOptimizedTest` (the UTF-8 bytes copied as they are) and
+/// `FileProducerCharsetUTFtoISOConvertBodyToTest` (the body converted to ISO-8859-1 bytes).
+#[tokio::test]
+async fn test_producer_charset_optimized_and_convert_body_to() {
+    let utf = "ABC\u{e6}D\u{29e3d}E\u{1f3f3}".as_bytes().to_vec();
+    let dir = TestDirectory::new("FileProducerCharsetUTFOptimizedTest");
+    std::fs::create_dir_all(dir.test_file("input")).unwrap();
+    std::fs::write(dir.test_file("input/input.txt"), &utf).unwrap();
+    let (from_uri, to_uri) = (
+        dir.file_uri("input?initialDelay=0&delay=10&noop=true"),
+        dir.file_uri("?fileName=output.txt"),
+    );
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(from(&from_uri).to(&to_uri).to("mock:result"));
+    })
+    .await;
+    let mock = t.mock("mock:result");
+    mock.expected_message_count(1);
+    mock.assert_is_satisfied().await;
+    assert_eq!(utf, std::fs::read(dir.test_file("output.txt")).unwrap());
+
+    let dir = TestDirectory::new("FileProducerCharsetUTFtoISOConvertBodyToTest");
+    let (from_uri, to_uri) = (
+        dir.file_uri("?initialDelay=0&delay=10&fileName=input.txt&charset=utf-8"),
+        dir.file_uri("?fileName=output.txt"),
+    );
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(
+            from(&from_uri)
+                .convert_body_to_charset("byte[]", "iso-8859-1")
+                .set_property(
+                    camel_core::api::exchange_constants::CHARSET_NAME,
+                    header("someCharsetHeader"),
+                )
+                .to(&to_uri)
+                .to("mock:result"),
+        );
+    })
+    .await;
+    let mock = t.mock("mock:result");
+    mock.expected_message_count(1);
+    std::fs::write(dir.test_file("input.txt"), "ABC\u{e6}".as_bytes()).unwrap();
+    mock.assert_is_satisfied().await;
+    assert_eq!(
+        vec![b'A', b'B', b'C', 0xe6],
+        std::fs::read(dir.test_file("output.txt")).unwrap()
+    );
+}

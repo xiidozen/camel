@@ -993,6 +993,17 @@ pub trait Dsl: Sized {
         self.eip(Eip::ConvertBodyTo {
             type_name: type_name.to_string(),
             mandatory: true,
+            charset: None,
+        })
+    }
+
+    /// Converts the body to the Java type using the charset between text and bytes, such as
+    /// `byte[]` in `iso-8859-1` (Java `.convertBodyTo(type, charset)`).
+    fn convert_body_to_charset(self, type_name: &str, charset: &str) -> Self {
+        self.eip(Eip::ConvertBodyTo {
+            type_name: type_name.to_string(),
+            mandatory: true,
+            charset: Some(charset.to_string()),
         })
     }
 
@@ -1002,6 +1013,7 @@ pub trait Dsl: Sized {
         self.eip(Eip::ConvertBodyTo {
             type_name: type_name.to_string(),
             mandatory: false,
+            charset: None,
         })
     }
 

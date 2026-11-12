@@ -333,6 +333,11 @@ impl Component for FileComponent {
         let mut c = FileConfiguration::new(directory);
         c.file_name = param(parameters, "fileName")?;
         c.charset = param(parameters, "charset")?;
+        // an unknown charset fails (Java IOHelper.validateCharset)
+        if let Some(cs) = &c.charset {
+            camel_util::charset::Charset::for_name(cs)
+                .map_err(|e| CamelError::illegal_argument(e.to_string()))?;
+        }
         if let Some(v) = param(parameters, "autoCreate")? {
             c.auto_create = v;
         }

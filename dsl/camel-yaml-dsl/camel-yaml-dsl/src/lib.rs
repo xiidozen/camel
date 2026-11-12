@@ -496,7 +496,9 @@ fn step(
         }
         "convertBodyTo" => {
             let type_name = text(value).map_or_else(|| node.required("type", eip), Ok)?;
-            if node.bool("mandatory")? == Some(false) {
+            if let Some(charset) = node.text("charset") {
+                one(d.convert_body_to_charset(&type_name, &charset))
+            } else if node.bool("mandatory")? == Some(false) {
                 one(d.convert_body_to_optional(&type_name))
             } else {
                 one(d.convert_body_to(&type_name))

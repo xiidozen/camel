@@ -664,7 +664,11 @@ impl<'a> RouteReifier<'a> {
             Eip::ConvertBodyTo {
                 type_name,
                 mandatory,
-            } => Arc::new(ConvertBodyProcessor::new(type_name, *mandatory)?),
+                charset,
+            } => Arc::new(
+                ConvertBodyProcessor::new(type_name, *mandatory)?
+                    .with_charset(charset.as_deref())?,
+            ),
             Eip::SetHeaders(headers) => {
                 let mut list = Vec::new();
                 for (n, e) in headers {

@@ -150,12 +150,11 @@ fn list_files(
 fn read_body(path: &Path, charset: Option<&str>) -> CamelResult<Value> {
     let bytes = std::fs::read(path)
         .map_err(|e| operation_failed(format!("Cannot read file: {}: {e}", path.display())))?;
-    let latin = charset.is_some_and(|c| {
-        let c = c.to_ascii_uppercase();
-        c == "ISO-8859-1" || c == "LATIN1"
-    });
-    if latin {
-        return Ok(Value::Text(bytes.iter().map(|b| *b as char).collect()));
+    // a charset other than UTF-8 decodes the content (validated by the endpoint)
+    if let Some(cs) = charset.and_then(|c| camel_util::charset::Charset::for_name(c).ok()) {
+        if cs != camel_util::charset::Charset::Utf8 {
+            return Ok(Value::Text(cs.decode(&bytes)));
+        }
     }
     Ok(match String::from_utf8(bytes) {
         Ok(t) => Value::Text(t),

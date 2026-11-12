@@ -603,6 +603,8 @@ pub enum Eip {
         type_name: String,
         /// Whether a body that cannot be converted fails (default `true`).
         mandatory: bool,
+        /// The charset of a conversion between text and bytes (Java `charset`).
+        charset: Option<String>,
     },
     /// Calls a method of a bean (`bean`): by name in the registry or the bean itself; the
     /// result becomes the message body.
