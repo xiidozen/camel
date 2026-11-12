@@ -1318,3 +1318,238 @@ async fn test_absolute_path_issue() {
         .unwrap();
     mock.assert_is_satisfied().await;
 }
+
+/// Port of `FileConsumerIdempotentKeyHeaderMutationTest`: a route changing the file name
+/// header does not change the idempotent key released on failure.
+#[tokio::test]
+async fn test_idempotent_key_header_mutation() {
+    let dir = TestDirectory::new("FileConsumerIdempotentKeyHeaderMutationTest");
+    let uri = dir.file_uri(
+        "?idempotent=true&idempotentKey=${file:onlyname}-${file:size}&initialDelay=0&delay=10",
+    );
+    let attempts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        let attempts = attempts.clone();
+        r.add(
+            from(&uri)
+                .set_header(FILE_NAME, constant("output.txt"))
+                .process_fn(move |_| {
+                    if attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                        return Err(CamelError::illegal_argument(
+                            "Simulated failure on first attempt",
+                        ));
+                    }
+                    Ok(())
+                })
+                .to("mock:result"),
+        );
+    })
+    .await;
+    t.mock("mock:result")
+        .expected_bodies_received(["Hello World"]);
+    send(&t, &dir, "report.txt", "Hello World").await;
+    t.assert_mock_endpoints_satisfied().await;
+}
+
+/// Port of `FilePollEnrichNoWaitTest`.
+#[tokio::test]
+async fn test_file_poll_enrich_no_wait() {
+    let dir = TestDirectory::new("FilePollEnrichNoWaitTest");
+    dir.write("hello.txt", "Hello World");
+    let uri = dir.file_uri("?initialDelay=0&delay=10&move=done");
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(
+            from("timer:foo?delay=0&period=10")
+                .route_id("foo")
+                .log("Trigger timer foo")
+                .poll_enrich(&uri, 0)
+                .convert_body_to("String")
+                .filter(body().is_null(), |s| s.stop())
+                .log("Polled filed ${file:name}")
+                .to("mock:result"),
+        );
+    })
+    .await;
+    let mock = t.mock("mock:result");
+    mock.expected_bodies_received(["Hello World"]);
+    mock.expected_file_exists(dir.test_file("done/hello.txt"), None);
+    mock.set_result_wait_time(2000);
+    mock.assert_is_satisfied().await;
+    assert!(
+        !dir.test_file("hello.txt").exists(),
+        "File should have been moved"
+    );
+    t.context.stop().await.unwrap();
+}
+
+/// Port of `FileConsumerPreMoveIssueTest`.
+#[tokio::test]
+async fn test_pre_move_issue() {
+    let dir = TestDirectory::new("FileConsumerPreMoveIssueTest");
+    let uri = dir
+        .file_uri("?preMove=before/${file:name.noext}-moved.${file:ext}&initialDelay=0&delay=10");
+    let moved = dir.test_file("before/hello-moved.txt");
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        let moved = moved.clone();
+        r.add(
+            from(&uri)
+                .process_fn(move |_| {
+                    assert!(moved.exists(), "Pre move file should exist");
+                    Ok(())
+                })
+                .to("mock:result"),
+        );
+    })
+    .await;
+    t.mock("mock:result").expected_message_count(1);
+    send(&t, &dir, "hello.txt", "Hello World").await;
+    t.assert_mock_endpoints_satisfied().await;
+}
+
+/// Port of `FileRecursiveNoopTest`.
+#[tokio::test]
+async fn test_recursive_noop() {
+    let dir = TestDirectory::new("FileRecursiveNoopTest");
+    let uri = dir.file_uri("?initialDelay=0&delay=10&recursive=true&noop=true");
+    let t = ContextTestSupport::new();
+    t.context
+        .add_routes(move |r: &mut Routes| {
+            r.add(
+                from(&uri)
+                    .route_id("foo")
+                    .auto_startup(false)
+                    .convert_body_to("String")
+                    .to("mock:result"),
+            );
+        })
+        .await
+        .unwrap();
+    t.context.start().await.unwrap();
+    for (name, body) in [
+        ("a.txt", "a"),
+        ("b.txt", "b"),
+        ("foo/a.txt", "a2"),
+        ("bar/c.txt", "c"),
+        ("bar/b.txt", "b2"),
+    ] {
+        send(&t, &dir, name, body).await;
+    }
+    t.context.start_route("foo").await.unwrap();
+    let mock = t.mock("mock:result");
+    mock.expected_bodies_received_in_any_order(["a", "b", "a2", "c", "b2"]);
+    mock.assert_is_satisfied().await;
+    mock.reset();
+    mock.expected_bodies_received(["c2"]);
+    send(&t, &dir, "c.txt", "c2").await;
+    mock.assert_is_satisfied().await;
+}
+
+/// Port of `FileLanguageCBRTest`.
+#[tokio::test]
+async fn test_file_language_cbr() {
+    for (name, body, target) in [
+        ("hello.txt", "Hello World", "mock:txt"),
+        ("bye.dat", "Bye World", "mock:dat"),
+        ("hi.foo", "Hi World", "mock:other"),
+    ] {
+        let dir = TestDirectory::new("FileLanguageCBRTest");
+        let uri = dir.file_uri("?delete=true&initialDelay=0&delay=10");
+        let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+            r.add(from(&uri).convert_body_to("String").choice(|c| {
+                c.when(simple("${file:ext} == 'txt'"), |w| w.to("mock:txt"))
+                    .when(simple("${file:ext} == 'dat'"), |w| w.to("mock:dat"))
+                    .otherwise(|o| o.to("mock:other"))
+            }));
+        })
+        .await;
+        for m in ["mock:txt", "mock:dat", "mock:other"] {
+            t.mock(m).expected_message_count(i32::from(m == target));
+        }
+        send(&t, &dir, name, body).await;
+        t.assert_mock_endpoints_satisfied().await;
+    }
+}
+
+/// Port of `FromFilePollThirdTimeOkTest`.
+#[tokio::test]
+async fn test_poll_third_time_ok() {
+    let dir = TestDirectory::new("FromFilePollThirdTimeOkTest");
+    let uri = dir.file_uri("?delete=true&initialDelay=0&delay=10");
+    let counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (c, file) = (counter.clone(), dir.test_file("hello.txt"));
+    let t = ContextTestSupport::new();
+    t.context
+        .add_routes(move |r: &mut Routes| {
+            let (c, file) = (c.clone(), file.clone());
+            r.add(
+                from(&uri)
+                    .auto_startup(false)
+                    .route_id("FromFilePollThirdTimeOkTest")
+                    .process_fn(move |_| {
+                        if c.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1 < 3 {
+                            assert!(file.exists());
+                            return Err(CamelError::illegal_argument("Forced by unittest"));
+                        }
+                        Ok(())
+                    })
+                    .convert_body_to("String")
+                    .to("mock:result"),
+            );
+        })
+        .await
+        .unwrap();
+    t.context.start().await.unwrap();
+    let body = "Hello World this file will be deleted";
+    send(&t, &dir, "hello.txt", body).await;
+    t.context
+        .start_route("FromFilePollThirdTimeOkTest")
+        .await
+        .unwrap();
+    t.mock("mock:result").expected_bodies_received([body]);
+    t.assert_mock_endpoints_satisfied().await;
+    let f = dir.test_file("hello.txt");
+    support_wait(|| !f.exists()).await;
+    assert_eq!(3, counter.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(!f.exists());
+}
+
+/// Port of `FileAbsoluteAndRelativeConsumerTest`.
+#[tokio::test]
+async fn test_absolute_and_relative_consumer() {
+    use camel_core::api::exchange_constants::FILE_NAME_ONLY;
+    let dir = TestDirectory::new("FileAbsoluteAndRelativeConsumerTest");
+    let (relative, absolute) = (
+        dir.file_uri("filerelative?initialDelay=0&delay=10&recursive=true"),
+        format!(
+            "file://{}/fileabsolute?initialDelay=0&delay=10&recursive=true",
+            dir.path()
+        ),
+    );
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(
+            from(&relative)
+                .convert_body_to("String")
+                .to("mock:relative"),
+        );
+        r.add(
+            from(&absolute)
+                .convert_body_to("String")
+                .to("mock:absolute"),
+        );
+    })
+    .await;
+    for kind in ["relative", "absolute"] {
+        let mock = t.mock(&format!("mock:{kind}"));
+        mock.expected_message_count(1);
+        mock.message_matches(0, header(FILE_NAME).is_equal_to("test/hello.txt"));
+        mock.message_matches(0, header(FILE_NAME_ONLY).is_equal_to("hello.txt"));
+        send(
+            &t,
+            &dir,
+            &format!("file{kind}/test/hello.txt"),
+            "Hello World",
+        )
+        .await;
+    }
+    t.assert_mock_endpoints_satisfied().await;
+}
