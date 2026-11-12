@@ -1206,8 +1206,26 @@ pub trait Dsl: Sized {
         }
     }
 
-    /// The last step (split, multicast or recipient list) stops on the first failure (Java
-    /// `.stopOnException()`).
+    /// The last step (split, multicast, recipient list) prepares each copy with the processor
+    /// before it is sent (Java `.onPrepare(processor)`); a failure fails the copy.
+    fn on_prepare(mut self, processor: SharedProcessor) -> Self {
+        if let Some(o) = self.last_multicast_options() {
+            o.on_prepare = Some(ProcessRef::Processor(processor));
+        }
+        self
+    }
+
+    /// The last step (split, multicast, recipient list) prepares each copy with the processor
+    /// bean of the registry (Java `.onPrepare("#name")`).
+    fn on_prepare_ref(mut self, name: &str) -> Self {
+        if let Some(o) = self.last_multicast_options() {
+            o.on_prepare = Some(ProcessRef::Ref(name.to_string()));
+        }
+        self
+    }
+
+    /// The last step (split, multicast or recipient list) stops on the first failed copy
+    /// (Java `.stopOnException()`).
     fn stop_on_exception(mut self) -> Self {
         if let Some(o) = self.last_multicast_options() {
             o.stop_on_exception = true;

@@ -28,7 +28,7 @@ use std::time::Duration;
 
 /// The options of the processing of the copies (Java `MulticastDefinition` options shared by
 /// multicast, split and recipient list).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct MulticastConfig {
     /// Whether to stop on the first failed copy.
     pub stop_on_exception: bool,
@@ -39,6 +39,36 @@ pub struct MulticastConfig {
     pub streaming: bool,
     /// The total timeout of the parallel processing.
     pub timeout: Option<Duration>,
+    /// The processor preparing each copy before it is processed (Java `onPrepare`).
+    pub on_prepare: Option<SharedProcessor>,
+}
+
+impl std::fmt::Debug for MulticastConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MulticastConfig")
+            .field("stop_on_exception", &self.stop_on_exception)
+            .field("parallel_processing", &self.parallel_processing)
+            .field("streaming", &self.streaming)
+            .field("timeout", &self.timeout)
+            .field("on_prepare", &self.on_prepare.is_some())
+            .finish()
+    }
+}
+
+/// Prepares the copy (if an `onPrepare` processor is set), then processes it; a failure of
+/// the preparation fails the copy without processing it (Java `MulticastProcessor`).
+async fn prepare_and_process(
+    processor: &SharedProcessor,
+    sub: &mut Exchange,
+    on_prepare: Option<&SharedProcessor>,
+) {
+    if let Some(p) = on_prepare {
+        if let Err(e) = p.process(sub).await {
+            sub.set_exception(Some(e));
+            return;
+        }
+    }
+    process_and_capture(processor.as_ref(), sub).await;
 }
 
 /// How the results of the copies are aggregated.
@@ -116,7 +146,14 @@ pub(crate) async fn process_pairs(
     if config.parallel_processing && tokio::runtime::Handle::try_current().is_ok() {
         process_parallel(original, pairs, aggregation, config).await
     } else {
-        process_sequential(original, pairs, aggregation, config.stop_on_exception).await
+        process_sequential(
+            original,
+            pairs,
+            aggregation,
+            config.stop_on_exception,
+            config.on_prepare.as_ref(),
+        )
+        .await
     }
 }
 
@@ -131,16 +168,17 @@ fn stop_on_failure(original: &mut Exchange, sub: &Exchange, index: usize) {
 }
 
 /// Processes the copies in sequence (Java `MulticastProcessor` sequential processing and
-/// `doDone`).
+/// `doDone`), each prepared by the `onPrepare` processor if any.
 pub(crate) async fn process_sequential(
     original: &mut Exchange,
     pairs: Vec<(SharedProcessor, Exchange)>,
     aggregation: &Aggregation,
     stop_on_exception: bool,
+    on_prepare: Option<&SharedProcessor>,
 ) -> CamelResult<()> {
     let mut result: Option<Exchange> = None;
     for (index, (processor, mut sub)) in pairs.into_iter().enumerate() {
-        process_and_capture(processor.as_ref(), &mut sub).await;
+        prepare_and_process(&processor, &mut sub, on_prepare).await;
         let msg = format!("Multicast processing failed for number {index}");
         if !continue_processing(&sub, &msg) && stop_on_exception {
             stop_on_failure(original, &sub, index);
@@ -164,8 +202,9 @@ async fn process_parallel(
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(usize, Exchange)>();
     for (index, (processor, mut sub)) in pairs.into_iter().enumerate() {
         let tx = tx.clone();
+        let on_prepare = config.on_prepare.clone();
         tokio::spawn(async move {
-            process_and_capture(processor.as_ref(), &mut sub).await;
+            prepare_and_process(&processor, &mut sub, on_prepare.as_ref()).await;
             let _ = tx.send((index, sub));
         });
     }

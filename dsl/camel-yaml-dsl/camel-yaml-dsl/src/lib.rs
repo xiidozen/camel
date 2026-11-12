@@ -896,6 +896,9 @@ fn multicast_options(mut s: StepsDsl, node: &Node) -> CamelResult<StepsDsl> {
     if let Some(r) = node.text("aggregationStrategy") {
         s = s.aggregation_strategy_ref(&r);
     }
+    if let Some(r) = node.text("onPrepare") {
+        s = s.on_prepare_ref(r.trim_start_matches('#'));
+    }
     Ok(s)
 }
 

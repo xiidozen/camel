@@ -270,3 +270,143 @@ async fn test_splitter_throw_exception_from_expression() {
         .unwrap();
     t.assert_mock_endpoints_satisfied().await;
 }
+
+fn animal(id: i64, name: &str) -> Value {
+    let mut m = ValueMap::new();
+    m.insert("id".into(), Value::from(id));
+    m.insert("name".into(), Value::from(name));
+    Value::Map(m)
+}
+
+/// Port of `SplitterOnPrepareTest` (the Java `Animal` bean is a map).
+#[tokio::test]
+async fn test_splitter_on_prepare() {
+    let fix_name = Arc::new(camel_core::api::processor::processor_fn(
+        |e: &mut Exchange| {
+            assert_eq!(&animal(1, "Tiger"), e.message().body());
+            e.message_mut().set_body(animal(1, "Tony the Tiger"));
+            Ok(())
+        },
+    ));
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(
+            from("direct:start")
+                .split(body(), |s| s.to("direct:a"))
+                .on_prepare(fix_name.clone()),
+        );
+        r.add(
+            from("direct:a")
+                .process_fn(|e| {
+                    assert_eq!(&animal(1, "Tony the Tiger"), e.message().body());
+                    Ok(())
+                })
+                .to("mock:a"),
+        );
+    })
+    .await;
+    let a = t.mock("mock:a");
+    a.expected_message_count(2);
+    a.all_messages_match(body().is_equal_to(animal(1, "Tony the Tiger")));
+    t.template
+        .send_body(
+            "direct:start",
+            Value::List(vec![animal(1, "Tiger"), animal(1, "Tiger")]),
+        )
+        .await
+        .unwrap();
+    t.assert_mock_endpoints_satisfied().await;
+}
+
+/// Port of `SplitterOnPrepareExceptionTest`.
+#[tokio::test]
+async fn test_splitter_on_prepare_exception() {
+    let t = ContextTestSupport::with_routes(|r: &mut Routes| {
+        r.add(
+            from("direct:start")
+                .split(body().tokenize(","), |s| s.to("mock:a"))
+                .on_prepare(Arc::new(camel_core::api::processor::processor_fn(
+                    |e: &mut Exchange| {
+                        if matches!(e.message().body(), Value::Text(t) if t == "Kaboom") {
+                            return Err(CamelError::illegal_argument("Forced error"));
+                        }
+                        Ok(())
+                    },
+                )))
+                .stop_on_exception(),
+        );
+    })
+    .await;
+    t.mock("mock:a").expected_message_count(2);
+    assert!(t
+        .template
+        .send_body("direct:start", "Hello,Bye,Kaboom,Hi")
+        .await
+        .is_err());
+    t.assert_mock_endpoints_satisfied().await;
+}
+
+/// Port of `SplitterNoAggregationStrategyTest`.
+#[tokio::test]
+async fn test_split_no_aggregation_strategy() {
+    let t = ContextTestSupport::with_routes(|r: &mut Routes| {
+        r.add(
+            from("direct:start")
+                .split(body().tokenize(","), |s| {
+                    s.process_fn(kaboom).to("mock:split")
+                })
+                .to("mock:result"),
+        );
+    })
+    .await;
+    let split = t.mock("mock:split");
+    let result = t.mock("mock:result");
+    split.expected_bodies_received(["Hello World", "Bye World", "Hi World"]);
+    result.expected_bodies_received(["Hello World,Bye World,Hi World"]);
+    t.template
+        .send_body("direct:start", "Hello World,Bye World,Hi World")
+        .await
+        .unwrap();
+    t.assert_mock_endpoints_satisfied().await;
+    split.reset();
+    result.reset();
+    split.expected_bodies_received(["Hello World", "Bye World", "Hi World"]);
+    result.expected_message_count(0);
+    let e = t
+        .template
+        .send_body("direct:start", "Hello World,Kaboom,Bye World,Hi World")
+        .await
+        .unwrap_err();
+    assert_eq!(Some("Forced"), cause_of(&e).message());
+    t.assert_mock_endpoints_satisfied().await;
+}
+
+/// Port of `SplitterWithMulticastTest`.
+#[tokio::test]
+async fn test_splitter_with_multicast() {
+    let t = ContextTestSupport::with_routes(|r: &mut Routes| {
+        r.add(
+            from("direct:start")
+                .split(body().tokenize(","), |s| {
+                    s.multicast(|m| {
+                        m.set_header("foo", constant("ABC"))
+                            .set_header("bar", constant(123))
+                    })
+                    .to("log:split?showHeaders=true")
+                    .to("mock:split")
+                })
+                .to("log:result?showHeaders=true")
+                .to("mock:result"),
+        );
+    })
+    .await;
+    let result = t.mock("mock:result");
+    result.expected_bodies_received(["A,B,C"]);
+    result.all_messages_match(header("bar").is_null());
+    result.all_messages_match(header("foo").is_null());
+    let split = t.mock("mock:split");
+    split.expected_bodies_received(["A", "B", "C"]);
+    split.expected_header_received("bar", 123);
+    split.all_messages_match(header("foo").is_null());
+    t.template.send_body("direct:start", "A,B,C").await.unwrap();
+    t.assert_mock_endpoints_satisfied().await;
+}

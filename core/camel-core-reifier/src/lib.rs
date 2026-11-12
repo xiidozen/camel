@@ -510,7 +510,7 @@ impl<'a> RouteReifier<'a> {
                     self.expr(expression)?,
                     Arc::new(Pipeline::new(self.step_list(steps)?)),
                     strategy,
-                    multicast_config(options),
+                    multicast_config(self.context, options)?,
                 );
                 if let Some(d) = delimiter {
                     p = p.with_delimiter(d);
@@ -526,7 +526,7 @@ impl<'a> RouteReifier<'a> {
                 Arc::new(MulticastProcessor::new(
                     self.step_list(steps)?,
                     strategy,
-                    multicast_config(options),
+                    multicast_config(self.context, options)?,
                 ))
             }
             Eip::Delay(e) => Arc::new(DelayProcessor::new(self.expr(e)?)),
@@ -603,7 +603,7 @@ impl<'a> RouteReifier<'a> {
                 let mut p = RecipientListProcessor::new(
                     self.expr(expression)?,
                     strategy,
-                    multicast_config(options),
+                    multicast_config(self.context, options)?,
                     *ignore_invalid_endpoints,
                 );
                 if let Some(d) = delimiter {
@@ -1290,13 +1290,17 @@ pub fn resolve_aggregation(
 }
 
 /// The processing options of a multicast, split or recipient list.
-fn multicast_config(o: &MulticastOptions) -> MulticastConfig {
-    MulticastConfig {
+fn multicast_config(
+    context: &Arc<dyn CamelContext>,
+    o: &MulticastOptions,
+) -> CamelResult<MulticastConfig> {
+    Ok(MulticastConfig {
         stop_on_exception: o.stop_on_exception,
         parallel_processing: o.parallel_processing,
         streaming: o.streaming,
         timeout: o.timeout.filter(|t| *t > 0).map(Duration::from_millis),
-    }
+        on_prepare: optional_ref(context, &o.on_prepare)?,
+    })
 }
 
 /// The processor of an onCompletion (Java `OnCompletionReifier`).

@@ -383,7 +383,7 @@ impl AggregateDefinition {
 
 /// The options of the processing of the copies of multicast, split and recipient list (Java
 /// `MulticastDefinition`, `SplitDefinition` and `RecipientListDefinition` options).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default)]
 pub struct MulticastOptions {
     /// Whether to stop on the first failed copy (`stopOnException`).
     pub stop_on_exception: bool,
@@ -397,6 +397,8 @@ pub struct MulticastOptions {
     pub parallel_aggregate: bool,
     /// The total timeout in millis of the parallel processing (`timeout`).
     pub timeout: Option<u64>,
+    /// The processor preparing each copy before it is sent (`onPrepare`).
+    pub on_prepare: Option<ProcessRef>,
 }
 
 /// The onCompletion EIP (Java `OnCompletionDefinition`): steps routing a copy of the exchange
