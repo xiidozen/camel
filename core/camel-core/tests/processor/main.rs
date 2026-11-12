@@ -5,6 +5,7 @@
 mod support;
 
 mod aggregator;
+mod choice_misc_test;
 mod choice_no_otherwise_test;
 mod claim_check_test;
 mod converter;
