@@ -8,6 +8,7 @@ pub mod header_filter;
 pub mod idempotent_repository;
 pub mod language;
 pub mod log_listener;
+pub mod poll_strategy;
 pub mod properties;
 pub mod registry;
 pub mod simple_function;

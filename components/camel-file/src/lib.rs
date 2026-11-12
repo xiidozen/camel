@@ -605,6 +605,10 @@ impl Component for FileComponent {
             let _: Option<String> = param(parameters, name)?;
         }
         let filter = bean_option::<SharedFileFilter>(context, param(parameters, "filter")?)?;
+        let poll_strategy = bean_option::<camel_api::spi::poll_strategy::SharedPollStrategy>(
+            context,
+            param(parameters, "pollStrategy")?,
+        )?;
         let sorter = bean_option::<SharedFileSorter>(context, param(parameters, "sorter")?)?;
         Ok(Arc::new(FileEndpoint {
             uri: uri.to_string(),
@@ -613,6 +617,7 @@ impl Component for FileComponent {
             idempotent,
             filter,
             sorter,
+            poll_strategy,
             in_progress: std::sync::Mutex::new(std::collections::HashSet::new()),
         }))
     }
@@ -635,6 +640,7 @@ pub struct FileEndpoint {
     in_progress: std::sync::Mutex<std::collections::HashSet<String>>,
     filter: Option<SharedFileFilter>,
     sorter: Option<SharedFileSorter>,
+    poll_strategy: Option<camel_api::spi::poll_strategy::SharedPollStrategy>,
 }
 
 impl FileEndpoint {

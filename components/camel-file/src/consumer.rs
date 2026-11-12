@@ -8,6 +8,9 @@ use camel_api::error::{CamelError, CamelResult, ErrorKind};
 use camel_api::exchange::Exchange;
 use camel_api::processor::{BoxFuture, SharedProcessor};
 use camel_api::service::Service;
+use camel_api::spi::poll_strategy::{
+    DefaultPollingConsumerPollStrategy, PolledConsumer, SharedPollStrategy,
+};
 use camel_util::value::Value;
 use regex::{Regex, RegexBuilder};
 use std::path::{Path, PathBuf};
@@ -725,6 +728,65 @@ async fn sleep(state: &State, millis: u64) -> bool {
     !state.stopped.load(Ordering::SeqCst)
 }
 
+/// The consumer given to the poll strategy.
+struct PollHandle {
+    uri: String,
+    state: Arc<State>,
+}
+
+impl PolledConsumer for PollHandle {
+    fn endpoint_uri(&self) -> &str {
+        &self.uri
+    }
+
+    fn stop(&self) {
+        self.state.stopped.store(true, Ordering::SeqCst);
+        self.state.wake.notify_waiters();
+    }
+}
+
+/// One poll with the poll strategy (Java `ScheduledPollConsumer.doRun`): begin, poll, commit;
+/// a failure is rolled back and retried at once if the strategy says so.
+///
+/// # Errors
+///
+/// The failure of the poll the strategy does not retry.
+async fn poll_with_strategy(
+    endpoint: &Arc<FileEndpoint>,
+    processor: &SharedProcessor,
+    filters: &Filters,
+    state: &State,
+    handle: &PollHandle,
+    strategy: &SharedPollStrategy,
+) -> CamelResult<()> {
+    let mut retry_counter: i32 = -1;
+    loop {
+        let attempt = async {
+            if !strategy.begin(handle)? {
+                log::debug!("Cannot begin polling as pollStrategy returned false");
+                return Ok(());
+            }
+            retry_counter += 1;
+            let polled = poll(endpoint, processor, filters, state).await?;
+            strategy.commit(handle, polled);
+            Ok(())
+        }
+        .await;
+        match attempt {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                if state.stopped.load(Ordering::SeqCst) {
+                    return Ok(());
+                }
+                if !strategy.rollback(handle, retry_counter, &e)? {
+                    return Err(e);
+                }
+                log::debug!("Retrying attempt {retry_counter} to poll: {}", endpoint.uri);
+            }
+        }
+    }
+}
+
 async fn run(
     endpoint: Arc<FileEndpoint>,
     processor: SharedProcessor,
@@ -734,8 +796,16 @@ async fn run(
     if !sleep(&state, endpoint.config.initial_delay).await {
         return;
     }
+    let handle = PollHandle {
+        uri: endpoint.uri.clone(),
+        state: state.clone(),
+    };
+    let default_strategy: SharedPollStrategy = Arc::new(DefaultPollingConsumerPollStrategy);
+    let strategy = endpoint.poll_strategy.clone().unwrap_or(default_strategy);
     loop {
-        if let Err(e) = poll(&endpoint, &processor, &filters, &state).await {
+        if let Err(e) =
+            poll_with_strategy(&endpoint, &processor, &filters, &state, &handle, &strategy).await
+        {
             if endpoint.config.bridge_error_handler {
                 // the error to the error handler of the route (Java
                 // BridgeExceptionHandlerToErrorHandler)

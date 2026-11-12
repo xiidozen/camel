@@ -3450,3 +3450,207 @@ async fn test_directory_must_exist_bridge_error_handler() {
     t.assert_mock_endpoints_satisfied().await;
     t.context.stop().await.unwrap();
 }
+
+/// A poll strategy recording its events.
+struct RecordingPollStrategy {
+    events: std::sync::Mutex<String>,
+    begins: std::sync::atomic::AtomicUsize,
+    max_polled: std::sync::atomic::AtomicUsize,
+    /// What `begin` does on the first call: 0 ok, 1 fail, 2 not begin; 3 always fail.
+    first_begin: u8,
+    /// Whether the rollback stops the consumer (1), or fails (2).
+    rollback: u8,
+    cause: std::sync::Mutex<Option<String>>,
+}
+
+impl RecordingPollStrategy {
+    fn new(first_begin: u8, rollback: u8) -> std::sync::Arc<Self> {
+        std::sync::Arc::new(RecordingPollStrategy {
+            events: Default::default(),
+            begins: Default::default(),
+            max_polled: Default::default(),
+            first_begin,
+            rollback,
+            cause: Default::default(),
+        })
+    }
+
+    fn events(&self) -> String {
+        self.events.lock().unwrap().clone()
+    }
+}
+
+impl camel_core::api::spi::poll_strategy::PollingConsumerPollStrategy for RecordingPollStrategy {
+    fn begin(
+        &self,
+        _: &dyn camel_core::api::spi::poll_strategy::PolledConsumer,
+    ) -> CamelResult<bool> {
+        let first = self
+            .begins
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            == 0;
+        match self.first_begin {
+            1 | 3 if first || self.first_begin == 3 => {
+                Err(CamelError::illegal_argument("Damn I cannot do this"))
+            }
+            2 if first => {
+                self.events.lock().unwrap().push_str("begin");
+                Ok(false)
+            }
+            2 => {
+                self.events.lock().unwrap().push_str("begin");
+                Ok(true)
+            }
+            _ => Ok(true),
+        }
+    }
+
+    fn commit(&self, _: &dyn camel_core::api::spi::poll_strategy::PolledConsumer, polled: usize) {
+        self.max_polled
+            .fetch_max(polled, std::sync::atomic::Ordering::SeqCst);
+        self.events.lock().unwrap().push_str("commit");
+    }
+
+    fn rollback(
+        &self,
+        consumer: &dyn camel_core::api::spi::poll_strategy::PolledConsumer,
+        _: i32,
+        cause: &CamelError,
+    ) -> CamelResult<bool> {
+        self.events.lock().unwrap().push_str("rollback");
+        *self.cause.lock().unwrap() = Some(cause.to_string());
+        match self.rollback {
+            1 => consumer.stop(),
+            2 => return Err(cause.clone()),
+            _ => {}
+        }
+        Ok(false)
+    }
+}
+
+/// A file route with the poll strategy bound as `myPoll`.
+async fn with_poll_strategy(
+    dir: &TestDirectory,
+    option: &str,
+    strategy: std::sync::Arc<RecordingPollStrategy>,
+) -> ContextTestSupport {
+    let shared: camel_core::api::spi::poll_strategy::SharedPollStrategy = strategy;
+    let t = with_file_beans(vec![(
+        "myPoll",
+        camel_core::api::spi::poll_strategy::poll_strategy_value(shared),
+    )]);
+    let uri = dir.file_uri(&format!("?pollStrategy=#myPoll&{option}"));
+    t.context
+        .add_routes(move |r: &mut Routes| {
+            r.add(
+                from(&uri)
+                    .route_id("foo")
+                    .convert_body_to("String")
+                    .to("mock:result"),
+            );
+        })
+        .await
+        .unwrap();
+    t
+}
+
+/// Ports of `FileConsumerPollStrategyTest`, `FileConsumerPollStrategyNotBeginTest` and
+/// `FileConsumerPollStrategyPolledMessagesTest`.
+#[tokio::test]
+async fn test_poll_strategy() {
+    // the first poll fails: rollback, then commit
+    let dir = TestDirectory::new("FileConsumerPollStrategyTest");
+    let strategy = RecordingPollStrategy::new(1, 0);
+    let t = with_poll_strategy(&dir, "noop=true&initialDelay=0&delay=10", strategy.clone()).await;
+    send(&t, &dir, "hello.txt", "Hello World").await;
+    t.context.start().await.unwrap();
+    t.mock("mock:result").expected_message_count(1);
+    t.assert_mock_endpoints_satisfied().await;
+    support_wait(|| strategy.events().starts_with("rollbackcommit")).await;
+    t.context.stop().await.unwrap();
+
+    // the first poll does not begin
+    let dir = TestDirectory::new("FileConsumerPollStrategyNotBeginTest");
+    let strategy = RecordingPollStrategy::new(2, 0);
+    let t = with_poll_strategy(&dir, "noop=true&initialDelay=0&delay=10", strategy.clone()).await;
+    send(&t, &dir, "hello.txt", "Hello World").await;
+    t.context.start().await.unwrap();
+    t.mock("mock:result").expected_message_count(1);
+    t.assert_mock_endpoints_satisfied().await;
+    support_wait(|| strategy.events().starts_with("beginbegincommit")).await;
+    t.context.stop().await.unwrap();
+
+    // the polled messages
+    let dir = TestDirectory::new("FileConsumerPollStrategyPolledMessagesTest");
+    let strategy = RecordingPollStrategy::new(0, 0);
+    let t = with_poll_strategy(&dir, "initialDelay=0&delay=10", strategy.clone()).await;
+    send(&t, &dir, "hello.txt", "Hello World").await;
+    send(&t, &dir, "bye.txt", "Bye World").await;
+    t.context.start().await.unwrap();
+    t.mock("mock:result").expected_message_count(2);
+    t.assert_mock_endpoints_satisfied().await;
+    assert_eq!(
+        2,
+        strategy
+            .max_polled
+            .load(std::sync::atomic::Ordering::SeqCst)
+    );
+    t.context.stop().await.unwrap();
+}
+
+/// Ports of `FileConsumerPollStrategyStopOnRollbackTest`,
+/// `FileConsumerPollStrategyRollbackThrowExceptionTest` and
+/// `FileConsumerFileExpressionThrowExceptionTest`.
+#[tokio::test]
+async fn test_poll_strategy_rollback() {
+    // the rollback stops the consumer
+    let dir = TestDirectory::new("FileConsumerPollStrategyStopOnRollbackTest");
+    let strategy = RecordingPollStrategy::new(1, 1);
+    let t = with_poll_strategy(&dir, "initialDelay=100&delay=100", strategy.clone()).await;
+    send(&t, &dir, "hello.txt", "Hello World").await;
+    t.context.start().await.unwrap();
+    let mock = t.mock("mock:result");
+    mock.expected_message_count(0);
+    support_wait(|| strategy.events() == "rollback").await;
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    mock.assert_is_satisfied().await;
+    assert_eq!("rollback", strategy.events());
+    t.context.stop().await.unwrap();
+
+    // the rollback fails
+    let dir = TestDirectory::new("FileConsumerPollStrategyRollbackThrowExceptionTest");
+    let strategy = RecordingPollStrategy::new(3, 2);
+    let t = with_poll_strategy(&dir, "initialDelay=0&delay=10", strategy.clone()).await;
+    send(&t, &dir, "hello.txt", "Hello World").await;
+    t.context.start().await.unwrap();
+    support_wait(|| strategy.events().starts_with("rollback")).await;
+    t.context.stop().await.unwrap();
+
+    // the fileName expression fails
+    let dir = TestDirectory::new("FileConsumerFileExpressionThrowExceptionTest");
+    let strategy = RecordingPollStrategy::new(0, 0);
+    let shared: camel_core::api::spi::poll_strategy::SharedPollStrategy = strategy.clone();
+    let counter = camel_bean::MethodBean::new("MyGuidGenerator")
+        .method("next", |_| Err(CamelError::illegal_argument("Forced")))
+        .into_value();
+    let t = with_file_beans(vec![
+        (
+            "myPoll",
+            camel_core::api::spi::poll_strategy::poll_strategy_value(shared),
+        ),
+        ("counter", counter),
+    ]);
+    t.context.start().await.unwrap();
+    send(&t, &dir, "bean/123.txt", "Bye World").await;
+    let uri = dir.file_uri("bean?pollStrategy=#myPoll&initialDelay=0&delay=10&fileName=${bean:counter?method=next}.txt&delete=true");
+    t.context
+        .add_routes(move |r: &mut Routes| {
+            r.add(from(&uri).to("mock:result"));
+        })
+        .await
+        .unwrap();
+    support_wait(|| strategy.events().starts_with("rollback")).await;
+    let cause = strategy.cause.lock().unwrap().clone().unwrap_or_default();
+    assert!(cause.contains("Forced"), "{cause}");
+    t.context.stop().await.unwrap();
+}
