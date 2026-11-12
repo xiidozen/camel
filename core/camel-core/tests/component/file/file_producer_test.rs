@@ -616,3 +616,128 @@ async fn test_jail_starting_directory() {
         .unwrap();
     mock.assert_is_satisfied().await;
 }
+
+/// Port of `FileEagerDeleteTargetFileTest`.
+#[tokio::test]
+async fn test_eager_delete_target_file() {
+    let t = ContextTestSupport::new();
+    for eager in [
+        "&eagerDeleteTargetFile=true",
+        "&eagerDeleteTargetFile=false",
+        "",
+    ] {
+        let dir = TestDirectory::new("FileEagerDeleteTargetFileTest");
+        put(&t, &dir, "", "Hello World", "world.txt").await.unwrap();
+        put(
+            &t,
+            &dir,
+            &format!("?tempFileName=inprogress-${{file:name}}{eager}"),
+            "Bye World",
+            "world.txt",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            Some("Bye World".to_string()),
+            dir.read("world.txt"),
+            "{eager}"
+        );
+    }
+}
+
+/// Port of `FileProduceOverruleExpressionTest`.
+#[tokio::test]
+async fn test_overrule_expression() {
+    let dir = TestDirectory::new("FileProduceOverruleExpressionTest");
+    let uri = dir.file_uri("?fileName=copy-of-${file:name}");
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(from("direct:start").to(&uri).to("mock:result"));
+    })
+    .await;
+    let mock = t.mock("mock:result");
+    mock.expected_message_count(1);
+    mock.expected_header_received(FILE_NAME, "hello.txt");
+    mock.expected_file_exists(dir.test_file("copy-of-hello.txt"), Some("Hello World"));
+    t.template
+        .send_body_and_header("direct:start", "Hello World", FILE_NAME, "hello.txt")
+        .await
+        .unwrap();
+    mock.assert_is_satisfied().await;
+    mock.reset();
+    mock.expected_message_count(1);
+    mock.expected_header_received(FILE_NAME, "hello.txt");
+    mock.message_matches(0, header(OVERRULE_FILE_NAME).is_null());
+    mock.expected_file_exists(dir.test_file("copy-of-overruled.txt"), Some("Hello World"));
+    t.template
+        .send_body_and_headers(
+            "direct:start",
+            "Hello World",
+            vec![
+                (FILE_NAME.into(), "hello.txt".into()),
+                (OVERRULE_FILE_NAME.into(), "overruled.txt".into()),
+            ],
+        )
+        .await
+        .unwrap();
+    mock.assert_is_satisfied().await;
+}
+
+/// Port of `FileProducerAllowNullBodyFileAlreadyExistsTest`.
+#[tokio::test]
+async fn test_allow_null_body_file_already_exists() {
+    for (option, expected) in [("Append", "Hello world"), ("Override", "")] {
+        let dir = TestDirectory::new("FileProducerAllowNullBodyFileAlreadyExistsTest");
+        let uri = dir.file_uri(&format!("?allowNullBody=true&fileExist={option}"));
+        let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+            r.add(
+                from("direct:start")
+                    .set_header(FILE_NAME, constant("hello.txt"))
+                    .to(&uri)
+                    .to("mock:result"),
+            );
+        })
+        .await;
+        put(&t, &dir, "", "Hello world", "hello.txt").await.unwrap();
+        let mock = t.mock("mock:result");
+        mock.expected_message_count(1);
+        mock.expected_file_exists(dir.test_file("hello.txt"), Some(expected));
+        t.template
+            .send_body("direct:start", Value::Null)
+            .await
+            .unwrap();
+        mock.assert_is_satisfied().await;
+    }
+}
+
+/// Port of `DirectoryCreateIssueTest`.
+#[tokio::test]
+async fn test_directory_create_issue() {
+    let dir = TestDirectory::new("DirectoryCreateIssueTest");
+    let uri = dir.file_uri("a/b/c/d/e/f/g/h/?fileExist=Override&noop=true");
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        let mut all = from("seda:testFileCreatedAsDir");
+        for i in 0..10 {
+            r.add(
+                from(&format!("direct:file{i}"))
+                    .set_header(FILE_NAME, constant(format!("file{i}.txt")))
+                    .to(&uri)
+                    .to("mock:result"),
+            );
+            all = all.to(&format!("direct:file{i}"));
+        }
+        r.add(all);
+    })
+    .await;
+    let mock = t.mock("mock:result");
+    mock.expected_message_count(10);
+    t.template
+        .send_body("seda:testFileCreatedAsDir", "Contents of test file")
+        .await
+        .unwrap();
+    mock.assert_is_satisfied().await;
+    for i in 0..10 {
+        assert!(dir
+            .test_file(&format!("a/b/c/d/e/f/g/h/file{i}.txt"))
+            .is_file());
+    }
+}

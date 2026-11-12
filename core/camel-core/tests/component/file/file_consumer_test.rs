@@ -1553,3 +1553,65 @@ async fn test_absolute_and_relative_consumer() {
     }
     t.assert_mock_endpoints_satisfied().await;
 }
+
+/// Port of `FileConsumePollEnrichFileTest`.
+#[tokio::test]
+async fn test_consume_poll_enrich_file() {
+    let dir = TestDirectory::new("FileConsumePollEnrichFileTest");
+    let (enrich, data) = (
+        dir.file_uri("enrich?initialDelay=0&delay=10&move=.done"),
+        dir.file_uri("enrichdata?initialDelay=0&delay=10&move=.done"),
+    );
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(
+            from(&enrich)
+                .to("mock:start")
+                .poll_enrich(&data, 5000)
+                .to("mock:result"),
+        );
+    })
+    .await;
+    let start = t.mock("mock:start");
+    start.expected_bodies_received(["Start"]);
+    let mock = t.mock("mock:result");
+    mock.expected_bodies_received(["Big file"]);
+    mock.expected_file_exists(dir.test_file("enrich/.done/AAA.fin"), None);
+    mock.expected_file_exists(dir.test_file("enrichdata/.done/AAA.dat"), None);
+    send(&t, &dir, "enrich/AAA.fin", "Start").await;
+    support_wait(|| start.received_counter() >= 1).await;
+    send(&t, &dir, "enrichdata/AAA.dat", "Big file").await;
+    t.assert_mock_endpoints_satisfied().await;
+}
+
+/// Ports of `FileConsumerMoveFailureTest` and `FileConsumerMoveFailureOnCompletionTest`.
+#[tokio::test]
+async fn test_move_failure() {
+    for on_completion in [false, true] {
+        let dir = TestDirectory::new("FileConsumerMoveFailureTest");
+        let uri =
+            dir.file_uri("?initialDelay=0&delay=10&moveFailed=error/${file:name.noext}-error.txt");
+        let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+            let mut route = from(&uri);
+            if on_completion {
+                route = route.on_completion(|c| c.on_failure_only().to("mock:failed"));
+            }
+            r.add(
+                route
+                    .process_fn(kaboom)
+                    .convert_body_to("String")
+                    .to("mock:result"),
+            );
+        })
+        .await;
+        let mock = t.mock("mock:result");
+        mock.expected_bodies_received(["Hello World"]);
+        mock.expected_file_exists(dir.test_file(".camel/hello.txt"), Some("Hello World"));
+        mock.expected_file_exists(dir.test_file("error/bye-error.txt"), Some("Kaboom"));
+        if on_completion {
+            t.mock("mock:failed").expected_message_count(1);
+        }
+        send(&t, &dir, "hello.txt", "Hello World").await;
+        send(&t, &dir, "bye.txt", "Kaboom").await;
+        t.assert_mock_endpoints_satisfied().await;
+    }
+}

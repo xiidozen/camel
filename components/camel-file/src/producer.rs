@@ -31,24 +31,25 @@ impl FileProducer {
     }
 
     /// The path of the file to write (Java `createFileName`): the starting directory with the
-    /// name of the `CamelOverruleFileName` header, the `fileName` option, the `CamelFileName`
-    /// header, or the message id.
+    /// name of the `fileName` option or the `CamelFileName` header (replaced by the
+    /// `CamelOverruleFileName` header), or the message id.
     fn create_file_name(&self, exchange: &mut Exchange) -> CamelResult<String> {
         let c = &self.endpoint.config;
-        let overrule = exchange.message_mut().remove_header(OVERRULE_FILE_NAME);
-        let name = match overrule {
-            Some(v) if !v.is_null() => {
-                exchange.message_mut().set_header(FILE_NAME, v.clone());
-                Some(v.to_string())
+        // the overrule is the file name from now on, the fileName option evaluated with it
+        if let Some(v) = exchange.message_mut().remove_header(OVERRULE_FILE_NAME) {
+            if !v.is_null() {
+                exchange
+                    .message_mut()
+                    .set_header(FILE_NAME, Value::Text(v.to_string()));
             }
-            _ => match &c.file_name {
-                Some(expr) => self.evaluate(exchange, expr)?,
-                None => exchange
-                    .message()
-                    .header(FILE_NAME)
-                    .filter(|v| !v.is_null())
-                    .map(|v| v.to_string()),
-            },
+        }
+        let name = match &c.file_name {
+            Some(expr) => self.evaluate(exchange, expr)?,
+            None => exchange
+                .message()
+                .header(FILE_NAME)
+                .filter(|v| !v.is_null())
+                .map(|v| v.to_string()),
         };
         let name = name.map(|n| {
             if c.flatten {
