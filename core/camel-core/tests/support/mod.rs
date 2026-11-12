@@ -128,3 +128,68 @@ pub fn caught_is(kind: ErrorKind) -> Arc<dyn Predicate> {
         },
     ))
 }
+
+/// A directory of a test, removed when dropped (Java `testDirectory()`, `fileUri()`,
+/// `testFile()`).
+pub struct TestDirectory {
+    path: std::path::PathBuf,
+}
+
+impl TestDirectory {
+    /// A new empty directory named after the test.
+    pub fn new(name: &str) -> Self {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or_default();
+        let path = std::env::temp_dir().join(format!(
+            "camel-test-{name}-{}-{nanos}-{n}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&path).expect("the test directory");
+        TestDirectory { path }
+    }
+
+    /// The directory (with `/` separators).
+    pub fn path(&self) -> String {
+        self.path.to_string_lossy().replace('\\', "/")
+    }
+
+    /// The file uri of the directory with the path (and options) appended: `fileUri("a?noop=true")`.
+    pub fn file_uri(&self, path: &str) -> String {
+        if path.is_empty() {
+            format!("file:{}", self.path())
+        } else if path.starts_with('?') {
+            format!("file:{}{path}", self.path())
+        } else {
+            format!("file:{}/{path}", self.path())
+        }
+    }
+
+    /// The path of the file in the directory.
+    pub fn test_file(&self, name: &str) -> std::path::PathBuf {
+        self.path.join(name)
+    }
+
+    /// Writes the file (creating its directories).
+    pub fn write(&self, name: &str, content: &str) {
+        let f = self.test_file(name);
+        if let Some(p) = f.parent() {
+            std::fs::create_dir_all(p).unwrap();
+        }
+        std::fs::write(f, content).unwrap();
+    }
+
+    /// The content of the file, if it exists.
+    pub fn read(&self, name: &str) -> Option<String> {
+        std::fs::read_to_string(self.test_file(name)).ok()
+    }
+}
+
+impl Drop for TestDirectory {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}

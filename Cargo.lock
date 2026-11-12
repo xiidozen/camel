@@ -84,6 +84,7 @@ dependencies = [
  "camel-core-processor",
  "camel-core-reifier",
  "camel-direct",
+ "camel-file",
  "camel-log",
  "camel-mock",
  "camel-seda",
@@ -163,6 +164,18 @@ dependencies = [
  "camel-support",
  "camel-util",
  "log",
+ "tokio",
+]
+
+[[package]]
+name = "camel-file"
+version = "4.23.0"
+dependencies = [
+ "camel-api",
+ "camel-support",
+ "camel-util",
+ "log",
+ "regex",
  "tokio",
 ]
 

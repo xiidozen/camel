@@ -57,6 +57,7 @@ struct State {
     expected_property_values: Option<Vec<(String, Value)>>,
     expected_variable_values: Option<Vec<(String, Value)>>,
     tests: Vec<Task>,
+    expected_files: Vec<(std::path::PathBuf, Option<String>)>,
     failures: Vec<String>,
     processors: HashMap<usize, SharedProcessor>,
     default_processor: Option<SharedProcessor>,
@@ -85,6 +86,7 @@ impl State {
             expected_property_values: None,
             expected_variable_values: None,
             tests: Vec::new(),
+            expected_files: Vec::new(),
             failures: Vec::new(),
             processors: HashMap::new(),
             default_processor: None,
@@ -312,6 +314,14 @@ impl MockEndpoint {
         } else {
             Some(count as usize)
         };
+    }
+
+    /// Expects the file to exist (with the content, if given) when asserting, waiting for it
+    /// up to the result wait time (default 10 seconds) (Java `expectedFileExists`).
+    pub fn expected_file_exists(&self, path: impl AsRef<std::path::Path>, content: Option<&str>) {
+        self.state()
+            .expected_files
+            .push((path.as_ref().to_path_buf(), content.map(str::to_string)));
     }
 
     /// Expects at least the number of messages.
@@ -1007,6 +1017,37 @@ impl MockEndpoint {
         self.do_assert_is_satisfied(timeout_for_empty)
             .await
             .map_err(wrap)?;
+        let (files, wait) = {
+            let s = self.state();
+            (s.expected_files.clone(), s.result_wait_time)
+        };
+        for (path, content) in files {
+            let deadline = tokio::time::Instant::now()
+                + Duration::from_millis(if wait > 0 { wait } else { 10_000 });
+            loop {
+                let actual = std::fs::read(&path).ok();
+                let ok = match (&actual, &content) {
+                    (Some(_), None) => true,
+                    (Some(a), Some(c)) => a == c.as_bytes(),
+                    _ => false,
+                };
+                if ok {
+                    break;
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    return Err(wrap(match actual {
+                        None => format!("File {} should exist", path.display()),
+                        Some(a) => format!(
+                            "Content of file {} should be: {} but was: {}",
+                            path.display(),
+                            content.unwrap_or_default(),
+                            String::from_utf8_lossy(&a)
+                        ),
+                    }));
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }
         let period = self.state().assert_period;
         if period > 0 {
             tokio::time::sleep(Duration::from_millis(period)).await;

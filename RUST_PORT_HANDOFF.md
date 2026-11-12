@@ -144,7 +144,8 @@ Crates live **in the directory of the Maven module they replace** (`core/camel-a
   `context.set_message_history(true)` is set before the routes are added; dumped by
   `camel_support::message_helper::dump_message_history_stacktrace` (simple `${messageHistory}`, exhausted
   error logs).
-- **Next:** the file component (`components/camel-file`, 243 tests in `core/camel-core/.../component/file`): new
+- **Next:** continue the file component (`components/camel-file`, **in progress**, tests in
+  `core/camel-core/tests/component/file`, `TestDirectory` in the test support, mock `expected_file_exists`): the
   crate `camel-file` modelled on `camel-timer` (component, endpoint options, `GenericFile` headers `CamelFile*` the
   simple `${file:..}` functions read, producer: fileName header/option, fileExist Override/Append/Fail/Ignore/Move/
   TryRename, tempPrefix/tempFileName, autoCreate, flatten, jail; polling consumer: initialDelay/delay, noop, delete,

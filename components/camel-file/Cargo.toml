@@ -1,0 +1,16 @@
+[package]
+name = "camel-file"
+description = "Camel :: File — read and write files (port of components/camel-file)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+camel-api = { workspace = true }
+camel-util = { workspace = true }
+camel-support = { workspace = true }
+log = "0.4"
+regex = "1"
+tokio = { version = "1", features = ["rt", "sync", "time", "macros"] }

@@ -93,6 +93,10 @@ pub fn register_core_components(context: &DefaultCamelContext) {
         Arc::new(|| Arc::new(camel_timer::TimerComponent::new()) as SharedComponent),
     );
     context.register_component_factory(
+        "file",
+        Arc::new(|| Arc::new(camel_file::FileComponent::new()) as SharedComponent),
+    );
+    context.register_component_factory(
         "bean",
         Arc::new(|| Arc::new(camel_bean::BeanComponent::new()) as SharedComponent),
     );
