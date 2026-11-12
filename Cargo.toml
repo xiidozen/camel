@@ -17,6 +17,7 @@ members = [
     "components/camel-log",
     "components/camel-seda",
     "components/camel-bean",
+    "components/camel-timer",
 ]
 
 [workspace.package]
@@ -43,3 +44,4 @@ camel-mock = { path = "components/camel-mock" }
 camel-log = { path = "components/camel-log" }
 camel-seda = { path = "components/camel-seda" }
 camel-bean = { path = "components/camel-bean" }
+camel-timer = { path = "components/camel-timer" }

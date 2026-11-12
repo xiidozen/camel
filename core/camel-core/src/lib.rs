@@ -67,7 +67,8 @@ pub mod prelude {
     pub use camel_util::value::{Value, ValueMap};
 }
 
-/// Registers the factories of the core components (`direct`, `mock`, `log`, `seda`, `bean`) on
+/// Registers the factories of the core components (`direct`, `mock`, `log`, `seda`, `bean`,
+/// `timer`) on
 /// the context, so they are created on first use (Rust has no classpath scanning), and the
 /// bean processor factory of the bean EIP.
 pub fn register_core_components(context: &DefaultCamelContext) {
@@ -86,6 +87,10 @@ pub fn register_core_components(context: &DefaultCamelContext) {
     context.register_component_factory(
         "seda",
         Arc::new(|| Arc::new(camel_seda::SedaComponent::new()) as SharedComponent),
+    );
+    context.register_component_factory(
+        "timer",
+        Arc::new(|| Arc::new(camel_timer::TimerComponent::new()) as SharedComponent),
     );
     context.register_component_factory(
         "bean",

@@ -603,7 +603,7 @@ progress and what is still to do. Update it in the same commit as each port.
 | `components/camel-thrift` | 15 | 23 | todo | |
 | `components/camel-thymeleaf` | 4 | 24 | todo | |
 | `components/camel-tika` | 6 | 3 | todo | |
-| `components/camel-timer` | 4 | 0 | todo | |
+| `components/camel-timer` | 4 | 0 | wip | Rust crate `camel-timer` on a tokio task: period/delay (millis or duration text), repeatCount, fixedRate, negative delay, includeMetadata, time (default patterns), timerName, runLoggingLevel; graceful stop waits for the message in flight. Pending: `pattern`, context suspend, `exceptionHandler`. Tests: 14 camel-core timer tests (`tests/component/timer`). |
 | `components/camel-toon` | 1 | 1 | todo | |
 | `components/camel-tracing` | 63 | 27 | todo | |
 | `components/camel-twilio` | 8 | 3 | todo | |

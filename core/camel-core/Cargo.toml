@@ -22,6 +22,7 @@ camel-mock = { workspace = true }
 camel-log = { workspace = true }
 camel-seda = { workspace = true }
 camel-bean = { workspace = true }
+camel-timer = { workspace = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros"] }

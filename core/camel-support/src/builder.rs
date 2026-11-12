@@ -57,11 +57,17 @@ where
     })
 }
 
-/// The expression of the header (Java `ExpressionBuilder.headerExpression`), `header(name)`.
+/// The expression of the header (Java `ExpressionBuilder.headerExpression`), `header(name)`;
+/// a missing header falls back on the exchange property of the name, as Java.
 pub fn header_expression(name: &str) -> SharedExpression {
     let n = name.to_string();
     named_expression(format!("header({name})"), move |e| {
-        Ok(e.message().header(&n).cloned().unwrap_or_default())
+        // Java falls back on the exchange property of the name
+        Ok(e.message()
+            .header(&n)
+            .or_else(|| e.property(&n))
+            .cloned()
+            .unwrap_or_default())
     })
 }
 
