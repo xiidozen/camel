@@ -340,3 +340,164 @@ async fn test_exchange_property_is_the_same_instance() {
         .is_some_and(|s| Arc::ptr_eq(s, &stuff));
     assert!(same, "Should be same instance");
 }
+
+/// Port of `RecipientListMEPTest`.
+#[tokio::test]
+async fn test_recipient_list_mep() {
+    let t = ContextTestSupport::with_routes(|r: &mut Routes| {
+        r.add(
+            from("direct:start")
+                .recipient_list(constant("seda:foo?exchangePattern=InOut"))
+                .to("mock:result"),
+        );
+        r.add(
+            from("seda:foo")
+                .to("mock:foo")
+                .transform(constant("Bye World")),
+        );
+    })
+    .await;
+    for request in [false, true] {
+        let foo = t.mock("mock:foo");
+        let result = t.mock("mock:result");
+        foo.reset();
+        result.reset();
+        foo.expected_bodies_received(["Hello World", "Hello Again"]);
+        result.expected_bodies_received(["Bye World", "Bye World"]);
+        for body in ["Hello World", "Hello Again"] {
+            if request {
+                let out = t.template.request_body("direct:start", body).await.unwrap();
+                assert_eq!(Value::from("Bye World"), out);
+            } else {
+                t.template.send_body("direct:start", body).await.unwrap();
+            }
+        }
+        t.assert_mock_endpoints_satisfied().await;
+    }
+}
+
+/// Port of `RecipientListWithDelimiterTest`.
+#[tokio::test]
+async fn test_recipient_list_with_delimiter() {
+    let t = ContextTestSupport::with_routes(|r: &mut Routes| {
+        r.add(
+            from("direct:a")
+                .recipient_list(header("myHeader"))
+                .uri_delimiter("#"),
+        );
+        r.add(
+            from("direct:b")
+                .recipient_list(header("myHeader"))
+                .uri_delimiter("false"),
+        );
+        r.add(from("direct:c").recipient_list(header("myHeader").tokenize("#")));
+    })
+    .await;
+    for uri in ["direct:a", "direct:c"] {
+        for m in ["mock:x", "mock:y", "mock:z"] {
+            let mock = t.mock(m);
+            mock.reset();
+            mock.expected_bodies_received(["answer"]);
+        }
+        t.template
+            .send_body_and_header(uri, "answer", "myHeader", "mock:x#mock:y#mock:z")
+            .await
+            .unwrap();
+        t.assert_mock_endpoints_satisfied().await;
+    }
+    let m = t.mock("mock:falseDelimiterTest");
+    m.expected_bodies_received(["answer"]);
+    t.template
+        .send_body_and_header("direct:b", "answer", "myHeader", "mock:falseDelimiterTest")
+        .await
+        .unwrap();
+    m.assert_is_satisfied().await;
+}
+
+/// Port of `RecipientListOnPrepareTest` (the Java `Animal` is a map, and each copy has its
+/// own body in Rust, which the Java deep clone `onPrepare` gives).
+#[tokio::test]
+async fn test_recipient_list_on_prepare() {
+    fn animal(name: &str) -> Value {
+        let mut m = ValueMap::new();
+        m.insert("id".into(), Value::from(1));
+        m.insert("name".into(), Value::from(name));
+        Value::Map(m)
+    }
+    let t = ContextTestSupport::with_routes(|r: &mut Routes| {
+        r.add(
+            from("direct:start")
+                .recipient_list(header("foo"))
+                .on_prepare(Arc::new(processor_fn(|e: &mut Exchange| {
+                    let copy = e.message().body().clone();
+                    e.message_mut().set_body(copy);
+                    Ok(())
+                }))),
+        );
+        r.add(
+            from("direct:a")
+                .process_fn(|e| {
+                    assert_eq!(&animal("Tiger"), e.message().body());
+                    e.message_mut().set_body(animal("Tony the Tiger"));
+                    Ok(())
+                })
+                .to("mock:a"),
+        );
+        r.add(
+            from("direct:b")
+                .process_fn(|e| {
+                    assert_eq!(&animal("Tiger"), e.message().body());
+                    Ok(())
+                })
+                .to("mock:b"),
+        );
+    })
+    .await;
+    t.mock("mock:a").expected_message_count(1);
+    t.mock("mock:a")
+        .message_matches(0, body().is_equal_to(animal("Tony the Tiger")));
+    t.mock("mock:b").expected_message_count(1);
+    t.mock("mock:b")
+        .message_matches(0, body().is_equal_to(animal("Tiger")));
+    t.template
+        .send_body_and_header("direct:start", animal("Tiger"), "foo", "direct:a,direct:b")
+        .await
+        .unwrap();
+    t.assert_mock_endpoints_satisfied().await;
+}
+
+/// Port of `RecipientListParallelStopOnExceptionWithOnExceptionTest`.
+#[tokio::test]
+async fn test_parallel_stop_on_exception_with_on_exception() {
+    let t = ContextTestSupport::with_routes(|r: &mut Routes| {
+        r.on_exception(
+            on_exception(ErrorType::Any)
+                .handled(true)
+                .to("mock:handled")
+                .transform(simple("Damn ${exception.message}")),
+        );
+        r.add(
+            from("direct:start")
+                .recipient_list(header("foo"))
+                .stop_on_exception()
+                .parallel_processing()
+                .to("mock:result"),
+        );
+        abc_routes(r, "Forced");
+    })
+    .await;
+    t.mock("mock:result").expected_message_count(0);
+    t.mock("mock:b").expected_message_count(1);
+    let out = t
+        .template
+        .request_body_and_header(
+            "direct:start",
+            "Hello World",
+            "foo",
+            "direct:a,direct:b,direct:c",
+        )
+        .await
+        .unwrap();
+    assert_eq!(Value::from("Damn Forced"), out);
+    t.assert_mock_endpoints_satisfied().await;
+}

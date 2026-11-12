@@ -57,6 +57,20 @@ pub fn create_endpoint(
         path
     );
     let endpoint = component.create_endpoint(context, &uri, &path, &mut parameters)?;
+    // the options of every endpoint (Java DefaultEndpoint): the exchange pattern is used by the
+    // processors sending to the endpoint (see endpoint_helper::resolve_exchange_pattern_from_url)
+    if let Some(p) = parameters.shift_remove("exchangePattern") {
+        let text = p.to_string();
+        text.parse::<camel_api::enums::ExchangePattern>()
+            .map_err(|_| {
+                CamelError::resolve_endpoint_failed(
+                    &uri,
+                    box_error(CamelError::illegal_argument(format!(
+                        "Invalid exchangePattern: {text}"
+                    ))),
+                )
+            })?;
+    }
     if !endpoint.is_lenient_properties() {
         validate_parameters(&uri, &parameters)?;
     }

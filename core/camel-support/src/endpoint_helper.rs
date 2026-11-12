@@ -195,6 +195,17 @@ pub fn match_endpoint(context: &dyn CamelContext, uri: &str, pattern: &str) -> C
         || do_match_endpoint(&normalized, pattern, true))
 }
 
+/// The exchange pattern of the `exchangePattern` option of the uri, if any (Java
+/// `EndpointHelper.resolveExchangePatternFromUrl`).
+pub fn resolve_exchange_pattern_from_url(uri: &str) -> Option<camel_api::enums::ExchangePattern> {
+    let query = uri.split_once('?')?.1;
+    query
+        .split('&')
+        .filter_map(|p| p.split_once('='))
+        .find(|(k, _)| *k == "exchangePattern")
+        .and_then(|(_, v)| v.parse().ok())
+}
+
 #[cfg(test)]
 mod tests {
     use super::remove_unresolved_optional;

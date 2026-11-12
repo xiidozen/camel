@@ -93,7 +93,12 @@ impl Processor for SendProcessor {
                 self.endpoint.endpoint_uri().to_string(),
             );
             let original = exchange.pattern();
-            if let Some(p) = self.pattern {
+            let pattern = self.pattern.or_else(|| {
+                camel_support::endpoint_helper::resolve_exchange_pattern_from_url(
+                    self.endpoint.endpoint_uri(),
+                )
+            });
+            if let Some(p) = pattern {
                 exchange.set_pattern(p);
             }
             let context = exchange.context().clone();

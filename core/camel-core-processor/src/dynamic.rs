@@ -101,6 +101,9 @@ impl ProducerCache {
 pub async fn send_to(target: &Target, pattern: Option<ExchangePattern>, exchange: &mut Exchange) {
     exchange.set_property(TO_ENDPOINT, target.uri.clone());
     let original = exchange.pattern();
+    // the exchangePattern option of the uri (Java ProducerCache)
+    let pattern = pattern
+        .or_else(|| camel_support::endpoint_helper::resolve_exchange_pattern_from_url(&target.uri));
     if let Some(p) = pattern {
         exchange.set_pattern(p);
     }
