@@ -707,3 +707,192 @@ async fn test_noop_and_include_name() {
     }
     mock.assert_is_satisfied().await;
 }
+
+/// One file route with the options, the files sent before starting it, the expected bodies
+/// in any order and the files expected to exist.
+async fn consume(
+    name: &str,
+    option: &str,
+    files: &[(&str, &str)],
+    bodies: &[&str],
+    exist: &[&str],
+) {
+    let dir = TestDirectory::new(name);
+    let uri = dir.file_uri(option);
+    let t = ContextTestSupport::new();
+    t.context
+        .add_routes(move |r: &mut Routes| {
+            r.add(
+                from(&uri)
+                    .route_id("foo")
+                    .auto_startup(false)
+                    .process_fn(kaboom)
+                    .convert_body_to("String")
+                    .to("mock:result"),
+            );
+        })
+        .await
+        .unwrap();
+    t.context.start().await.unwrap();
+    let mock = t.mock("mock:result");
+    mock.expected_bodies_received_in_any_order(bodies.iter().copied());
+    for f in exist {
+        mock.expected_file_exists(dir.test_file(f), None);
+    }
+    for (file, body) in files {
+        send(&t, &dir, file, body).await;
+    }
+    t.context.start_route("foo").await.unwrap();
+    mock.assert_is_satisfied().await;
+}
+
+/// Ports of `FileConsumerAbsolutePathDefaultMoveTest`, `FileConsumerMoveAndMoveFailureTest`,
+/// `FileConsumerIncludeAndExcludeNameTest`, `FileConsumeHiddenFilesTest` and
+/// `FileConsumeMoveRelativeNameTest`.
+#[tokio::test]
+async fn test_consume_options() {
+    consume(
+        "FileConsumerAbsolutePathDefaultMoveTest",
+        "?initialDelay=0&delay=10",
+        &[("paris.txt", "Hello Paris")],
+        &["Hello Paris"],
+        &[".camel/paris.txt"],
+    )
+    .await;
+    consume(
+        "FileConsumerMoveAndMoveFailureTest",
+        "?move=moved&initialDelay=0&delay=10&moveFailed=error/${file:name.noext}-error.txt",
+        &[("hello.txt", "Hello World"), ("bye.txt", "Kaboom")],
+        &["Hello World"],
+        &["moved/hello.txt", "error/bye-error.txt"],
+    )
+    .await;
+    consume(
+        "FileConsumerIncludeAndExcludeNameTest",
+        "?initialDelay=0&delay=10&include=report.*txt&exclude=hello.*",
+        &[
+            ("hello.txt", "Hello World"),
+            ("report1.xml", "Report 1"),
+            ("report2.txt", "Report 2"),
+            ("report3.txt", "Report 3"),
+            ("Report4.txt", "Report 4"),
+            ("Secret.txt", "Secret"),
+        ],
+        &["Report 2", "Report 3", "Report 4"],
+        &[],
+    )
+    .await;
+    consume(
+        "FileConsumeHiddenFilesTest",
+        "?initialDelay=0&delay=10&delete=true&includeHiddenFiles=true",
+        &[
+            ("report.txt", "Report 123"),
+            (".report.hidden", "Hidden report 123"),
+        ],
+        &["Report 123", "Hidden report 123"],
+        &[],
+    )
+    .await;
+    consume(
+        "FileConsumeMoveRelativeNameTest",
+        "?initialDelay=0&delay=10&recursive=true&move=.done/${file:name}.old",
+        &[
+            ("bye.txt", "Bye World"),
+            ("sub/hello.txt", "Hello World"),
+            ("sub/sub2/goodday.txt", "Goodday World"),
+        ],
+        &["Bye World", "Hello World", "Goodday World"],
+        &[
+            ".done/bye.txt.old",
+            ".done/sub/hello.txt.old",
+            ".done/sub/sub2/goodday.txt.old",
+        ],
+    )
+    .await;
+}
+
+/// Port of `FileConsumerBatchTest`.
+#[tokio::test]
+async fn test_consume_batch() {
+    use camel_core::api::exchange_constants::{BATCH_INDEX, BATCH_SIZE};
+    let dir = TestDirectory::new("FileConsumerBatchTest");
+    let uri = dir.file_uri("?initialDelay=0&delay=10");
+    let t = ContextTestSupport::new();
+    t.context
+        .add_routes(move |r: &mut Routes| {
+            r.add(
+                from(&uri)
+                    .route_id("foo")
+                    .auto_startup(false)
+                    .convert_body_to("String")
+                    .to("mock:result"),
+            );
+        })
+        .await
+        .unwrap();
+    t.context.start().await.unwrap();
+    let mock = t.mock("mock:result");
+    mock.expected_bodies_received_in_any_order(["Hello World", "Bye World"]);
+    mock.message_matches(0, exchange_property(BATCH_SIZE).is_equal_to(2));
+    mock.message_matches(0, exchange_property(BATCH_INDEX).is_equal_to(0));
+    mock.message_matches(1, exchange_property(BATCH_INDEX).is_equal_to(1));
+    send(&t, &dir, "hello.txt", "Hello World").await;
+    send(&t, &dir, "bye.txt", "Bye World").await;
+    t.context.start_route("foo").await.unwrap();
+    mock.assert_is_satisfied().await;
+}
+
+/// Port of `FilePollEnrichTest`.
+#[tokio::test]
+async fn test_file_poll_enrich() {
+    let dir = TestDirectory::new("FilePollEnrichTest");
+    let uri = dir.file_uri("?move=done");
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(
+            from("timer:foo?period=1000&delay=100")
+                .route_id("foo")
+                .log("Trigger timer foo")
+                .poll_enrich(&uri, 5000)
+                .convert_body_to("String")
+                .log("Polled filed ${file:name}")
+                .to("mock:result"),
+        );
+    })
+    .await;
+    let mock = t.mock("mock:result");
+    mock.expected_bodies_received(["Hello World"]);
+    mock.expected_file_exists(dir.test_file("done/hello.txt"), None);
+    send(&t, &dir, "hello.txt", "Hello World").await;
+    mock.assert_is_satisfied().await;
+    assert!(
+        !dir.test_file("hello.txt").exists(),
+        "File should have been moved"
+    );
+    t.context.stop().await.unwrap();
+}
+
+/// Port of `FileConsumerIdempotentOnExceptionHandledTest`: a handled failure moves the file.
+#[tokio::test]
+async fn test_idempotent_on_exception_handled() {
+    let dir = TestDirectory::new("FileConsumerIdempotentOnExceptionHandledTest");
+    let uri = dir.file_uri("?initialDelay=0&delay=10&idempotent=true");
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.on_exception(
+            on_exception(ErrorType::Any)
+                .handled(true)
+                .to("mock:invalid"),
+        );
+        r.add(
+            from(&uri)
+                .to("mock:input")
+                .throw_exception(CamelError::illegal_argument("Forced")),
+        );
+    })
+    .await;
+    let mock = t.mock("mock:invalid");
+    mock.expected_message_count(1);
+    mock.expected_file_exists(dir.test_file(".camel/hello.txt"), None);
+    send(&t, &dir, "hello.txt", "Hello World").await;
+    mock.assert_is_satisfied().await;
+    assert!(!dir.test_file("hello.txt").exists());
+}
