@@ -125,7 +125,10 @@ Crates live **in the directory of the Maven module they replace** (`core/camel-a
   custom executor, shutdown awareness. The seda producer hands the on completions over to
   the copy it queues (InOnly) and the seda consumer marks the exchange as from its route.
 - The error handler and `onException` support `use_original_message`/`use_original_body`.
-- **Next:** the rest of the simple functions, then camel-main and the YAML/XML DSLs.
+- **Next:** the intercept EIPs (`intercept`, `interceptFrom`, `interceptSendToEndpoint` as route
+  builder scoped definitions bound at reify time, see `design/cross-cutting-binding.adoc`), then
+  threads/resequence, the rest of the simple functions (init blocks, type/message/output), then
+  camel-main and the YAML/XML DSLs.
 - Java files still present in `core/camel-api/src/main/java` are the ones not ported yet.
 - Everything else in the repository: **not started** (status `todo` in the backlog).
 
