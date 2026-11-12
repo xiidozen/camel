@@ -116,16 +116,27 @@ impl Processor for RouteProcessor {
         } else {
             self.route.get().and_then(Weak::upgrade)
         };
-        let Some(route) = route else {
-            return self.processor.process(exchange);
-        };
         Box::pin(async move {
-            for p in &self.policies {
-                p.on_exchange_begin(route.as_ref(), exchange);
+            // the exchange is inflight in the route (Java RouteInflightRepositoryAdvice)
+            let inflight = camel_api::context::context_plugin::<
+                camel_api::spi::inflight::InflightRepository,
+            >(exchange.context().as_ref());
+            if let Some(i) = &inflight {
+                i.add_to_route(exchange, &self.route_id);
+            }
+            if let Some(route) = &route {
+                for p in &self.policies {
+                    p.on_exchange_begin(route.as_ref(), exchange);
+                }
             }
             let result = self.processor.process(exchange).await;
-            for p in &self.policies {
-                p.on_exchange_done(route.as_ref(), exchange);
+            if let Some(i) = &inflight {
+                i.remove_from_route(exchange, &self.route_id);
+            }
+            if let Some(route) = &route {
+                for p in &self.policies {
+                    p.on_exchange_done(route.as_ref(), exchange);
+                }
             }
             result
         })

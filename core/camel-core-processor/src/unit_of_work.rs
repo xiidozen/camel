@@ -43,6 +43,16 @@ impl Processor for UnitOfWorkProcessor {
     fn process<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>> {
         Box::pin(async move {
             let created = !exchange.has_unit_of_work();
+            let inflight = if created {
+                camel_api::context::context_plugin::<camel_api::spi::inflight::InflightRepository>(
+                    exchange.context().as_ref(),
+                )
+            } else {
+                None
+            };
+            if let Some(i) = &inflight {
+                i.add(exchange);
+            }
             if created {
                 exchange.begin_unit_of_work();
                 notify(
@@ -72,6 +82,9 @@ impl Processor for UnitOfWorkProcessor {
                     notify(context.as_ref(), CamelEvent::ExchangeCompleted(exchange));
                 }
                 exchange.end_unit_of_work();
+            }
+            if let Some(i) = &inflight {
+                i.remove(exchange);
             }
             Ok(())
         })

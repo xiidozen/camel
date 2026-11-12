@@ -16,6 +16,7 @@ mod delayer_test;
 mod enricher;
 mod filter_test;
 mod idempotent_consumer_test;
+mod inflight_repository_test;
 mod intercept;
 mod load_balancer_test;
 mod loop_misc_test;

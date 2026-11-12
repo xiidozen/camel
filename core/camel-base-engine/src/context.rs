@@ -427,6 +427,9 @@ impl DefaultCamelContext {
         }
         let route = Arc::new(DefaultRoute::new(id.clone(), custom, endpoint, spec));
         route.init();
+        if let Some(i) = self.inflight_repository() {
+            i.add_route(&id);
+        }
         {
             let mut services = self.route_policies.lock().unwrap();
             for p in route.route_policies() {
@@ -444,6 +447,12 @@ impl DefaultCamelContext {
             }
         }
         Ok(id)
+    }
+
+    /// The repository of the inflight exchanges (Java `getInflightRepository`), when the
+    /// context has the plugin (the camel-core contexts do).
+    pub fn inflight_repository(&self) -> Option<Arc<camel_api::spi::inflight::InflightRepository>> {
+        camel_api::context::context_plugin::<camel_api::spi::inflight::InflightRepository>(self)
     }
 
     /// Adds a factory creating the policies of the routes added from now on (Java
@@ -533,6 +542,9 @@ impl DefaultCamelContext {
             Some(i) if !routes[i].status().is_started() && !routes[i].status().is_suspended() => {
                 let route = routes.remove(i);
                 drop(routes);
+                if let Some(i) = self.inflight_repository() {
+                    i.remove_route(id);
+                }
                 for p in route.route_policies() {
                     p.on_remove(route.as_ref());
                 }

@@ -6,6 +6,7 @@ pub mod event;
 pub mod exchange_formatter;
 pub mod header_filter;
 pub mod idempotent_repository;
+pub mod inflight;
 pub mod language;
 pub mod log_listener;
 pub mod poll_strategy;

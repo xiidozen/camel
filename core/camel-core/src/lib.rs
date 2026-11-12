@@ -100,6 +100,8 @@ pub fn register_core_components(context: &DefaultCamelContext) {
         "bean",
         Arc::new(|| Arc::new(camel_bean::BeanComponent::new()) as SharedComponent),
     );
+    // the repository of the inflight exchanges
+    context.add_plugin(camel_api::spi::inflight::InflightRepository::default());
     // the configuration of the message history
     context.add_plugin(camel_api::message_history::MessageHistoryFactory::default());
     // the custom functions of the simple language
