@@ -2461,3 +2461,143 @@ async fn test_consume_current_dir() {
         t.context.stop().await.unwrap();
     }
 }
+
+/// Port of `FileConsumerCommitRenameStrategyTest`: the move replaces an existing file.
+#[tokio::test]
+async fn test_commit_rename_strategy() {
+    for existing in [false, true] {
+        let dir = TestDirectory::new("FileConsumerCommitRenameStrategyTest");
+        if existing {
+            dir.write("done/paris.txt", "I was there once in Paris");
+        }
+        let uri = dir.file_uri("reports?move=../done/${file:name}&initialDelay=0&delay=10");
+        let t = ContextTestSupport::new();
+        t.context
+            .add_routes(move |r: &mut Routes| {
+                r.add(
+                    from(&uri)
+                        .route_id("foo")
+                        .auto_startup(false)
+                        .convert_body_to("String")
+                        .to("mock:report"),
+                );
+            })
+            .await
+            .unwrap();
+        t.context.start().await.unwrap();
+        let mock = t.mock("mock:report");
+        mock.expected_bodies_received(["Hello Paris"]);
+        mock.expected_file_exists(dir.test_file("done/paris.txt"), Some("Hello Paris"));
+        send(&t, &dir, "reports/paris.txt", "Hello Paris").await;
+        t.context.start_route("foo").await.unwrap();
+        mock.assert_is_satisfied().await;
+    }
+}
+
+/// Port of `FileConsumePollEnrichFileUsingProcessorTest`: a processor receives the data file
+/// of the consumed file with a consumer template.
+#[tokio::test]
+async fn test_poll_enrich_file_using_processor() {
+    let dir = TestDirectory::new("FileConsumePollEnrichFileUsingProcessorTest");
+    let t = ContextTestSupport::new();
+    let consumer = std::sync::Arc::new(t.context.create_consumer_template());
+    let producer = std::sync::Arc::new(t.context.create_producer_template());
+    let (enrich, data_dir) = (
+        dir.file_uri("enrich?initialDelay=0&delay=10&move=.done"),
+        dir.file_uri("enrichdata"),
+    );
+    t.context
+        .add_routes(move |r: &mut Routes| {
+            let (consumer, producer, data_dir) =
+                (consumer.clone(), producer.clone(), data_dir.clone());
+            let lookup: camel_core::api::processor::SharedProcessor = std::sync::Arc::new(
+                camel_core::api::processor::async_processor_fn(move |e: &mut Exchange| {
+                    let (consumer, producer, data_dir) =
+                        (consumer.clone(), producer.clone(), data_dir.clone());
+                    Box::pin(async move {
+                        let name = e
+                            .message()
+                            .header(camel_core::api::exchange_constants::FILE_NAME_ONLY)
+                            .map(|v| v.to_string())
+                            .unwrap_or_default();
+                        let name = format!("{}.dat", camel_core::util::file_util::strip_ext(&name));
+                        let uri = format!(
+                            "{data_dir}?initialDelay=0&delay=10&move=.done&fileName={name}"
+                        );
+                        match consumer.receive_timeout(&uri, 5000).await? {
+                            Some(data) => {
+                                producer.send("direct:data", data).await?;
+                                Ok(())
+                            }
+                            None => Err(CamelError::illegal_state(format!(
+                                "Cannot find the data file {name}"
+                            ))),
+                        }
+                    })
+                }),
+            );
+            r.add(from(&enrich).process(lookup).to("mock:start"));
+            r.add(from("direct:data").to("mock:result"));
+        })
+        .await
+        .unwrap();
+    t.context.start().await.unwrap();
+    t.mock("mock:start").expected_bodies_received(["Start"]);
+    let mock = t.mock("mock:result");
+    mock.expected_bodies_received(["Big file"]);
+    mock.expected_file_exists(dir.test_file("enrich/.done/AAA.fin"), None);
+    mock.expected_file_exists(dir.test_file("enrichdata/.done/AAA.dat"), None);
+    mock.expected_file_exists(dir.test_file("enrichdata/BBB.dat"), None);
+    send(&t, &dir, "enrichdata/AAA.dat", "Big file").await;
+    send(&t, &dir, "enrichdata/BBB.dat", "Other Big file").await;
+    send(&t, &dir, "enrich/AAA.fin", "Start").await;
+    t.assert_mock_endpoints_satisfied().await;
+}
+
+/// Port of `FileExclusiveReadNoneStrategyTest`: without read lock a file being written is
+/// read at once.
+#[tokio::test]
+async fn test_exclusive_read_none_strategy() {
+    let dir = TestDirectory::new("FileExclusiveReadNoneStrategyTest");
+    std::fs::create_dir_all(dir.test_file("slowfile")).unwrap();
+    let (uri, slow) = (
+        dir.file_uri(
+            "slowfile?noop=true&initialDelay=0&delay=10&readLock=none&readLockTimeout=500",
+        ),
+        dir.test_file("slowfile/hello.txt"),
+    );
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        let slow = slow.clone();
+        let writer: camel_core::api::processor::SharedProcessor = std::sync::Arc::new(
+            camel_core::api::processor::async_processor_fn(move |_: &mut Exchange| {
+                let slow = slow.clone();
+                Box::pin(async move {
+                    use std::io::Write;
+                    let mut f = std::fs::File::create(&slow).unwrap();
+                    f.write_all(b"Hello World").unwrap();
+                    for i in 0..3 {
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        f.write_all(format!("Line #{i}").as_bytes()).unwrap();
+                    }
+                    f.write_all(b"Bye World").unwrap();
+                    Ok(())
+                })
+            }),
+        );
+        r.add(from("seda:start").process(writer));
+        r.add(from(&uri).to("mock:result"));
+    })
+    .await;
+    let mock = t.mock("mock:result");
+    mock.expected_message_count(1);
+    t.template
+        .send_body("seda:start", "Create the slow file")
+        .await
+        .unwrap();
+    mock.assert_is_satisfied().await;
+    let body = mock.received_exchanges()[0].message().body().to_string();
+    assert!(
+        !body.ends_with("Bye World"),
+        "Should not wait and read the entire file: {body}"
+    );
+}

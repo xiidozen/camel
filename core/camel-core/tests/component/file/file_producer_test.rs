@@ -883,3 +883,91 @@ async fn test_bean_and_processor_to_file() {
         .unwrap();
     mock.assert_is_satisfied().await;
 }
+
+/// Port of `FileProduceOverruleTest`.
+#[tokio::test]
+async fn test_produce_overrule() {
+    let dir = TestDirectory::new("FileProduceOverruleTest");
+    let uri = dir.file_uri("");
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(from("direct:start").to(&uri).to("mock:result"));
+    })
+    .await;
+    let mock = t.mock("mock:result");
+    // no overrule
+    mock.expected_header_received(FILE_NAME, "hello.txt");
+    mock.expected_file_exists(dir.test_file("hello.txt"), Some("Hello World"));
+    t.template
+        .send_body_and_header("direct:start", "Hello World", FILE_NAME, "hello.txt")
+        .await
+        .unwrap();
+    mock.assert_is_satisfied().await;
+    // only the overrule
+    mock.reset();
+    mock.expected_message_count(1);
+    mock.message_matches(0, header(FILE_NAME).is_null());
+    mock.expected_file_exists(dir.test_file("overrule.txt"), Some("Hello World"));
+    t.template
+        .send_body_and_header(
+            "direct:start",
+            "Hello World",
+            OVERRULE_FILE_NAME,
+            "overrule.txt",
+        )
+        .await
+        .unwrap();
+    mock.assert_is_satisfied().await;
+    // both
+    mock.reset();
+    mock.expected_header_received(FILE_NAME, "hello.txt");
+    mock.message_matches(0, header(OVERRULE_FILE_NAME).is_null());
+    mock.expected_file_exists(dir.test_file("ruled.txt"), Some("Hello World"));
+    t.template
+        .send_body_and_headers(
+            "direct:start",
+            "Hello World",
+            vec![
+                (FILE_NAME.into(), "hello.txt".into()),
+                (OVERRULE_FILE_NAME.into(), "ruled.txt".into()),
+            ],
+        )
+        .await
+        .unwrap();
+    mock.assert_is_satisfied().await;
+}
+
+/// Port of `FileProducerAllowNullBodyTest`.
+#[tokio::test]
+async fn test_allow_null_body() {
+    let dir = TestDirectory::new("FileProducerAllowNullBodyTest");
+    let t = ContextTestSupport::new();
+    let allow = dir.file_uri("?allowNullBody=true&fileName=allowNullBody.txt");
+    t.template.send_body(&allow, Value::Null).await.unwrap();
+    let path = dir.test_file("allowNullBody.txt");
+    assert_eq!(0, std::fs::metadata(&path).unwrap().len());
+    // a null body truncates the file
+    t.template.send_body(&allow, "Hello").await.unwrap();
+    assert_ne!(0, std::fs::metadata(&path).unwrap().len());
+    t.template.send_body(&allow, Value::Null).await.unwrap();
+    assert_eq!(0, std::fs::metadata(&path).unwrap().len());
+    // not allowed
+    std::fs::remove_file(&path).unwrap();
+    let e = t
+        .template
+        .send_body(&dir.file_uri("?fileName=allowNullBody.txt"), Value::Null)
+        .await
+        .unwrap_err();
+    let cause = crate::support::cause_of(&e);
+    assert!(cause.is(ErrorKind::GenericFileOperationFailed), "{e}");
+    assert!(
+        cause
+            .message()
+            .unwrap_or_default()
+            .ends_with("allowNullBody.txt"),
+        "{e}"
+    );
+    assert!(
+        !path.exists(),
+        "allowNullBody set to false with null body should not create a new file"
+    );
+}
