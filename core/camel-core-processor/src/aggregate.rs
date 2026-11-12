@@ -60,6 +60,59 @@ impl AggregationStrategy for UseLatestAggregationStrategy {
     }
 }
 
+/// Keeps the input exchange of the EIP (Java `UseOriginalAggregationStrategy`, the
+/// `AggregationStrategies.useOriginal()` of multicast and recipient list): the result is the
+/// original message, with the failure of a copy propagated if asked.
+#[derive(Debug, Clone, Copy)]
+pub struct UseOriginalAggregationStrategy {
+    propagate_exception: bool,
+}
+
+impl UseOriginalAggregationStrategy {
+    /// The strategy, propagating the failures of the copies or not.
+    pub fn new(propagate_exception: bool) -> Self {
+        UseOriginalAggregationStrategy {
+            propagate_exception,
+        }
+    }
+}
+
+impl Default for UseOriginalAggregationStrategy {
+    fn default() -> Self {
+        Self::new(true)
+    }
+}
+
+impl AggregationStrategy for UseOriginalAggregationStrategy {
+    fn aggregate(
+        &self,
+        old_exchange: Option<Exchange>,
+        new_exchange: Option<Exchange>,
+    ) -> CamelResult<Option<Exchange>> {
+        Ok(old_exchange.or(new_exchange))
+    }
+
+    fn aggregate_with_input(
+        &self,
+        old_exchange: Option<Exchange>,
+        new_exchange: Option<Exchange>,
+        input_exchange: &Exchange,
+    ) -> CamelResult<Option<Exchange>> {
+        let mut result = old_exchange.unwrap_or_else(|| input_exchange.clone());
+        if self.propagate_exception {
+            if let Some(new) = &new_exchange {
+                if let Some(e) = new.exception() {
+                    result.set_exception(Some(e.clone()));
+                }
+                if let Some(c) = new.property(camel_api::exchange_constants::EXCEPTION_CAUGHT) {
+                    result.set_property(camel_api::exchange_constants::EXCEPTION_CAUGHT, c.clone());
+                }
+            }
+        }
+        Ok(Some(result))
+    }
+}
+
 /// Keeps the first exchange (Java `UseOriginalAggregationStrategy` without original).
 #[derive(Debug, Default, Clone, Copy)]
 pub struct UseFirstAggregationStrategy;
