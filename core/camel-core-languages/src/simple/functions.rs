@@ -230,6 +230,9 @@ fn do_create(function: &str, index: usize) -> ParseResult<SharedExpression> {
     if let Some(e) = direct_function(function) {
         return Ok(e);
     }
+    if let Some(r) = if_starts_with_return_remainder("function(", function) {
+        return super::init_block::function_call(r, index);
+    }
     if let Some(e) = super::bean_functions::bean_function(function, index)? {
         return Ok(e);
     }

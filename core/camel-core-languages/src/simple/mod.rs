@@ -9,6 +9,7 @@ pub mod date_functions;
 pub mod expression_parser;
 pub mod file_functions;
 pub mod functions;
+pub mod init_block;
 pub mod language;
 pub mod math_functions;
 pub mod misc_functions;

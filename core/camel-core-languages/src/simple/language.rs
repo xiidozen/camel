@@ -2,6 +2,7 @@
 
 use super::expression_parser::SimpleExpressionParser;
 use super::illegal_syntax;
+use super::init_block;
 use super::predicate_parser::SimplePredicateParser;
 use camel_api::error::CamelResult;
 use camel_api::processor::{SharedExpression, SharedPredicate};
@@ -54,6 +55,9 @@ impl SimpleLanguage {
     ///
     /// Returns a `SimpleIllegalSyntaxException` for an invalid expression.
     pub fn parse_expression(&self, expression: &str) -> CamelResult<SharedExpression> {
+        if init_block::has_init_block(expression) {
+            return init_block::parse_expression(expression, self.allow_escape);
+        }
         SimpleExpressionParser::new(expression, self.allow_escape)
             .parse_expression()
             .map_err(|e| illegal_syntax(expression, &e))
@@ -65,6 +69,9 @@ impl SimpleLanguage {
     ///
     /// Returns a `SimpleIllegalSyntaxException` for an invalid predicate.
     pub fn parse_predicate(&self, expression: &str) -> CamelResult<SharedPredicate> {
+        if init_block::has_init_block(expression) {
+            return init_block::parse_predicate(expression, self.allow_escape);
+        }
         SimplePredicateParser::new(expression, self.allow_escape)
             .parse_predicate()
             .map_err(|e| illegal_syntax(expression, &e))
