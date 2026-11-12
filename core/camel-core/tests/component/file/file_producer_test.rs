@@ -1204,3 +1204,122 @@ async fn test_file_to_file_with_flatten() {
         t.context.stop().await.unwrap();
     }
 }
+
+/// Port of `FileKeepLastModifiedTest`.
+#[tokio::test]
+async fn test_keep_last_modified() {
+    use camel_core::api::exchange_constants::FILE_LAST_MODIFIED;
+    for option in ["?keepLastModified=true", "?keepLastModified=false", ""] {
+        let dir = TestDirectory::new("FileKeepLastModifiedTest");
+        let (from_uri, out) = (
+            dir.file_uri("?noop=true&initialDelay=0&delay=10"),
+            dir.file_uri(&format!("out{option}")),
+        );
+        let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+            r.add(
+                from(&from_uri)
+                    .delay(constant(10))
+                    .to(&out)
+                    .to("mock:result"),
+            );
+        })
+        .await;
+        let mock = t.mock("mock:result");
+        mock.expected_message_count(1);
+        mock.message_matches(0, header(FILE_LAST_MODIFIED).is_not_null());
+        // an old last modified, so a new write differs
+        dir.write("hello.txt", "Hello World");
+        let old = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
+        std::fs::File::options()
+            .write(true)
+            .open(dir.test_file("hello.txt"))
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        mock.assert_is_satisfied().await;
+        let t1 = mock.received_exchanges()[0]
+            .message()
+            .header(FILE_LAST_MODIFIED)
+            .and_then(|v| v.as_i64())
+            .unwrap();
+        let t2 = std::fs::metadata(dir.test_file("out/hello.txt"))
+            .unwrap()
+            .modified()
+            .unwrap()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        assert_eq!(
+            option == "?keepLastModified=true",
+            t1 == t2,
+            "{option}: {t1} {t2}"
+        );
+    }
+}
+
+/// Port of `FileProducerExpressionTest` (not the cases with an expression or a date as header).
+#[tokio::test]
+async fn test_producer_expression() {
+    let dir = TestDirectory::new("FileProducerExpressionTest");
+    let t = ContextTestSupport::new();
+    let bean = camel_bean::MethodBean::new("MyGuidGenerator")
+        .method("guid", |_| Ok(Value::from("123")))
+        .into_value();
+    t.context
+        .registry()
+        .unwrap()
+        .bind("myguidgenerator", bean)
+        .unwrap();
+    // the header is not evaluated
+    put(&t, &dir, "", "Hello World", "$simple{myfile-${id}}.txt")
+        .await
+        .unwrap();
+    assert!(dir.test_file("$simple{myfile-${id}}.txt").exists());
+    t.template
+        .send_body(
+            &dir.file_uri("?fileName=${bean:myguidgenerator}.bak"),
+            "Hello World",
+        )
+        .await
+        .unwrap();
+    assert!(dir.test_file("123.bak").exists());
+    // the date of today
+    let mut e = Exchange::new(t.context.clone());
+    let today = t
+        .context
+        .resolve_language("simple")
+        .unwrap()
+        .create_expression("${date:now:yyyyMMdd}")
+        .unwrap()
+        .evaluate_mut(&mut e)
+        .unwrap()
+        .to_string();
+    t.template
+        .send_body(
+            &dir.file_uri("?fileName=myfile-${date:now:yyyyMMdd}.txt"),
+            "Hello World",
+        )
+        .await
+        .unwrap();
+    assert!(dir.test_file(&format!("myfile-{today}.txt")).exists());
+    t.template
+        .send_body(
+            &dir.file_uri("?jailStartingDirectory=false&fileName=target/filelanguageinbox/myfile-${bean:myguidgenerator.guid}-${date:now:yyyyMMdd}.txt"),
+            "Hello World",
+        )
+        .await
+        .unwrap();
+    assert!(dir
+        .test_file(&format!("target/filelanguageinbox/myfile-123-{today}.txt"))
+        .exists());
+    t.template
+        .send_body_and_header(
+            &dir.file_uri("?fileName=myfile-${in.header.foo}.txt"),
+            "Hello World",
+            "foo",
+            "abc",
+        )
+        .await
+        .unwrap();
+    assert!(dir.test_file("myfile-abc.txt").exists());
+}
