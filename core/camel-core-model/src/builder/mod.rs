@@ -45,12 +45,12 @@ use crate::expression::ExpressionDefinition;
 use crate::intercept::{
     InterceptDefinition, InterceptFromDefinition, InterceptSendToEndpointDefinition,
 };
-use crate::processor::IdempotentConsumerDefinition;
 use crate::processor::{
     AggregateDefinition, AggregationRef, CatchDefinition, Eip, MulticastOptions,
     OnCompletionDefinition, ProcessRef, ProcessorDefinition, RepositoryRef, SortComparator,
     WhenDefinition,
 };
+use crate::processor::{IdempotentConsumerDefinition, ResequenceDefinition, ResequenceMode};
 use crate::route::RouteDefinition;
 use camel_api::bean_binding::BeanReference;
 use camel_api::enums::{ExchangePattern, LoggingLevel};
@@ -658,6 +658,104 @@ pub trait Dsl: Sized {
         })
     }
 
+    /// Sends the exchanges to the steps of the block in the order of the expression (Java
+    /// `.resequence(expression)`), in batch mode by default: see [`stream`](Self::stream),
+    /// [`timeout`](Self::timeout), [`batch_size`](Self::batch_size),
+    /// [`capacity`](Self::capacity), [`allow_duplicates`](Self::allow_duplicates),
+    /// [`reverse`](Self::reverse), [`reject_old`](Self::reject_old) and
+    /// [`ignore_invalid_exchanges`](Self::ignore_invalid_exchanges).
+    fn resequence<F>(self, expression: impl Into<ExpressionDefinition>, steps: F) -> Self
+    where
+        F: FnOnce(StepsDsl) -> StepsDsl,
+    {
+        let steps = steps(StepsDsl::default()).steps;
+        self.eip(Eip::Resequence(Box::new(ResequenceDefinition {
+            expression: expression.into(),
+            mode: ResequenceMode::Batch {
+                size: 100,
+                allow_duplicates: false,
+                reverse: false,
+            },
+            timeout: 1000,
+            ignore_invalid_exchanges: false,
+            steps,
+        })))
+    }
+
+    /// The last resequencer uses the stream mode (Java `.stream()`).
+    fn stream(mut self) -> Self {
+        if let Some(Eip::Resequence(r)) = self.last_mut().map(|l| &mut l.eip) {
+            r.mode = ResequenceMode::Stream {
+                capacity: 1000,
+                reject_old: false,
+            };
+        }
+        self
+    }
+
+    /// The batch size of the last resequencer (batch mode).
+    fn batch_size(mut self, size: usize) -> Self {
+        if let Some(Eip::Resequence(r)) = self.last_mut().map(|l| &mut l.eip) {
+            if let ResequenceMode::Batch { size: s, .. } = &mut r.mode {
+                // a size of 0 disables the limit, as Java
+                *s = if size == 0 { usize::MAX } else { size };
+            }
+        }
+        self
+    }
+
+    /// The capacity of the last resequencer (stream mode).
+    fn capacity(mut self, capacity: usize) -> Self {
+        if let Some(Eip::Resequence(r)) = self.last_mut().map(|l| &mut l.eip) {
+            if let ResequenceMode::Stream { capacity: c, .. } = &mut r.mode {
+                *c = capacity;
+            }
+        }
+        self
+    }
+
+    /// The last resequencer keeps the exchanges with the same expression value (batch mode).
+    fn allow_duplicates(mut self) -> Self {
+        if let Some(Eip::Resequence(r)) = self.last_mut().map(|l| &mut l.eip) {
+            if let ResequenceMode::Batch {
+                allow_duplicates, ..
+            } = &mut r.mode
+            {
+                *allow_duplicates = true;
+            }
+        }
+        self
+    }
+
+    /// The last resequencer sends in the reverse order (batch mode).
+    fn reverse(mut self) -> Self {
+        if let Some(Eip::Resequence(r)) = self.last_mut().map(|l| &mut l.eip) {
+            if let ResequenceMode::Batch { reverse, .. } = &mut r.mode {
+                *reverse = true;
+            }
+        }
+        self
+    }
+
+    /// The last resequencer fails the exchanges older than the last sent one (stream mode).
+    fn reject_old(mut self) -> Self {
+        if let Some(Eip::Resequence(r)) = self.last_mut().map(|l| &mut l.eip) {
+            if let ResequenceMode::Stream { reject_old, .. } = &mut r.mode {
+                *reject_old = true;
+            }
+        }
+        self
+    }
+
+    /// The last resequencer ignores the exchanges without an expression value instead of
+    /// failing them.
+    fn ignore_invalid_exchanges(mut self) -> Self {
+        if let Some(Eip::Resequence(r)) = self.last_mut().map(|l| &mut l.eip) {
+            r.ignore_invalid_exchanges = true;
+        }
+        self
+    }
+
     /// Fails the exchange with a `PredicateValidationException` when the predicate does not
     /// match (Java `.validate(..)`).
     fn validate(self, predicate: impl Into<ExpressionDefinition>) -> Self {
@@ -1084,6 +1182,11 @@ pub trait Dsl: Sized {
     /// given to the `timeout` method of the aggregation strategy, and the exchange continues
     /// with what was aggregated.
     fn timeout(mut self, millis: u64) -> Self {
+        if let Some(Eip::Resequence(r)) = self.last_mut().map(|l| &mut l.eip) {
+            // the batch timeout or the time to wait for a missing exchange of a resequencer
+            r.timeout = millis;
+            return self;
+        }
         if let Some(o) = self.last_multicast_options() {
             o.timeout = Some(millis);
         }

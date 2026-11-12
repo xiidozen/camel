@@ -26,6 +26,7 @@ pub mod log_processor;
 pub mod multicast;
 pub mod on_completion;
 pub mod pipeline;
+pub mod resequence;
 pub mod routing;
 pub mod send;
 pub mod throttle;

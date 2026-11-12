@@ -21,7 +21,7 @@ use camel_core_model::errorhandler::{
 use camel_core_model::expression::ExpressionDefinition;
 use camel_core_model::processor::{
     AggregationRef, Eip, IdempotentRepositoryRef, LoadBalancerDefinition, MulticastOptions,
-    OnCompletionDefinition, ProcessRef, ProcessorDefinition, Steps,
+    OnCompletionDefinition, ProcessRef, ProcessorDefinition, ResequenceMode, Steps,
 };
 use camel_core_model::route::RouteDefinition;
 use camel_core_processor::aggregate::{AggregateOptions, AggregateProcessor};
@@ -48,6 +48,7 @@ use camel_core_processor::multicast::{
 };
 use camel_core_processor::on_completion::{OnCompletionOptions, OnCompletionProcessor};
 use camel_core_processor::pipeline::Pipeline;
+use camel_core_processor::resequence::{ResequenceConfig, ResequenceProcessor};
 use camel_core_processor::routing::{
     LoopProcessor, RoutingSlipProcessor, SamplingProcessor, SortProcessor, StepProcessor,
 };
@@ -656,6 +657,36 @@ impl<'a> RouteReifier<'a> {
                 type_name,
                 *mandatory,
             )?),
+            Eip::Resequence(r) => {
+                let timeout = std::time::Duration::from_millis(r.timeout);
+                let config = match &r.mode {
+                    ResequenceMode::Batch {
+                        size,
+                        allow_duplicates,
+                        reverse,
+                    } => ResequenceConfig::Batch {
+                        size: *size,
+                        timeout,
+                        allow_duplicates: *allow_duplicates,
+                        reverse: *reverse,
+                        ignore_invalid: r.ignore_invalid_exchanges,
+                    },
+                    ResequenceMode::Stream {
+                        capacity,
+                        reject_old,
+                    } => ResequenceConfig::Stream {
+                        capacity: *capacity,
+                        timeout,
+                        reject_old: *reject_old,
+                        ignore_invalid: r.ignore_invalid_exchanges,
+                    },
+                };
+                Arc::new(ResequenceProcessor::new(
+                    self.expr(&r.expression)?,
+                    config,
+                    self.steps(&r.steps)?,
+                ))
+            }
             Eip::Validate(p) => Arc::new(ValidateProcessor::new(reify_predicate(self.context, p)?)),
             Eip::IdempotentConsumer(i) => {
                 let repository = match &i.repository {

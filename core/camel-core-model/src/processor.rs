@@ -142,6 +142,42 @@ impl fmt::Display for LoadBalancerDefinition {
     }
 }
 
+/// The mode of a resequencer and its options.
+#[derive(Debug, Clone)]
+pub enum ResequenceMode {
+    /// The batch mode.
+    Batch {
+        /// The maximum number of exchanges of a batch (default 100).
+        size: usize,
+        /// Whether exchanges with the same expression value are all kept.
+        allow_duplicates: bool,
+        /// Whether the order is reversed.
+        reverse: bool,
+    },
+    /// The stream mode: the expression is a sequence number.
+    Stream {
+        /// The maximum number of exchanges waiting (default 1000).
+        capacity: usize,
+        /// Whether exchanges older than the last sent one fail.
+        reject_old: bool,
+    },
+}
+
+/// The resequence EIP (Java `ResequenceDefinition`).
+#[derive(Debug, Clone)]
+pub struct ResequenceDefinition {
+    /// The order (batch) or sequence number (stream) of the exchanges.
+    pub expression: ExpressionDefinition,
+    /// The mode.
+    pub mode: ResequenceMode,
+    /// The batch timeout or the time to wait for a missing exchange, in millis (default 1000).
+    pub timeout: u64,
+    /// Whether exchanges without an expression value are ignored instead of failing.
+    pub ignore_invalid_exchanges: bool,
+    /// The steps receiving the exchanges in order.
+    pub steps: Vec<ProcessorDefinition>,
+}
+
 /// A comparator of the sort EIP.
 pub type SharedComparator = Arc<dyn Fn(&Value, &Value) -> Ordering + Send + Sync>;
 
@@ -197,6 +233,7 @@ impl ProcessorDefinition {
             | Eip::Multicast { steps, .. } => steps.iter().collect(),
             Eip::Aggregate(a) => a.steps.iter().collect(),
             Eip::IdempotentConsumer(i) => i.steps.iter().collect(),
+            Eip::Resequence(r) => r.steps.iter().collect(),
             Eip::OnCompletion(c) => c.steps.iter().collect(),
             Eip::DoTry {
                 steps,
@@ -715,6 +752,8 @@ pub enum Eip {
         /// Whether a value that cannot be converted fails.
         mandatory: bool,
     },
+    /// Sends the exchanges to the steps in the order of the expression (`resequence`).
+    Resequence(Box<ResequenceDefinition>),
     /// `doTry` with its `doCatch` and `doFinally` clauses.
     DoTry {
         /// The steps of the try block.
@@ -769,6 +808,7 @@ impl Eip {
             Eip::Sort { .. } => "sort",
             Eip::Step { .. } => "step",
             Eip::Validate(_) => "validate",
+            Eip::Resequence(_) => "resequence",
             Eip::Throttle { .. } => "throttle",
             Eip::ClaimCheck { .. } => "claimCheck",
             Eip::Rollback { .. } => "rollback",
@@ -895,6 +935,9 @@ impl fmt::Display for ProcessorDefinition {
             },
             Eip::Step { steps, .. } => write!(f, "Step[{}]", Steps(steps)),
             Eip::Validate(e) => write!(f, "Validate[{e} -> []]"),
+            Eip::Resequence(r) => {
+                write!(f, "Resequencer[{} -> {}]", r.expression, Steps(&r.steps))
+            }
             Eip::Throttle {
                 max_requests,
                 time_period_millis,

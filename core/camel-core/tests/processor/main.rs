@@ -25,6 +25,7 @@ mod onexception;
 mod pipeline_test;
 mod recipient_list_parallel_test;
 mod recipient_list_test;
+mod resequencer_test;
 mod rollback_throttle_test;
 mod routing_slip_test;
 mod sampling_throttler_test;

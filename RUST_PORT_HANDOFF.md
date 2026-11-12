@@ -128,7 +128,7 @@ Crates live **in the directory of the Maven module they replace** (`core/camel-a
 - Interceptors: `Routes::intercept`, `intercept_from`, `intercept_send_to_endpoint` (route builder
   scoped, copied into each `RouteDefinition` and bound by the reifier; see
   `design/cross-cutting-binding.adoc`).
-- **Next:** threads/resequence, the rest of the simple functions (init blocks, type/message/output), then
+- **Next:** threads, the rest of the simple functions (init blocks, type/message/output), then
   camel-main and the YAML/XML DSLs.
 - Java files still present in `core/camel-api/src/main/java` are the ones not ported yet.
 - Everything else in the repository: **not started** (status `todo` in the backlog).
