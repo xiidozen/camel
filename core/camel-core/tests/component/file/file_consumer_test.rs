@@ -518,11 +518,16 @@ async fn test_max_messages_per_poll() {
     mock.assert_is_satisfied().await;
 }
 
-/// Ports of `FileConsumerIdempotentTest` and `FileConsumerIdempotentKeyTest`: a file moved back
+/// Ports of `FileConsumerIdempotentTest`, `FileConsumerIdempotentKeyTest` and
+/// `FileConsumerIdempotentKeyNameAndSizeTest`: a file moved back
 /// after being consumed is not consumed again.
 #[tokio::test]
 async fn test_idempotent() {
-    for key in ["", "&idempotentKey=${file:onlyname}"] {
+    for key in [
+        "",
+        "&idempotentKey=${file:onlyname}",
+        "&idempotentKey=${file:onlyname}-${file:size}",
+    ] {
         let dir = TestDirectory::new("FileConsumerIdempotentTest");
         let uri = dir.file_uri(&format!(
             "?idempotent=true{key}&move=done/${{file:name}}&initialDelay=0&delay=10"
@@ -895,4 +900,139 @@ async fn test_idempotent_on_exception_handled() {
     send(&t, &dir, "hello.txt", "Hello World").await;
     mock.assert_is_satisfied().await;
     assert!(!dir.test_file("hello.txt").exists());
+}
+
+/// Port of `FileConsumerIdempotentKeyNameAndSizeTest.testIdempotentDiffSize`: the same name
+/// with another size is consumed again.
+#[tokio::test]
+async fn test_idempotent_key_name_and_size_diff_size() {
+    let dir = TestDirectory::new("FileConsumerIdempotentKeyNameAndSizeTest");
+    let uri = dir.file_uri(
+        "?idempotent=true&idempotentKey=${file:onlyname}-${file:size}&move=done/${file:name}&initialDelay=0&delay=10",
+    );
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(from(&uri).convert_body_to("String").to("mock:result"));
+    })
+    .await;
+    let mock = t.mock("mock:result");
+    mock.expected_bodies_received(["Hello World"]);
+    send(&t, &dir, "report.txt", "Hello World").await;
+    mock.assert_is_satisfied().await;
+    let done = dir.test_file("done/report.txt");
+    support_wait(|| done.exists()).await;
+    mock.reset();
+    mock.expected_bodies_received(["Bye World"]);
+    send(&t, &dir, "report.txt", "Bye World").await;
+    mock.assert_is_satisfied().await;
+}
+
+/// Ports of `FileConsumerExcludeNameTest`, `FileConsumeSimpleAbsoluteMoveToAbsoluteTest` and
+/// `FileConsumerAbsolutePathWithAbsoluteMoveTest`.
+#[tokio::test]
+async fn test_exclude_name_and_absolute_moves() {
+    consume(
+        "FileConsumerExcludeNameTest",
+        "?initialDelay=0&delay=10&exclude=^secret.*|.*xml$",
+        &[
+            ("hello.xml", "Hello World"),
+            ("report1.txt", "Reports1"),
+            ("secret.txt", "Bye World"),
+            ("report2.txt", "Reports2"),
+            ("Report3.txt", "Reports3"),
+            ("Secret2.txt", "Secret2"),
+        ],
+        &["Reports1", "Reports2", "Reports3"],
+        &[],
+    )
+    .await;
+
+    let dir = TestDirectory::new("FileConsumeSimpleAbsoluteMoveToAbsoluteTest");
+    let base = dir.path();
+    let uri = format!("file://{base}?recursive=true&move={base}/.done&initialDelay=0&delay=10");
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(from(&uri).convert_body_to("String").to("mock:result"));
+    })
+    .await;
+    let mock = t.mock("mock:result");
+    mock.expected_message_count(3);
+    for f in ["bye.txt", "hello.txt", "goodday.txt"] {
+        mock.expected_file_exists(dir.test_file(&format!(".done/{f}")), None);
+    }
+    send(&t, &dir, "bye.txt", "Bye World").await;
+    send(&t, &dir, "sub/hello.txt", "Hello World").await;
+    send(&t, &dir, "sub/sub2/goodday.txt", "Goodday World").await;
+    mock.assert_is_satisfied().await;
+
+    let dir = TestDirectory::new("FileConsumerAbsolutePathWithAbsoluteMoveTest");
+    let uri = dir.file_uri(&format!(
+        "?initialDelay=0&delay=10&move={}/done/${{file:onlyname}}",
+        dir.path()
+    ));
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(from(&uri).convert_body_to("String").to("mock:report"));
+    })
+    .await;
+    let mock = t.mock("mock:report");
+    mock.expected_bodies_received(["Hello Paris"]);
+    mock.expected_file_exists(dir.test_file("done/paris.txt"), None);
+    send(&t, &dir, "paris.txt", "Hello Paris").await;
+    mock.assert_is_satisfied().await;
+}
+
+/// Port of `FileConsumeFileAsDirectoryTest` (with an absolute file).
+#[tokio::test]
+async fn test_consume_file_as_directory() {
+    let dir = TestDirectory::new("FileConsumeFileAsDirectoryTest");
+    dir.write("as-directory.json", "{}");
+    let file = dir
+        .test_file("as-directory.json")
+        .to_string_lossy()
+        .into_owned();
+    let uri = format!("file:{file}?initialDelay=0&delay=10&noop=true");
+    let t = ContextTestSupport::new();
+    t.context
+        .add_routes(move |r: &mut Routes| {
+            r.add(from(&uri).to("mock:result"));
+        })
+        .await
+        .unwrap();
+    let e = t.context.start().await.unwrap_err();
+    let msg = format!("{e} {}", crate::support::cause_of(&e));
+    assert!(
+        msg.contains(&format!("{file} is a file, not a directory")),
+        "{msg}"
+    );
+    assert!(
+        msg.contains(&format!("file:{}?fileName=as-directory.json", dir.path())),
+        "{msg}"
+    );
+}
+
+/// Port of `FileConsumerInterceptEmptyFileTest`.
+#[tokio::test]
+async fn test_intercept_empty_file() {
+    let dir = TestDirectory::new("FileConsumerInterceptEmptyFileTest");
+    let uri = dir.file_uri("?initialDelay=10&delay=10");
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.intercept_from(None, |i| {
+            i.on_when(simple("${file:length} == 0"))
+                .to("mock:skip")
+                .stop()
+        });
+        r.add(
+            from(&uri)
+                .convert_body_to("String")
+                .to("log:test")
+                .to("mock:result"),
+        );
+    })
+    .await;
+    t.mock("mock:result")
+        .expected_bodies_received_in_any_order(["Hello World", "Bye World"]);
+    t.mock("mock:skip").expected_message_count(2);
+    send(&t, &dir, "hello.xml", "Hello World").await;
+    send(&t, &dir, "empty1.txt", "").await;
+    send(&t, &dir, "secret.txt", "Bye World").await;
+    send(&t, &dir, "empty2.txt", "").await;
+    t.assert_mock_endpoints_satisfied().await;
 }

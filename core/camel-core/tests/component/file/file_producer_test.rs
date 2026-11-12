@@ -447,3 +447,43 @@ async fn test_in_out_and_append_chars_empty_message() {
     t.template.send_body("direct:start", "").await.unwrap();
     mock.assert_is_satisfied().await;
 }
+
+/// Ports of `FileProduceAppendTest` and `FileProduceAppendCharsSingleMessageTest`.
+#[tokio::test]
+async fn test_append_text_and_append_chars_single_message() {
+    let dir = TestDirectory::new("FileProduceAppendTest");
+    let (a, b) = (
+        dir.file_uri("?fileExist=Append"),
+        dir.file_uri("?fileExist=Append&appendChars=@@@"),
+    );
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(
+            from("direct:start")
+                .set_header(FILE_NAME, constant("hello.txt"))
+                .to(&a)
+                .to("mock:result"),
+        );
+        r.add(
+            from("direct:chars")
+                .set_header(FILE_NAME, constant("chars.txt"))
+                .to(&b)
+                .to("mock:result"),
+        );
+    })
+    .await;
+    put(&t, &dir, "", "Hello", "hello.txt").await.unwrap();
+    put(&t, &dir, "", " World", "world.txt").await.unwrap();
+    let mock = t.mock("mock:result");
+    mock.expected_message_count(1);
+    mock.expected_file_exists(dir.test_file("hello.txt"), Some("Hello World"));
+    t.template
+        .send_body("direct:start", " World")
+        .await
+        .unwrap();
+    mock.assert_is_satisfied().await;
+    mock.reset();
+    mock.expected_message_count(1);
+    mock.expected_file_exists(dir.test_file("chars.txt"), Some("Hello@@@"));
+    t.template.send_body("direct:chars", "Hello").await.unwrap();
+    mock.assert_is_satisfied().await;
+}

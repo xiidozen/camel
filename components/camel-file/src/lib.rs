@@ -421,6 +421,23 @@ impl Endpoint for FileEndpoint {
     }
 
     fn create_consumer(self: Arc<Self>, processor: SharedProcessor) -> CamelResult<SharedConsumer> {
+        // a regular file as the directory polls nothing (Java CAMEL-24839)
+        let dir = Path::new(&self.config.directory);
+        if dir.is_file() {
+            let parent = dir
+                .parent()
+                .map(|p| p.to_string_lossy().into_owned())
+                .filter(|p| !p.is_empty())
+                .unwrap_or_else(|| ".".to_string());
+            let name = dir
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            return Err(CamelError::illegal_argument(format!(
+                "{} is a file, not a directory: the file component reads the files of a directory. To read this one file use file:{parent}?fileName={name} (as from:, or with pollEnrich)",
+                self.config.directory
+            )));
+        }
         Ok(Arc::new(FileConsumer::new(self, processor)))
     }
 
