@@ -128,6 +128,10 @@ pub struct FileConfiguration {
     /// dynamic parts): the producer writes it after the file, the consumer only takes the
     /// files with their done file, and deletes it with the file.
     pub done_file_name: Option<String>,
+    /// The permissions of the written files (`chmod`, octal such as `644`).
+    pub chmod: Option<u32>,
+    /// The permissions of the directories the producer creates (`chmodDirectory`).
+    pub chmod_directory: Option<u32>,
     /// A simple predicate the directories must match to be polled (`filterDirectory`, with
     /// the `CamelFile*` headers of the directory).
     pub filter_directory: Option<String>,
@@ -258,6 +262,8 @@ impl FileConfiguration {
             append_chars: None,
             allow_null_body: false,
             done_file_name: None,
+            chmod: None,
+            chmod_directory: None,
             filter_directory: None,
             filter_file: None,
             force_writes: true,
@@ -309,6 +315,26 @@ fn param<T: camel_api::convert::FromValue>(
     name: &str,
 ) -> CamelResult<Option<T>> {
     get_and_remove_parameter::<T>(parameters, name)
+}
+
+/// The mode of a chmod option (Java `chmodPermissionsAreValid`): 3 octal digits, or 4 with a
+/// leading one ignored.
+fn chmod(value: Option<String>, name: &str) -> CamelResult<Option<u32>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let text = value.trim();
+    let invalid = || CamelError::illegal_argument(format!("{name} option [{value}] is not valid"));
+    if text.len() < 3 || text.len() > 4 {
+        return Err(invalid());
+    }
+    let digits = &text[text.len() - 3..];
+    if !digits.chars().all(|c| ('0'..='7').contains(&c)) {
+        return Err(invalid());
+    }
+    u32::from_str_radix(digits, 8)
+        .map(Some)
+        .map_err(|_| invalid())
 }
 
 /// The millis of a duration option (`500`, `1s`, `2m`).
@@ -366,6 +392,8 @@ impl Component for FileComponent {
             c.allow_null_body = v;
         }
         c.done_file_name = param(parameters, "doneFileName")?;
+        c.chmod = chmod(param(parameters, "chmod")?, "chmod")?;
+        c.chmod_directory = chmod(param(parameters, "chmodDirectory")?, "chmodDirectory")?;
         c.filter_directory = param(parameters, "filterDirectory")?;
         c.filter_file = param(parameters, "filterFile")?;
         if let Some(v) = param(parameters, "forceWrites")? {

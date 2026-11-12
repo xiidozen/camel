@@ -141,12 +141,24 @@ impl FileProducer {
                 .parent()
                 .filter(|p| !p.as_os_str().is_empty())
             {
+                // the directories created get chmodDirectory (Java buildDirectory)
+                let mut created = Vec::new();
+                let mut dir = Some(parent);
+                while let Some(d) = dir.filter(|d| !d.as_os_str().is_empty() && !d.exists()) {
+                    created.push(d.to_path_buf());
+                    dir = d.parent();
+                }
                 std::fs::create_dir_all(parent).map_err(|e| {
                     operation_failed(format!(
                         "Cannot create directory: {}: {e}",
                         parent.display()
                     ))
                 })?;
+                if let Some(mode) = c.chmod_directory {
+                    for d in &created {
+                        set_mode(d, mode)?;
+                    }
+                }
             }
         }
         let bytes = self.content(exchange, path)?;
@@ -159,6 +171,9 @@ impl FileProducer {
             .map_err(|e| operation_failed(format!("Cannot write file: {path}: {e}")))?;
         file.write_all(&bytes)
             .map_err(|e| operation_failed(format!("Cannot write file: {path}: {e}")))?;
+        if let Some(mode) = c.chmod {
+            set_mode(Path::new(path), mode)?;
+        }
         if c.force_writes {
             file.sync_all()
                 .map_err(|e| operation_failed(format!("Cannot write file: {path}: {e}")))?;
@@ -344,6 +359,24 @@ fn encode(text: &str, charset: Option<&str>) -> Vec<u8> {
         Some(cs) => cs.encode(text),
         None => text.as_bytes().to_vec(),
     }
+}
+
+/// Sets the permissions of the file (unix; other platforms ignore them, as Java without POSIX
+/// file attributes).
+#[cfg(unix)]
+fn set_mode(path: &Path, mode: u32) -> CamelResult<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).map_err(|e| {
+        operation_failed(format!(
+            "Cannot set permissions of file: {}: {e}",
+            path.display()
+        ))
+    })
+}
+
+#[cfg(not(unix))]
+fn set_mode(_path: &Path, _mode: u32) -> CamelResult<()> {
+    Ok(())
 }
 
 impl Service for FileProducer {}

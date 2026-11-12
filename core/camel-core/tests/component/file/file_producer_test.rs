@@ -1439,3 +1439,91 @@ async fn test_producer_charset_optimized_and_convert_body_to() {
         std::fs::read(dir.test_file("output.txt")).unwrap()
     );
 }
+
+/// The permissions of the path (`rwxr-xr-x`).
+#[cfg(unix)]
+fn permissions(path: &std::path::Path) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = std::fs::metadata(path).unwrap().permissions().mode();
+    (0..9)
+        .map(|i| {
+            if mode & (1 << (8 - i)) == 0 {
+                '-'
+            } else {
+                ['r', 'w', 'x'][i % 3]
+            }
+        })
+        .collect()
+}
+
+/// Ports of `FileProducerChmodOptionTest` and `FileProducerDirectoryChmodOptionTest`.
+#[cfg(unix)]
+#[tokio::test]
+async fn test_chmod() {
+    let t = ContextTestSupport::new();
+    for (option, file_mode) in [("?chmod=0755", "rwxr-xr-x"), ("?chmod=666", "rw-rw-rw-")] {
+        let dir = TestDirectory::new("FileProducerChmodOptionTest");
+        put(&t, &dir, option, "Writing file with chmod", "chmod.txt")
+            .await
+            .unwrap();
+        assert_eq!(
+            file_mode,
+            permissions(&dir.test_file("chmod.txt")),
+            "{option}"
+        );
+    }
+    // no chmod
+    let dir = TestDirectory::new("FileProducerChmodOptionTest");
+    put(&t, &dir, "", "Writing file with no chmod", "noChmod.txt")
+        .await
+        .unwrap();
+    assert!(dir.test_file("noChmod.txt").exists());
+    // invalid
+    let e = t
+        .context
+        .add_routes({
+            let uri = dir.file_uri("?chmod=abc");
+            move |r: &mut Routes| {
+                r.add(from("direct:writeBadChmod1").to(&uri).to("mock:badChmod1"));
+            }
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{e} {}", crate::support::cause_of(&e)).contains("chmod option [abc] is not valid"),
+        "{e}"
+    );
+    // the directories
+    for (option, dir_mode, file_mode) in [
+        ("?chmod=0755", None, "rwxr-xr-x"),
+        (
+            "?chmodDirectory=777&chmod=0755",
+            Some("rwxrwxrwx"),
+            "rwxr-xr-x",
+        ),
+        (
+            "?chmodDirectory=777&chmod=666",
+            Some("rwxrwxrwx"),
+            "rw-rw-rw-",
+        ),
+    ] {
+        let dir = TestDirectory::new("FileProducerDirectoryChmodOptionTest");
+        put(
+            &t,
+            &dir,
+            option,
+            "Writing file with chmod",
+            "testdir/chmod.txt",
+        )
+        .await
+        .unwrap();
+        if let Some(mode) = dir_mode {
+            assert_eq!(mode, permissions(&dir.test_file("testdir")), "{option}");
+        }
+        assert_eq!(
+            file_mode,
+            permissions(&dir.test_file("testdir/chmod.txt")),
+            "{option}"
+        );
+    }
+}
