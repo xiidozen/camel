@@ -656,6 +656,14 @@ impl Endpoint for FileEndpoint {
     }
 
     fn create_producer(self: Arc<Self>) -> CamelResult<SharedProducer> {
+        let c = &self.config;
+        if c.file_exist == FileExist::Append
+            && (c.temp_prefix.is_some() || c.temp_file_name.is_some())
+        {
+            return Err(CamelError::illegal_argument(
+                "You cannot set both fileExist=Append and tempPrefix/tempFileName options",
+            ));
+        }
         Ok(Arc::new(FileProducer::new(self)))
     }
 

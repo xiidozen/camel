@@ -971,3 +971,117 @@ async fn test_allow_null_body() {
         "allowNullBody set to false with null body should not create a new file"
     );
 }
+
+/// Port of `FileProducerTempFileExistsIssueTest`.
+#[tokio::test]
+async fn test_temp_file_exists_issue() {
+    let t = ContextTestSupport::new();
+    let dir = TestDirectory::new("FileProducerTempFileExistsIssueTest");
+    for option in [
+        "?fileExist=Append&tempPrefix=foo",
+        "?fileExist=Append&tempFileName=foo",
+    ] {
+        let e = match t
+            .context
+            .endpoint(&dir.file_uri(option))
+            .unwrap()
+            .create_producer()
+        {
+            Err(e) => e,
+            Ok(_) => panic!("{option} should fail"),
+        };
+        assert!(e.is(ErrorKind::IllegalArgument), "{e}");
+        assert_eq!(
+            Some("You cannot set both fileExist=Append and tempPrefix/tempFileName options"),
+            e.message()
+        );
+    }
+    for (option, other, expected) in [
+        ("?tempPrefix=foo", false, "Bye World"),
+        ("?tempPrefix=foo", true, "Bye World"),
+        ("?tempPrefix=foo&fileExist=Override", false, "Bye World"),
+        ("?tempPrefix=foo&fileExist=Ignore", false, "Hello World"),
+    ] {
+        let dir = TestDirectory::new("FileProducerTempFileExistsIssueTest");
+        put(&t, &dir, "", "Hello World", "hello.txt").await.unwrap();
+        if other {
+            put(&t, &dir, "", "Hello World", "foohello.txt")
+                .await
+                .unwrap();
+        }
+        put(&t, &dir, option, "Bye World", "hello.txt")
+            .await
+            .unwrap();
+        assert_eq!(
+            Some(expected.to_string()),
+            dir.read("hello.txt"),
+            "{option}"
+        );
+    }
+    let dir = TestDirectory::new("FileProducerTempFileExistsIssueTest");
+    put(&t, &dir, "", "Hello World", "hello.txt").await.unwrap();
+    let e = put(
+        &t,
+        &dir,
+        "?tempPrefix=foo&fileExist=Fail",
+        "Bye World",
+        "hello.txt",
+    )
+    .await
+    .unwrap_err();
+    let cause = crate::support::cause_of(&e);
+    assert!(cause.is(ErrorKind::GenericFileOperationFailed), "{e}");
+    assert!(
+        cause
+            .message()
+            .unwrap_or_default()
+            .starts_with("File already exist"),
+        "{e}"
+    );
+    assert_eq!(Some("Hello World".to_string()), dir.read("hello.txt"));
+}
+
+/// Port of `FromFileMulticastToFilesTest`.
+#[tokio::test]
+async fn test_from_file_multicast_to_files() {
+    for parallel in [false, true] {
+        let dir = TestDirectory::new("FromFileMulticastToFilesTest");
+        let (from_uri, header_uri, footer_uri) = (
+            dir.file_uri("?initialDelay=0&delay=10"),
+            dir.file_uri("out/?fileName=header.txt"),
+            dir.file_uri("out/?fileName=footer.txt"),
+        );
+        let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+            let route = from(&from_uri).multicast(|s| {
+                s.pipeline(|p| {
+                    p.transform(body().prepend("HEADER:"))
+                        .to(&header_uri)
+                        .to("mock:header")
+                })
+                .pipeline(|p| {
+                    p.transform(body().prepend("FOOTER:"))
+                        .to(&footer_uri)
+                        .to("mock:footer")
+                })
+            });
+            let route = if parallel {
+                route.parallel_processing()
+            } else {
+                route
+            };
+            r.add(route.to("mock:end"));
+        })
+        .await;
+        let header = t.mock("mock:header");
+        header.expected_bodies_received(["HEADER:foo"]);
+        header.expected_file_exists(dir.test_file("out/header.txt"), None);
+        let footer = t.mock("mock:footer");
+        footer.expected_bodies_received(["FOOTER:foo"]);
+        footer.expected_file_exists(dir.test_file("out/footer.txt"), None);
+        let end = t.mock("mock:end");
+        end.expected_message_count(1);
+        end.expected_file_exists(dir.test_file(".camel/foo.txt"), None);
+        put(&t, &dir, "", "foo", "foo.txt").await.unwrap();
+        t.assert_mock_endpoints_satisfied().await;
+    }
+}

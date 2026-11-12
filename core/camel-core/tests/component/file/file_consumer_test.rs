@@ -2601,3 +2601,114 @@ async fn test_exclusive_read_none_strategy() {
         "Should not wait and read the entire file: {body}"
     );
 }
+
+/// Port of `FileSplitInSplitTest`: parallel nested splits appending to the same files.
+#[tokio::test]
+async fn test_split_in_split() {
+    let dir = TestDirectory::new("FileSplitInSplitTest");
+    let (from_uri, out) = (
+        dir.file_uri("?initialDelay=0&delay=10"),
+        dir.file_uri("outbox?fileExist=Append&fileName=result${exchangeProperty.split}.txt"),
+    );
+    let t = ContextTestSupport::new();
+    t.context
+        .add_routes(move |r: &mut Routes| {
+            let (out, out2) = (out.clone(), out.clone());
+            r.add(
+                from(&from_uri)
+                    .route_id("foo")
+                    .auto_startup(false)
+                    .split(body().tokenize(","), move |s| {
+                        s.set_property("split", simple("${exchangeProperty.CamelSplitIndex}"))
+                            .split(body().tokenize("\n"), move |s| {
+                                s.set_body(body().append(":Status=OK").append("\n"))
+                                    .to(&out)
+                            })
+                            .parallel_processing()
+                            .streaming()
+                            .set_body(simple("${exchangeProperty.split} complete"))
+                            .to(&out2)
+                    })
+                    .parallel_processing()
+                    .streaming()
+                    .to("mock:result"),
+            );
+        })
+        .await
+        .unwrap();
+    t.context.start().await.unwrap();
+    let mut body = String::new();
+    for i in 0..3 {
+        body.push_str(&format!("Block1 Line {i}\n"));
+    }
+    body.push(',');
+    for i in 10..13 {
+        body.push_str(&format!("Block2 Line {i}\n"));
+    }
+    send(&t, &dir, "input.txt", &body).await;
+    let mock = t.mock("mock:result");
+    mock.expected_message_count(1);
+    t.context.start_route("foo").await.unwrap();
+    mock.assert_is_satisfied().await;
+    for f in ["outbox/result0.txt", "outbox/result1.txt"] {
+        let txt = dir.read(f).unwrap();
+        assert_eq!(4, txt.lines().count(), "{f}: {txt}");
+    }
+}
+
+/// Port of `FileConsumerFileExpressionTest`: a fileName option with a bean and a date.
+#[tokio::test]
+async fn test_file_expression() {
+    let dir = TestDirectory::new("FileConsumerFileExpressionTest");
+    let t = ContextTestSupport::new();
+    let counter = camel_bean::MethodBean::new("MyGuidGenerator")
+        .method("next", |_| Ok(Value::from("123")))
+        .into_value();
+    t.context
+        .registry()
+        .unwrap()
+        .bind("counter", counter)
+        .unwrap();
+    t.context.start().await.unwrap();
+    for (name, body) in [
+        ("bean/122.txt", "Hello World"),
+        ("bean/123.txt", "Goodday World"),
+        ("bean/124.txt", "Bye World"),
+    ] {
+        send(&t, &dir, name, body).await;
+    }
+    // the name of today (Java sends the expression as the file name header)
+    let mut e = Exchange::new(t.context.clone());
+    let today = t
+        .context
+        .resolve_language("simple")
+        .unwrap()
+        .create_expression("date/myfile-${date:now:yyyyMMdd}.txt")
+        .unwrap()
+        .evaluate_mut(&mut e)
+        .unwrap()
+        .to_string();
+    for (name, body) in [
+        ("date/myfile-20081128.txt".to_string(), "Bye World"),
+        ("date/myfile-20081129.txt".to_string(), "Hello World"),
+        (today, "Goodday World"),
+    ] {
+        send(&t, &dir, &name, body).await;
+    }
+    let (bean, date) = (
+        dir.file_uri("bean?initialDelay=0&delay=10&fileName=${bean:counter.next}.txt&delete=true"),
+        dir.file_uri("date?initialDelay=0&delay=10&fileName=myfile-${date:now:yyyyMMdd}.txt"),
+    );
+    t.context
+        .add_routes(move |r: &mut Routes| {
+            r.add(from(&bean).convert_body_to("String").to("mock:result"));
+            r.add(from(&date).convert_body_to("String").to("mock:date"));
+        })
+        .await
+        .unwrap();
+    t.mock("mock:result")
+        .expected_bodies_received(["Goodday World"]);
+    t.mock("mock:date")
+        .expected_bodies_received(["Goodday World"]);
+    t.assert_mock_endpoints_satisfied().await;
+}
