@@ -450,6 +450,16 @@ async fn poll(
             log::warn!("Error processing file: {e}");
         }
     }
+    // an empty message when idle (Java sendEmptyMessageWhenIdle)
+    if size == 0 && c.send_empty_message_when_idle && !state.stopped.load(Ordering::SeqCst) {
+        let mut exchange = endpoint.create_exchange();
+        if let Err(e) = processor.process(&mut exchange).await {
+            exchange.set_exception(Some(e));
+        }
+        if let Some(e) = exchange.exception() {
+            log::warn!("Error processing exchange: {e}");
+        }
+    }
     Ok(count)
 }
 

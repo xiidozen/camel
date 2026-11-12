@@ -158,6 +158,27 @@ impl FileProducer {
             .map_err(|e| operation_failed(format!("Cannot write file: {path}: {e}")))?;
         file.write_all(&bytes)
             .map_err(|e| operation_failed(format!("Cannot write file: {path}: {e}")))?;
+        if c.force_writes {
+            file.sync_all()
+                .map_err(|e| operation_failed(format!("Cannot write file: {path}: {e}")))?;
+        }
+        // the last modified of the message (Java keepLastModified)
+        if c.keep_last_modified {
+            let modified = exchange
+                .message()
+                .header(camel_api::exchange_constants::FILE_LAST_MODIFIED)
+                .and_then(|v| match v {
+                    camel_util::value::Value::Int(i) => Some(*i),
+                    camel_util::value::Value::Text(t) => t.parse().ok(),
+                    _ => None,
+                });
+            if let Some(millis) = modified.filter(|m| *m > 0) {
+                let time = std::time::UNIX_EPOCH + std::time::Duration::from_millis(millis as u64);
+                file.set_modified(time).map_err(|e| {
+                    operation_failed(format!("Cannot set last modified of file: {path}: {e}"))
+                })?;
+            }
+        }
         log::debug!("Wrote [{path}] to [{}]", self.endpoint.uri);
         Ok(())
     }

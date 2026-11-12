@@ -122,6 +122,13 @@ pub struct FileConfiguration {
     pub append_chars: Option<String>,
     /// Whether a null body writes an empty file (default `false`: fails).
     pub allow_null_body: bool,
+    /// Whether the written files are synced to the disk (default `true`).
+    pub force_writes: bool,
+    /// Whether a written file keeps the `CamelFileLastModified` of the message (default
+    /// `false`).
+    pub keep_last_modified: bool,
+    /// Whether a poll without files routes an empty message (default `false`).
+    pub send_empty_message_when_idle: bool,
     /// The delay before the first poll in millis (default 1000).
     pub initial_delay: u64,
     /// The delay between the polls in millis (default 500).
@@ -186,6 +193,9 @@ impl FileConfiguration {
             eager_delete_target_file: true,
             append_chars: None,
             allow_null_body: false,
+            force_writes: true,
+            keep_last_modified: false,
+            send_empty_message_when_idle: false,
             initial_delay: 1000,
             delay: 500,
             noop: false,
@@ -280,6 +290,15 @@ impl Component for FileComponent {
         });
         if let Some(v) = param(parameters, "allowNullBody")? {
             c.allow_null_body = v;
+        }
+        if let Some(v) = param(parameters, "forceWrites")? {
+            c.force_writes = v;
+        }
+        if let Some(v) = param(parameters, "keepLastModified")? {
+            c.keep_last_modified = v;
+        }
+        if let Some(v) = param(parameters, "sendEmptyMessageWhenIdle")? {
+            c.send_empty_message_when_idle = v;
         }
         c.initial_delay = millis(parameters, "initialDelay", 1000)?;
         c.delay = millis(parameters, "delay", 500)?;
@@ -514,6 +533,10 @@ impl GenericFile {
         let m = exchange.message_mut();
         m.set_header(FILE_LENGTH, self.length as i64);
         m.set_header(FILE_LAST_MODIFIED, self.last_modified);
+        m.set_header(
+            camel_api::exchange_constants::MESSAGE_TIMESTAMP,
+            self.last_modified,
+        );
         m.set_header(FILE_NAME_ONLY, self.file_name_only());
         m.set_header(FILE_NAME, self.relative_file_path.as_str());
         m.set_header(FILE_NAME_CONSUMED, self.relative_file_path.as_str());

@@ -5,7 +5,9 @@
 
 use crate::support::{ContextTestSupport, TestDirectory};
 use camel_core::api::error::ErrorType;
-use camel_core::api::exchange_constants::FILE_NAME;
+use camel_core::api::exchange_constants::{
+    FILE_LAST_MODIFIED, FILE_LENGTH, FILE_NAME, MESSAGE_TIMESTAMP,
+};
 use camel_core::prelude::*;
 
 async fn send(t: &ContextTestSupport, dir: &TestDirectory, name: &str, body: &str) {
@@ -1059,4 +1061,158 @@ async fn test_poll_simple_move() {
         .await
         .unwrap();
     mock.assert_is_satisfied().await;
+}
+
+/// Ports of `FileConsumerCommitRenameAbsolutePathStrategyTest` and
+/// `FileRenameFileOnCommitIssueTest`.
+#[tokio::test]
+async fn test_commit_rename() {
+    let dir = TestDirectory::new("FileConsumerCommitRenameAbsolutePathStrategyTest");
+    let uri = dir.file_uri(&format!(
+        "reports?move={}/done/${{file:name}}&initialDelay=0&delay=10",
+        dir.path()
+    ));
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(from(&uri).convert_body_to("String").to("mock:report"));
+    })
+    .await;
+    let mock = t.mock("mock:report");
+    mock.expected_bodies_received(["Hello Paris"]);
+    mock.expected_file_exists(dir.test_file("done/paris.txt"), Some("Hello Paris"));
+    send(&t, &dir, "reports/paris.txt", "Hello Paris").await;
+    mock.assert_is_satisfied().await;
+
+    let dir = TestDirectory::new("FileRenameFileOnCommitIssueTest");
+    let uri = dir.file_uri("renameissue?noop=false&initialDelay=0&delay=10");
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(
+            from(&uri)
+                .set_property("PartitionID", simple("${file:name}"))
+                .convert_body_to("String")
+                .to_with_pattern(ExchangePattern::InOut, "direct:source")
+                .log("The exchange's IN body as String is ${body}")
+                .to("mock:result"),
+        );
+        r.add(from("direct:source").transform(body().prepend("Hello ")));
+    })
+    .await;
+    let mock = t.mock("mock:result");
+    mock.expected_message_count(1);
+    mock.expected_file_exists(dir.test_file("renameissue/.camel/hello.txt"), None);
+    send(&t, &dir, "renameissue/hello.txt", "World").await;
+    mock.assert_is_satisfied().await;
+}
+
+/// Port of `FileConsumerIdleMessageTest`.
+#[tokio::test]
+async fn test_idle_message() {
+    let dir = TestDirectory::new("FileConsumerIdleMessageTest");
+    let uri = dir.file_uri("?initialDelay=0&delay=10&sendEmptyMessageWhenIdle=true");
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(from(&uri).convert_body_to("String").to("mock:result"));
+    })
+    .await;
+    let mock = t.mock("mock:result");
+    mock.expected_minimum_message_count(2);
+    mock.assert_is_satisfied().await;
+    let exchanges = mock.received_exchanges();
+    assert!(exchanges[0].message().body().is_null());
+    assert!(exchanges[1].message().body().is_null());
+}
+
+/// Ports of `FileConsumerPreMoveLastModifiedTest` and `FileConsumerMessageTimestampTest`.
+#[tokio::test]
+async fn test_pre_move_last_modified_and_message_timestamp() {
+    let dir = TestDirectory::new("FileConsumerPreMoveLastModifiedTest");
+    let (a, b) = (
+        dir.file_uri(
+            "a?preMove=work/work-${file:name}&initialDelay=0&delay=10&keepLastModified=true",
+        ),
+        dir.file_uri("b?noop=true&initialDelay=0&delay=10"),
+    );
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(
+            from(&a)
+                .process_fn(|e| {
+                    let long = |k| e.message().header(k).and_then(|v| v.as_i64()).unwrap_or(0);
+                    assert!(long(FILE_LAST_MODIFIED) > 0);
+                    assert!(long(FILE_LENGTH) > 0);
+                    Ok(())
+                })
+                .log("Got file ${file:name} modified=${file:modified}")
+                .to("mock:result"),
+        );
+        r.add(from(&b).convert_body_to("String").to("mock:timestamp"));
+    })
+    .await;
+    t.mock("mock:result").expected_message_count(1);
+    let mock = t.mock("mock:timestamp");
+    mock.expected_message_count(1);
+    mock.message_matches(0, header(MESSAGE_TIMESTAMP).is_greater_than(0));
+    send(&t, &dir, "a/hello.txt", "Hello World").await;
+    send(&t, &dir, "b/hello.txt", "Hello World").await;
+    t.assert_mock_endpoints_satisfied().await;
+}
+
+/// Port of `FileMoveAndMoveFailedIssueTest`.
+#[tokio::test]
+async fn test_move_and_move_failed_issue() {
+    for (name, content, count, moved) in [
+        (
+            "hello.txt",
+            "Hello World",
+            1,
+            "input.bak/somedate/hello.txt",
+        ),
+        ("bomb.txt", "Kaboom", 0, "input.err/somedate/bomb.txt"),
+    ] {
+        let dir = TestDirectory::new("FileMoveAndMoveFailedIssueTest");
+        let uri = format!(
+            "file://{}/input?move=${{file:parent}}.bak/somedate/${{file:onlyname}}&moveFailed=${{file:parent}}.err/somedate/${{file:onlyname}}&initialDelay=0&delay=10",
+            dir.path()
+        );
+        let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+            r.add(
+                from(&uri)
+                    .convert_body_to("String")
+                    .filter(body().contains("Kaboom"), |s| {
+                        s.throw_exception(CamelError::illegal_argument("Forced"))
+                    })
+                    .to("mock:result"),
+            );
+        })
+        .await;
+        let mock = t.mock("mock:result");
+        mock.expected_message_count(count);
+        send(&t, &dir, &format!("input/{name}"), content).await;
+        let f = dir.test_file(moved);
+        support_wait(|| f.exists()).await;
+        assert!(f.exists(), "{moved}");
+        mock.assert_is_satisfied().await;
+    }
+}
+
+/// Port of `FileProducerNoForcedWritesTest`.
+#[tokio::test]
+async fn test_no_forced_writes() {
+    let dir = TestDirectory::new("FileProducerNoForcedWritesTest");
+    let (from_uri, a, b) = (
+        dir.file_uri("?initialDelay=0&delay=10&noop=true"),
+        dir.file_uri("?fileName=output.txt&forceWrites=false"),
+        dir.file_uri("?fileName=output2.txt&charset=iso-8859-1&forceWrites=false"),
+    );
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(
+            from(&from_uri)
+                .multicast(|s| s.to(&a).to(&b))
+                .to("mock:result"),
+        );
+    })
+    .await;
+    t.mock("mock:result")
+        .expected_bodies_received(["Hello World"]);
+    send(&t, &dir, "hello.txt", "Hello World").await;
+    t.assert_mock_endpoints_satisfied().await;
+    assert_eq!(Some("Hello World".to_string()), dir.read("output.txt"));
+    assert_eq!(Some("Hello World".to_string()), dir.read("output2.txt"));
 }

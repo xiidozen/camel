@@ -487,3 +487,34 @@ async fn test_append_text_and_append_chars_single_message() {
     t.template.send_body("direct:chars", "Hello").await.unwrap();
     mock.assert_is_satisfied().await;
 }
+
+/// Port of `FileProducerToDMoveExistingTest`.
+#[tokio::test]
+async fn test_to_d_move_existing() {
+    let dir = TestDirectory::new("FileProducerToDMoveExistingTest");
+    let uri = dir.file_uri(&format!(
+        "${{header.myDir}}?fileExist=Move&moveExisting={}/out/old-${{file:onlyname}}",
+        dir.path()
+    ));
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(from("direct:start").to_d(&uri).to("mock:result"));
+    })
+    .await;
+    t.mock("mock:result").expected_message_count(2);
+    for body in ["Hello World", "Bye World"] {
+        t.template
+            .send_body_and_headers(
+                "direct:start",
+                body,
+                vec![
+                    ("myDir".into(), "out".into()),
+                    (FILE_NAME.into(), "hello.txt".into()),
+                ],
+            )
+            .await
+            .unwrap();
+    }
+    t.assert_mock_endpoints_satisfied().await;
+    assert!(dir.test_file("out/old-hello.txt").exists());
+    assert!(dir.test_file("out/hello.txt").exists());
+}
