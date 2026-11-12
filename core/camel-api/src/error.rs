@@ -307,6 +307,18 @@ impl CamelError {
         }
     }
 
+    /// An error of the kind without message (the Java constructors without argument).
+    pub fn of_kind(kind: ErrorKind) -> Self {
+        CamelError {
+            kind,
+            message: None,
+            source: None,
+            exchange_id: None,
+            detail: None,
+            subtype: None,
+        }
+    }
+
     /// Wraps the cause as an error of the kind (the Java constructors taking only a cause).
     pub fn wrap(kind: ErrorKind, cause: impl Into<BoxError>) -> Self {
         CamelError {

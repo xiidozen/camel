@@ -594,3 +594,138 @@ async fn test_try_processor_on_when() {
         t.assert_mock_endpoints_satisfied().await;
     }
 }
+
+/// Ports of `ThrowExceptionTest`, `ThrowExceptionMessageTest` and
+/// `ThrowExceptionNullMessageTest`.
+#[tokio::test]
+async fn test_throw_exception() {
+    for (variant, message) in [
+        (0, Some("Forced")),
+        (1, Some("Darn Hello World is invalid")),
+        (2, None),
+    ] {
+        let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+            let route = from("direct:start").to("mock:start");
+            let route = match variant {
+                0 => route.throw_exception(CamelError::illegal_argument("Forced")),
+                1 => route.throw_exception_of(
+                    ErrorKind::IllegalArgument,
+                    Some("Darn ${body} is invalid"),
+                ),
+                _ => route.throw_exception_of(ErrorKind::IllegalArgument, None),
+            };
+            r.add(route.to("mock:result"));
+        })
+        .await;
+        t.mock("mock:start").expected_message_count(1);
+        t.mock("mock:result").expected_message_count(0);
+        let e = t
+            .template
+            .send_body("direct:start", "Hello World")
+            .await
+            .unwrap_err();
+        let cause = crate::support::cause_of(&e);
+        assert!(cause.is(ErrorKind::IllegalArgument), "{e}");
+        assert_eq!(message, cause.message(), "{variant}");
+        t.assert_mock_endpoints_satisfied().await;
+    }
+}
+
+/// Port of `DeadLetterChannelSetHeaderTest`.
+#[tokio::test]
+async fn test_dead_letter_channel_set_header() {
+    let t = ContextTestSupport::with_routes(|r: &mut Routes| {
+        r.add(
+            from("direct:start")
+                .error_handler(dead_letter_channel("direct:error"))
+                .throw_exception(CamelError::illegal_argument("Damn")),
+        );
+        r.add(
+            from("direct:error")
+                .set_header("foo", constant("123"))
+                .set_header("bar", constant("456"))
+                .to("mock:error"),
+        );
+    })
+    .await;
+    let mock = t.mock("mock:error");
+    mock.expected_bodies_received(["Hello World"]);
+    mock.expected_header_received("foo", "123");
+    mock.expected_header_received("bar", "456");
+    t.template
+        .send_body("direct:start", "Hello World")
+        .await
+        .unwrap();
+    mock.assert_is_satisfied().await;
+}
+
+/// Ports of `FilterNotMatchedTest` and `FilterNotTest`.
+#[tokio::test]
+async fn test_filter_not_matched_and_not() {
+    let t = ContextTestSupport::with_routes(|r: &mut Routes| {
+        r.add(
+            from("direct:start")
+                .filter(header("foo").is_equal_to("bar"), |f| f.to("mock:result"))
+                .to("mock:end"),
+        );
+        r.add(from("direct:not").filter(
+            camel_core::support::builder::not(header("foo").is_not_null()),
+            |f| f.to("mock:not"),
+        ));
+    })
+    .await;
+    let result = t.mock("mock:result");
+    result.expected_message_count(1);
+    t.mock("mock:end").expected_message_count(2);
+    t.template
+        .send_body_and_header("direct:start", "<matched/>", "foo", "bar")
+        .await
+        .unwrap();
+    t.template
+        .send_body_and_header(
+            "direct:start",
+            "<notMatched/>",
+            "foo",
+            "notMatchedHeaderValue",
+        )
+        .await
+        .unwrap();
+    let not = t.mock("mock:not");
+    not.expected_bodies_received(["<notMatched/>"]);
+    t.template
+        .send_body_and_header("direct:not", "<matched/>", "foo", "bar")
+        .await
+        .unwrap();
+    t.template
+        .send_body("direct:not", "<notMatched/>")
+        .await
+        .unwrap();
+    t.assert_mock_endpoints_satisfied().await;
+}
+
+/// Port of `SimpleTryThrowExceptionFinallyTest`.
+#[tokio::test]
+async fn test_simple_try_throw_exception_finally() {
+    let t = ContextTestSupport::with_routes(|r: &mut Routes| {
+        r.add(
+            from("direct:start")
+                .do_try(|t| {
+                    t.to("mock:try")
+                        .throw_exception(CamelError::illegal_argument("Damn"))
+                        .do_finally(|f| f.to("mock:finally"))
+                })
+                .to("mock:result"),
+        );
+    })
+    .await;
+    t.mock("mock:try").expected_message_count(1);
+    t.mock("mock:finally").expected_message_count(1);
+    t.mock("mock:result").expected_message_count(0);
+    let e = t
+        .template
+        .send_body("direct:start", "Hello World")
+        .await
+        .unwrap_err();
+    assert_eq!(Some("Damn"), crate::support::cause_of(&e).message());
+    t.assert_mock_endpoints_satisfied().await;
+}

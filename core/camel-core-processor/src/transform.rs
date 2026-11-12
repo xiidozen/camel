@@ -174,18 +174,37 @@ impl Processor for StopProcessor {
 /// Fails the exchange with the given error (the throwException EIP).
 pub struct ThrowExceptionProcessor {
     error: CamelError,
+    message: Option<SharedExpression>,
 }
 
 impl ThrowExceptionProcessor {
     /// Creates the processor.
     pub fn new(error: CamelError) -> Self {
-        ThrowExceptionProcessor { error }
+        ThrowExceptionProcessor {
+            error,
+            message: None,
+        }
+    }
+
+    /// The processor failing with an error of the kind, with the message of the expression (Java
+    /// `throwException(type, message)`).
+    pub fn of_kind(kind: camel_api::error::ErrorKind, message: Option<SharedExpression>) -> Self {
+        ThrowExceptionProcessor {
+            error: CamelError::of_kind(kind),
+            message,
+        }
     }
 }
 
 impl Processor for ThrowExceptionProcessor {
-    fn process<'a>(&'a self, _exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>> {
-        ready(Err(self.error.clone()))
+    fn process<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>> {
+        let Some(message) = &self.message else {
+            return ready(Err(self.error.clone()));
+        };
+        ready(match message.evaluate_mut(exchange) {
+            Ok(m) => Err(CamelError::new(self.error.kind(), m.to_string())),
+            Err(e) => Err(e),
+        })
     }
 }
 

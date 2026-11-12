@@ -538,6 +538,17 @@ impl<'a> RouteReifier<'a> {
             Eip::Stop => Arc::new(StopProcessor),
             Eip::Process(r) => resolve_process_ref(self.context, r)?,
             Eip::ThrowException(e) => Arc::new(ThrowExceptionProcessor::new(e.clone())),
+            Eip::ThrowExceptionOf { kind, message } => {
+                let message = match message {
+                    Some(m) => Some(
+                        self.context
+                            .resolve_language("simple")?
+                            .create_expression(m)?,
+                    ),
+                    None => None,
+                };
+                Arc::new(ThrowExceptionProcessor::of_kind(*kind, message))
+            }
             Eip::Split {
                 expression,
                 steps,

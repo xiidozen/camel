@@ -1474,6 +1474,15 @@ pub trait Dsl: Sized {
     fn throw_exception(self, error: CamelError) -> Self {
         self.eip(Eip::ThrowException(error))
     }
+
+    /// Fails the exchange with an error of the kind, its message a simple expression evaluated
+    /// with the exchange (Java `.throwException(type, message)`; `None`: without message).
+    fn throw_exception_of(self, kind: camel_api::error::ErrorKind, message: Option<&str>) -> Self {
+        self.eip(Eip::ThrowExceptionOf {
+            kind,
+            message: message.map(str::to_string),
+        })
+    }
 }
 
 /// The steps of a nested block.

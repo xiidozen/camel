@@ -533,6 +533,14 @@ pub enum Eip {
     Process(ProcessRef),
     /// Fails the exchange with an error (`throwException`).
     ThrowException(CamelError),
+    /// Fails the exchange with an error of the kind and the message, a simple expression
+    /// evaluated with the exchange (`throwException(type, message)`; `None`: no message).
+    ThrowExceptionOf {
+        /// The kind of the error.
+        kind: camel_api::error::ErrorKind,
+        /// The message (a simple expression).
+        message: Option<String>,
+    },
     /// Splits the message into parts processed by the steps (`split`).
     Split {
         /// The expression of the parts.
@@ -805,7 +813,7 @@ impl Eip {
             Eip::Log { .. } => "log",
             Eip::Stop => "stop",
             Eip::Process(_) => "process",
-            Eip::ThrowException(_) => "throwException",
+            Eip::ThrowException(_) | Eip::ThrowExceptionOf { .. } => "throwException",
             Eip::DoTry { .. } => "doTry",
             Eip::Split { .. } => "split",
             Eip::Multicast { .. } => "multicast",
@@ -934,6 +942,11 @@ impl fmt::Display for ProcessorDefinition {
                 f,
                 "ThrowException[{}]",
                 camel_api::error::error_type_name(e)
+            ),
+            Eip::ThrowExceptionOf { kind, .. } => write!(
+                f,
+                "ThrowException[{}]",
+                camel_api::error::error_type_name(&camel_api::error::CamelError::of_kind(*kind))
             ),
             Eip::Split {
                 expression, steps, ..
