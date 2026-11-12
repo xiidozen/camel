@@ -241,6 +241,7 @@ dependencies = [
  "indexmap",
  "log",
  "regex",
+ "tokio",
 ]
 
 [[package]]
