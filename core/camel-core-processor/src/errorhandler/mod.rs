@@ -21,6 +21,7 @@ use camel_api::exchange_constants::{
 use camel_api::processor::{
     start_processors, stop_processors, BoxFuture, Processor, SharedPredicate, SharedProcessor,
 };
+use camel_api::spi::event::{notify, CamelEvent};
 use exception_policy::{find_exception_policy, ExceptionPolicy};
 use redelivery_policy::RedeliveryPolicy;
 use std::sync::Arc;
@@ -357,12 +358,34 @@ impl<'a> Task<'a> {
                         exchange.set_exception(Some(e));
                     }
                 }
+                let context = exchange.context().clone();
+                let dead_letter_uri = self.config.dead_letter.as_ref().map(|d| d.uri.clone());
                 if exchange.exception().is_none() {
+                    notify(
+                        context.as_ref(),
+                        CamelEvent::ExchangeFailureHandling {
+                            exchange,
+                            dead_letter: is_dlc,
+                            dead_letter_uri: dead_letter_uri.as_deref(),
+                        },
+                    );
                     if let Err(e) = p.process(exchange).await {
                         exchange.set_exception(Some(e));
                     }
+                    self.prepare_after_failure(exchange, is_dlc, should_handle, should_continue);
+                    let handled = exchange.error_handler_handled() == Some(true);
+                    notify(
+                        context.as_ref(),
+                        CamelEvent::ExchangeFailureHandled {
+                            exchange,
+                            dead_letter: is_dlc,
+                            dead_letter_uri: dead_letter_uri.as_deref(),
+                            handled,
+                        },
+                    );
+                } else {
+                    self.prepare_after_failure(exchange, is_dlc, should_handle, should_continue);
                 }
-                self.prepare_after_failure(exchange, is_dlc, should_handle, should_continue);
                 suffix = match &self.config.dead_letter {
                     Some(d) if is_dlc => format!(
                         ". Handled by DeadLetterChannel: [{}]",
@@ -658,6 +681,13 @@ impl Processor for RedeliveryErrorHandler {
                     log_ids(exchange)
                 );
                 prepare_out_to_in(exchange);
+                notify(
+                    exchange.context().clone().as_ref(),
+                    CamelEvent::ExchangeRedelivery {
+                        exchange,
+                        attempt: task.redelivery_counter,
+                    },
+                );
                 crate::process_and_capture(self.output.as_ref(), exchange).await;
             }
         })

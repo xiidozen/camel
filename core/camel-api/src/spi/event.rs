@@ -108,21 +108,26 @@ pub enum CamelEvent<'a> {
     ExchangeCompleted(&'a Exchange),
     /// The exchange failed (its unit of work is done, with an error).
     ExchangeFailed(&'a Exchange),
-    /// The error handler is handling the failed exchange (`deadLetter`: whether it goes to a
-    /// dead letter channel).
+    /// A failure processor (a dead letter channel, an onException or a doCatch) is handling
+    /// the failed exchange.
     ExchangeFailureHandling {
         /// The exchange.
         exchange: &'a Exchange,
-        /// Whether the failure goes to a dead letter channel.
+        /// Whether the failure processor is a dead letter channel.
         dead_letter: bool,
+        /// The uri of the dead letter channel.
+        dead_letter_uri: Option<&'a str>,
     },
-    /// The error handler handled the failed exchange.
+    /// The failure processor handled the failed exchange.
     ExchangeFailureHandled {
         /// The exchange.
         exchange: &'a Exchange,
-        /// Whether the failure went to a dead letter channel.
+        /// Whether the failure processor is a dead letter channel.
         dead_letter: bool,
-        /// Whether the failure is handled (the exchange has no error any more).
+        /// The uri of the dead letter channel.
+        dead_letter_uri: Option<&'a str>,
+        /// Whether the error handler marked the failure as handled; otherwise it is continued
+        /// (Java `isContinued` is `!isHandled`).
         handled: bool,
     },
     /// The exchange is redelivered (the attempt number, from 1).

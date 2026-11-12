@@ -11,6 +11,7 @@ use camel_api::exchange_constants::{
 use camel_api::processor::{
     start_processors, stop_processors, BoxFuture, Processor, SharedPredicate, SharedProcessor,
 };
+use camel_api::spi::event::{notify, CamelEvent};
 use camel_util::value::Value;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -213,7 +214,25 @@ impl Processor for CatchProcessor {
             exchange.set_property(EXCEPTION_CAUGHT, caught_value(&e));
             exchange.set_exception(None);
             exchange.set_redelivery_exhausted(false);
+            let context = exchange.context().clone();
+            notify(
+                context.as_ref(),
+                CamelEvent::ExchangeFailureHandling {
+                    exchange,
+                    dead_letter: false,
+                    dead_letter_uri: None,
+                },
+            );
             process_and_capture(self.processor.as_ref(), exchange).await;
+            notify(
+                context.as_ref(),
+                CamelEvent::ExchangeFailureHandled {
+                    exchange,
+                    dead_letter: false,
+                    dead_letter_uri: None,
+                    handled: false,
+                },
+            );
             exchange.set_redelivery_exhausted(false);
             if rollback_only || rollback_only_last || stop {
                 exchange.set_route_stop(stop);

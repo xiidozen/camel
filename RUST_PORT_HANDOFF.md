@@ -137,7 +137,7 @@ Crates live **in the directory of the Maven module they replace** (`core/camel-a
   component options from properties need a configurer per component (not designed yet).
 - Events: `camel_api::spi::event` (`EventNotifier`, `notify(context, event)`), notifiers on
   `DefaultCamelContext::add_event_notifier`; new sending paths should send `ExchangeSending`/`ExchangeSent` (or use
-  `dynamic::send_to`). Pending: redelivery/failure handling events.
+  `dynamic::send_to`).
 - **Next:** threads, the rest of the simple functions (init blocks, type/message/output), then
   camel-main and the YAML/XML DSLs.
 - Java files still present in `core/camel-api/src/main/java` are the ones not ported yet.
