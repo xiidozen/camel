@@ -197,7 +197,9 @@ fn rename_target(
 }
 
 /// Renames the file, replacing an existing one (Java `renameFile` with `copyAndDeleteOnRenameFail`).
-fn rename(from: &Path, to: &Path) -> CamelResult<()> {
+/// Renames the file (Java `FileOperations.renameFile`): by a copy and delete with
+/// `renameUsingCopy`, or when the rename fails with `copyAndDeleteOnRenameFail` (default).
+fn rename(c: &crate::FileConfiguration, from: &Path, to: &Path) -> CamelResult<()> {
     if let Some(parent) = to.parent() {
         std::fs::create_dir_all(parent).map_err(|e| {
             operation_failed(format!(
@@ -210,7 +212,15 @@ fn rename(from: &Path, to: &Path) -> CamelResult<()> {
         std::fs::remove_file(to)
             .map_err(|e| operation_failed(format!("Cannot delete file: {}: {e}", to.display())))?;
     }
-    if std::fs::rename(from, to).is_err() {
+    let renamed = !c.rename_using_copy && std::fs::rename(from, to).is_ok();
+    if !renamed {
+        if !c.rename_using_copy && !c.copy_and_delete_on_rename_fail {
+            return Err(operation_failed(format!(
+                "Cannot rename file from: {} to: {}",
+                from.display(),
+                to.display()
+            )));
+        }
         std::fs::copy(from, to).map_err(|e| {
             operation_failed(format!(
                 "Cannot rename file from: {} to: {}: {e}",
@@ -406,7 +416,7 @@ fn prepare(
     file.populate_headers(&mut exchange);
     if let Some(pre) = &c.pre_move {
         let to = rename_target(endpoint, &mut exchange, &file, pre)?;
-        rename(&file.file_path, &to)?;
+        rename(c, &file.file_path, &to)?;
         file = GenericFile::of(&c.directory, &to)
             .map_err(|e| operation_failed(format!("Cannot read file: {}: {e}", to.display())))?;
         file.populate_headers(&mut exchange);
@@ -463,7 +473,7 @@ fn complete(endpoint: &FileEndpoint, taken: &Taken, exchange: &mut Exchange) -> 
             // the done file is kept for a retry unless the file is moved away
             delete_done_file(endpoint, taken, exchange);
             let to = rename_target(endpoint, exchange, file, failed_to)?;
-            rename(&file.file_path, &to)?;
+            rename(c, &file.file_path, &to)?;
         }
         return Ok(());
     }
@@ -494,7 +504,7 @@ fn complete(endpoint: &FileEndpoint, taken: &Taken, exchange: &mut Exchange) -> 
     // the headers of the file again, as the route may have changed them
     file.populate_headers(exchange);
     let to = rename_target(endpoint, exchange, file, &move_to)?;
-    rename(&file.file_path, &to)
+    rename(c, &file.file_path, &to)
 }
 
 /// Routes one file and applies the process strategy.
@@ -726,8 +736,19 @@ async fn run(
     }
     loop {
         if let Err(e) = poll(&endpoint, &processor, &filters, &state).await {
-            log::warn!("Consumer {} failed polling endpoint: {}. Will try again at next poll. Caused by: [{e}]",
-                endpoint.uri, endpoint.uri);
+            if endpoint.config.bridge_error_handler {
+                // the error to the error handler of the route (Java
+                // BridgeExceptionHandlerToErrorHandler)
+                let mut exchange = endpoint.create_exchange();
+                exchange.set_property(camel_api::exchange_constants::ERRORHANDLER_BRIDGE, true);
+                exchange.set_exception(Some(e));
+                if let Err(e) = processor.process(&mut exchange).await {
+                    log::warn!("Error processing the bridged error: {e}");
+                }
+            } else {
+                log::warn!("Consumer {} failed polling endpoint: {}. Will try again at next poll. Caused by: [{e}]",
+                    endpoint.uri, endpoint.uri);
+            }
         }
         if !sleep(&state, endpoint.config.delay.max(1)).await {
             break;

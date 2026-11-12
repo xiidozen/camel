@@ -3353,3 +3353,100 @@ async fn test_marker_file_recursive_filter_old_lock_files() {
         mock.assert_is_satisfied().await;
     }
 }
+
+/// Port of `FileBridgeErrorHandlerTest`: the poll errors go to the error handler of the route.
+#[tokio::test]
+async fn test_bridge_error_handler() {
+    use camel_core::api::exchange_constants::EXCEPTION_CAUGHT;
+    let dir = TestDirectory::new("FileBridgeErrorHandlerTest");
+    let uri = dir.file_uri("dummy?bridgeErrorHandler=true&autoCreate=false&directoryMustExist=true&initialDelay=0&delay=10");
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.on_exception(on_exception(ErrorType::Any).handled(true).to("mock:error"));
+        r.add(from(&uri).log("${body}").to("mock:result"));
+    })
+    .await;
+    t.mock("mock:result").expected_message_count(0);
+    let error = t.mock("mock:error");
+    error.expected_minimum_message_count(1);
+    error.all_messages_match(exchange_property(EXCEPTION_CAUGHT).is_not_null());
+    t.assert_mock_endpoints_satisfied().await;
+}
+
+/// Ports of `FileProducerRenameUsingCopyTest` and
+/// `FileConsumerPreMoveCopyAndDeleteOnRenameFailFalseTest`.
+#[tokio::test]
+async fn test_rename_using_copy() {
+    consume(
+        "FileProducerRenameUsingCopyTest",
+        "?renameUsingCopy=true&move=done&initialDelay=0&delay=10",
+        &[("hello.txt", "Hello Camel")],
+        &["Hello Camel"],
+        &["done/hello.txt"],
+    )
+    .await;
+    consume(
+        "FileConsumerPreMoveCopyAndDeleteOnRenameFailFalseTest",
+        "?preMove=work/work-${file:name}&initialDelay=0&delay=10&copyAndDeleteOnRenameFail=false",
+        &[("hello.txt", "Hello World")],
+        &["Hello World"],
+        &[],
+    )
+    .await;
+}
+
+/// Port of `FileInvalidStartingPathTest`.
+#[tokio::test]
+async fn test_invalid_starting_path() {
+    let dir = TestDirectory::new("FileInvalidStartingPathTest");
+    let t = ContextTestSupport::new();
+    let e = match t.context.endpoint(
+        &dir.file_uri("${date:now:yyyyMMdd}/${in.header.messageType}-${date:now:hhmmss}.txt"),
+    ) {
+        Err(e) => e,
+        Ok(_) => panic!("Should have thrown an exception"),
+    };
+    assert!(
+        format!("{e} {}", crate::support::cause_of(&e)).contains("Invalid directory"),
+        "{e}"
+    );
+    let endpoint = t
+        .context
+        .endpoint(&dir.file_uri(
+            "?fileName=${date:now:yyyyMMdd}/${in.header.messageType}-${date:now:hhmmss}.txt",
+        ))
+        .unwrap();
+    let file = endpoint
+        .as_any()
+        .downcast_ref::<camel_file::FileEndpoint>()
+        .unwrap();
+    assert_eq!(
+        Some("${date:now:yyyyMMdd}/${in.header.messageType}-${date:now:hhmmss}.txt"),
+        file.configuration().file_name.as_deref()
+    );
+}
+
+/// Port of `FileConsumerDirectoryMustExistBridgeErrorHandlerTest`.
+#[tokio::test]
+async fn test_directory_must_exist_bridge_error_handler() {
+    let dir = TestDirectory::new("FileConsumerDirectoryMustExistBridgeErrorHandlerTest");
+    let uri = dir.file_uri("new?initialDelay=1&delay=1&autoCreate=false&directoryMustExist=true&bridgeErrorHandler=true");
+    let t = ContextTestSupport::new();
+    t.context
+        .add_routes(move |r: &mut Routes| {
+            r.error_handler(dead_letter_channel("mock:dead"));
+            r.add(
+                from(&uri)
+                    .route_id("foo")
+                    .auto_startup(false)
+                    .to("mock:result"),
+            );
+        })
+        .await
+        .unwrap();
+    t.context.start().await.unwrap();
+    t.mock("mock:result").expected_message_count(0);
+    t.mock("mock:dead").expected_minimum_message_count(1);
+    t.context.start_route("foo").await.unwrap();
+    t.assert_mock_endpoints_satisfied().await;
+    t.context.stop().await.unwrap();
+}

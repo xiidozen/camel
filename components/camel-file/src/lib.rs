@@ -129,6 +129,14 @@ pub struct FileConfiguration {
     /// dynamic parts): the producer writes it after the file, the consumer only takes the
     /// files with their done file, and deletes it with the file.
     pub done_file_name: Option<String>,
+    /// Whether the consumer moves the files by copy and delete (`renameUsingCopy`).
+    pub rename_using_copy: bool,
+    /// Whether a failed rename of the consumer falls back to copy and delete
+    /// (`copyAndDeleteOnRenameFail`, default `true`).
+    pub copy_and_delete_on_rename_fail: bool,
+    /// Whether the errors of the polls are routed to the error handler of the route as an
+    /// exchange with the exception (`bridgeErrorHandler`), else logged.
+    pub bridge_error_handler: bool,
     /// The Ant patterns of the files to include (`antInclude`, comma separated), matched on the
     /// path relative to the starting directory.
     pub ant_include: Option<Vec<String>>,
@@ -279,6 +287,9 @@ impl FileConfiguration {
             append_chars: None,
             allow_null_body: false,
             done_file_name: None,
+            rename_using_copy: false,
+            copy_and_delete_on_rename_fail: true,
+            bridge_error_handler: false,
             ant_include: None,
             ant_exclude: None,
             ant_filter_case_sensitive: true,
@@ -379,6 +390,12 @@ impl Component for FileComponent {
         parameters: &mut Parameters,
     ) -> CamelResult<SharedEndpoint> {
         let directory = remaining.strip_prefix("//").unwrap_or(remaining);
+        // the starting directory is static (Java FileComponent.buildFileEndpoint)
+        if directory.contains("${") || directory.contains("$simple{") {
+            return Err(CamelError::illegal_argument(format!(
+                "Invalid directory: {directory}. Dynamic expressions with ${{ }} placeholders is not allowed. Use the fileName option to set the dynamic expression."
+            )));
+        }
         let mut c = FileConfiguration::new(directory);
         c.file_name = param(parameters, "fileName")?;
         c.charset = param(parameters, "charset")?;
@@ -415,6 +432,15 @@ impl Component for FileComponent {
             c.allow_null_body = v;
         }
         c.done_file_name = param(parameters, "doneFileName")?;
+        if let Some(v) = param(parameters, "renameUsingCopy")? {
+            c.rename_using_copy = v;
+        }
+        if let Some(v) = param(parameters, "copyAndDeleteOnRenameFail")? {
+            c.copy_and_delete_on_rename_fail = v;
+        }
+        if let Some(v) = param(parameters, "bridgeErrorHandler")? {
+            c.bridge_error_handler = v;
+        }
         let patterns = |v: String| v.split(',').map(str::to_string).collect::<Vec<_>>();
         c.ant_include = param::<String>(parameters, "antInclude")?.map(patterns);
         c.ant_exclude = param::<String>(parameters, "antExclude")?.map(patterns);
@@ -574,7 +600,6 @@ impl Component for FileComponent {
             "backoffErrorThreshold",
             "useFixedDelay",
             "synchronous",
-            "bridgeErrorHandler",
             "lazyStartProducer",
         ] {
             let _: Option<String> = param(parameters, name)?;

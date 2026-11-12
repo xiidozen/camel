@@ -646,6 +646,18 @@ impl Processor for RedeliveryErrorHandler {
     fn process<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>> {
         Box::pin(async move {
             let mut task = Task::new(&self.config, exchange);
+            // an error bridged from a consumer (bridgeErrorHandler) is handled at once, without
+            // routing nor redeliveries (Java isFailedOrBridged and handlePreviousFailure)
+            let bridged = matches!(
+                exchange.property(camel_api::exchange_constants::ERRORHANDLER_BRIDGE),
+                Some(camel_util::value::Value::Bool(true))
+            );
+            if bridged && exchange.exception().is_some() && !exchange.is_failure_handled() {
+                task.handle_exception(exchange);
+                task.on_exception_occurred(exchange).await;
+                task.deliver_to_failure_processor(exchange).await;
+                return Ok(());
+            }
             crate::process_and_capture(self.output.as_ref(), exchange).await;
             loop {
                 if Self::is_done(exchange) {
