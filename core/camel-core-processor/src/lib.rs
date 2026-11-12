@@ -14,6 +14,7 @@
 
 pub mod aggregate;
 pub mod choice;
+pub mod claim_check;
 pub mod dynamic;
 pub mod enricher;
 pub mod errorhandler;
@@ -26,6 +27,7 @@ pub mod on_completion;
 pub mod pipeline;
 pub mod routing;
 pub mod send;
+pub mod throttle;
 pub mod transform;
 pub mod try_catch;
 pub mod unit_of_work;

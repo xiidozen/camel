@@ -669,6 +669,52 @@ pub enum Eip {
         /// The sample period in millis (default 1000).
         period_millis: u64,
     },
+    /// Limits the number of exchanges per period or at the same time (`throttle`).
+    Throttle {
+        /// The maximum number of requests.
+        max_requests: ExpressionDefinition,
+        /// The time period in millis of the total requests mode (default 1000).
+        time_period_millis: u64,
+        /// Whether the concurrent requests mode is used, else the total requests mode.
+        concurrent: bool,
+        /// The correlation key of separate limits.
+        correlation: Option<ExpressionDefinition>,
+        /// Whether exchanges over the limit fail instead of waiting.
+        reject_execution: bool,
+    },
+    /// Stores a copy of the message and merges it back later (`claimCheck`).
+    ClaimCheck {
+        /// The operation: `Set`, `Get`, `GetAndRemove`, `Push` or `Pop`.
+        operation: String,
+        /// The key (a simple expression), for `Set`, `Get` and `GetAndRemove`.
+        key: Option<String>,
+        /// The rules of what is merged back (`body`, `headers`, `header:pattern`, ...).
+        filter: Option<String>,
+        /// The strategy merging the message back, instead of the filter.
+        strategy: Option<AggregationRef>,
+    },
+    /// Marks the exchange for rollback (`rollback`, `markRollbackOnly`).
+    Rollback {
+        /// The message of the `RollbackExchangeException`.
+        message: Option<String>,
+        /// Whether the exchange is only marked for rollback (no exception).
+        mark_rollback_only: bool,
+        /// Whether only the last transaction is marked for rollback.
+        mark_rollback_only_last: bool,
+    },
+    /// Converts a header (`convertHeaderTo`) or variable (`convertVariableTo`) to the Java type.
+    ConvertValueTo {
+        /// Whether it is a variable, else a header.
+        variable: bool,
+        /// The name.
+        name: String,
+        /// The name of the converted value (default the name).
+        to_name: Option<String>,
+        /// The Java type name.
+        type_name: String,
+        /// Whether a value that cannot be converted fails.
+        mandatory: bool,
+    },
     /// `doTry` with its `doCatch` and `doFinally` clauses.
     DoTry {
         /// The steps of the try block.
@@ -723,6 +769,13 @@ impl Eip {
             Eip::Sort { .. } => "sort",
             Eip::Step { .. } => "step",
             Eip::Validate(_) => "validate",
+            Eip::Throttle { .. } => "throttle",
+            Eip::ClaimCheck { .. } => "claimCheck",
+            Eip::Rollback { .. } => "rollback",
+            Eip::ConvertValueTo {
+                variable: false, ..
+            } => "convertHeaderTo",
+            Eip::ConvertValueTo { variable: true, .. } => "convertVariableTo",
             Eip::Enrich { .. } => "enrich",
             Eip::PollEnrich { .. } => "pollEnrich",
             Eip::Sample { .. } => "sample",
@@ -842,6 +895,39 @@ impl fmt::Display for ProcessorDefinition {
             },
             Eip::Step { steps, .. } => write!(f, "Step[{}]", Steps(steps)),
             Eip::Validate(e) => write!(f, "Validate[{e} -> []]"),
+            Eip::Throttle {
+                max_requests,
+                time_period_millis,
+                concurrent,
+                ..
+            } => {
+                if *concurrent {
+                    write!(f, "Throttle[{max_requests} maximum concurrent requests]")
+                } else {
+                    write!(
+                        f,
+                        "Throttle[{max_requests} request per {time_period_millis} millis]"
+                    )
+                }
+            }
+            Eip::ClaimCheck { operation, .. } => write!(f, "ClaimCheck[{operation}]"),
+            Eip::Rollback { message, .. } => match message {
+                Some(m) => write!(f, "Rollback[{m}]"),
+                None => f.write_str("Rollback"),
+            },
+            Eip::ConvertValueTo {
+                variable,
+                name,
+                type_name,
+                ..
+            } => {
+                let kind = if *variable {
+                    "ConvertVariableTo"
+                } else {
+                    "ConvertHeaderTo"
+                };
+                write!(f, "{kind}[{name}: {type_name}]")
+            }
             Eip::Enrich { uri, .. } => write!(f, "Enrich[{uri}]"),
             Eip::PollEnrich { uri, .. } => write!(f, "PollEnrich[{uri}]"),
             Eip::Sample {

@@ -26,9 +26,10 @@ use camel_core_model::processor::{
 use camel_core_model::route::RouteDefinition;
 use camel_core_processor::aggregate::{AggregateOptions, AggregateProcessor};
 use camel_core_processor::choice::ChoiceProcessor;
+use camel_core_processor::claim_check::{ClaimCheckOperation, ClaimCheckProcessor};
 use camel_core_processor::dynamic::{
-    ConvertBodyProcessor, RecipientListProcessor, SendDynamicProcessor,
-    SetExchangePatternProcessor, WireTapProcessor,
+    ConvertBodyProcessor, ConvertTarget, ConvertValueProcessor, RecipientListProcessor,
+    SendDynamicProcessor, SetExchangePatternProcessor, WireTapProcessor,
 };
 use camel_core_processor::enricher::{EnrichProcessor, PollEnrichProcessor};
 use camel_core_processor::errorhandler::exception_policy::ExceptionPolicy;
@@ -47,11 +48,13 @@ use camel_core_processor::routing::{
     LoopProcessor, RoutingSlipProcessor, SamplingProcessor, SortProcessor, StepProcessor,
 };
 use camel_core_processor::send::SendProcessor;
+use camel_core_processor::throttle::{ThrottleProcessor, ThrottlingMode};
 use camel_core_processor::transform::{
     RemoveHeaderProcessor, RemoveHeadersProcessor, RemovePropertiesProcessor,
-    RemovePropertyProcessor, RemoveVariableProcessor, ScriptProcessor, SetBodyProcessor,
-    SetHeaderProcessor, SetHeadersProcessor, SetPropertyProcessor, SetVariableProcessor,
-    SetVariablesProcessor, StopProcessor, ThrowExceptionProcessor, ValidateProcessor,
+    RemovePropertyProcessor, RemoveVariableProcessor, RollbackProcessor, ScriptProcessor,
+    SetBodyProcessor, SetHeaderProcessor, SetHeadersProcessor, SetPropertyProcessor,
+    SetVariableProcessor, SetVariablesProcessor, StopProcessor, ThrowExceptionProcessor,
+    ValidateProcessor,
 };
 use camel_core_processor::try_catch::{CatchProcessor, FinallyProcessor, TryProcessor};
 use camel_util::value::Value;
@@ -538,6 +541,77 @@ impl<'a> RouteReifier<'a> {
                     SamplingProcessor::per_period(std::time::Duration::from_millis(*period_millis))?
                 }
             }),
+            Eip::Throttle {
+                max_requests,
+                time_period_millis,
+                concurrent,
+                correlation,
+                reject_execution,
+            } => {
+                if !*concurrent && *time_period_millis == 0 {
+                    return Err(CamelError::illegal_argument(
+                        "TimePeriodMillis should be a positive number, was: 0",
+                    ));
+                }
+                let mode = if *concurrent {
+                    ThrottlingMode::ConcurrentRequests
+                } else {
+                    ThrottlingMode::TotalRequests(*time_period_millis)
+                };
+                let correlation = match correlation {
+                    Some(c) => Some(self.expr(c)?),
+                    None => None,
+                };
+                Arc::new(ThrottleProcessor::new(
+                    self.expr(max_requests)?,
+                    mode,
+                    correlation,
+                    *reject_execution,
+                ))
+            }
+            Eip::ClaimCheck {
+                operation,
+                key,
+                filter,
+                strategy,
+            } => {
+                let key = match key {
+                    Some(k) => Some(self.expr(&ExpressionDefinition::language("simple", k))?),
+                    None => None,
+                };
+                Arc::new(ClaimCheckProcessor::new(
+                    ClaimCheckOperation::of(operation)?,
+                    key,
+                    filter.clone(),
+                    resolve_aggregation(self.context, strategy)?,
+                )?)
+            }
+            Eip::Rollback {
+                message,
+                mark_rollback_only,
+                mark_rollback_only_last,
+            } => Arc::new(RollbackProcessor::new(
+                message.as_deref(),
+                *mark_rollback_only,
+                *mark_rollback_only_last,
+            )),
+            Eip::ConvertValueTo {
+                variable,
+                name,
+                to_name,
+                type_name,
+                mandatory,
+            } => Arc::new(ConvertValueProcessor::new(
+                if *variable {
+                    ConvertTarget::Variable
+                } else {
+                    ConvertTarget::Header
+                },
+                name,
+                to_name.as_deref(),
+                type_name,
+                *mandatory,
+            )?),
             Eip::Validate(p) => Arc::new(ValidateProcessor::new(reify_predicate(self.context, p)?)),
             Eip::IdempotentConsumer(i) => {
                 let repository = match &i.repository {

@@ -405,3 +405,80 @@ impl Processor for ConvertBodyProcessor {
         Box::pin(std::future::ready(Ok(())))
     }
 }
+
+/// Where a convert processor finds and sets the value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConvertTarget {
+    /// A header.
+    Header,
+    /// A variable.
+    Variable,
+}
+
+/// Converts a header or variable to the Java type, set as the same or another name (the
+/// convertHeaderTo and convertVariableTo EIPs, Java `ConvertHeaderProcessor` and
+/// `ConvertVariableProcessor`).
+pub struct ConvertValueProcessor {
+    target: ConvertTarget,
+    name: String,
+    to_name: Option<String>,
+    type_name: String,
+    mandatory: bool,
+}
+
+impl ConvertValueProcessor {
+    /// Creates the processor.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an unknown type name.
+    pub fn new(
+        target: ConvertTarget,
+        name: &str,
+        to_name: Option<&str>,
+        type_name: &str,
+        mandatory: bool,
+    ) -> CamelResult<Self> {
+        camel_support::type_conversion::convert_to_type(&Value::Null, type_name)?;
+        Ok(ConvertValueProcessor {
+            target,
+            name: name.to_string(),
+            to_name: to_name.map(str::to_string),
+            type_name: type_name.to_string(),
+            mandatory,
+        })
+    }
+}
+
+impl Processor for ConvertValueProcessor {
+    fn process<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>> {
+        let value = match self.target {
+            ConvertTarget::Header => exchange.message().header(&self.name).cloned(),
+            ConvertTarget::Variable => exchange.variable(&self.name).cloned(),
+        };
+        let Some(value) = value.filter(|v| !v.is_null()) else {
+            return Box::pin(std::future::ready(Ok(())));
+        };
+        let converted = match camel_support::type_conversion::convert_to_type(&value, &self.type_name) {
+            Ok(v) if !v.is_null() => v,
+            Ok(_) | Err(_) if !self.mandatory => Value::Null,
+            Ok(_) => {
+                return Box::pin(std::future::ready(Err(CamelError::new(
+                    ErrorKind::NoTypeConversionAvailable,
+                    format!(
+                        "No type converter available to convert from type: {} to the required type: {} with value {value}",
+                        value.type_name(),
+                        self.type_name
+                    ),
+                ))))
+            }
+            Err(e) => return Box::pin(std::future::ready(Err(e))),
+        };
+        let name = self.to_name.as_deref().unwrap_or(&self.name);
+        match self.target {
+            ConvertTarget::Header => exchange.message_mut().set_header(name, converted),
+            ConvertTarget::Variable => exchange.set_variable(name, converted),
+        }
+        Box::pin(std::future::ready(Ok(())))
+    }
+}

@@ -364,3 +364,43 @@ impl Processor for ValidateProcessor {
         ready(result)
     }
 }
+
+/// Marks the exchange for rollback (the rollback and markRollbackOnly EIPs, Java
+/// `RollbackProcessor`): without the mark only options, the exchange fails with a
+/// `RollbackExchangeException`.
+pub struct RollbackProcessor {
+    message: Option<String>,
+    mark_rollback_only: bool,
+    mark_rollback_only_last: bool,
+}
+
+impl RollbackProcessor {
+    /// Creates the processor.
+    pub fn new(
+        message: Option<&str>,
+        mark_rollback_only: bool,
+        mark_rollback_only_last: bool,
+    ) -> Self {
+        RollbackProcessor {
+            message: message.map(str::to_string),
+            mark_rollback_only,
+            mark_rollback_only_last,
+        }
+    }
+}
+
+impl Processor for RollbackProcessor {
+    fn process<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>> {
+        if self.mark_rollback_only_last {
+            exchange.set_rollback_only_last(true);
+        } else {
+            exchange.set_rollback_only(true);
+        }
+        if self.mark_rollback_only || self.mark_rollback_only_last {
+            return ready(Ok(()));
+        }
+        let e = CamelError::rollback_exchange(self.message.as_deref(), exchange);
+        exchange.set_exception(Some(e));
+        ready(Ok(()))
+    }
+}

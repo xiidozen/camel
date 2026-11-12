@@ -6,6 +6,7 @@ mod support;
 
 mod aggregator;
 mod choice_no_otherwise_test;
+mod claim_check_test;
 mod converter;
 mod dead_letter_channel_redelivery_test;
 mod dead_letter_channel_use_original_in_body_test;
@@ -23,6 +24,7 @@ mod onexception;
 mod pipeline_test;
 mod recipient_list_parallel_test;
 mod recipient_list_test;
+mod rollback_throttle_test;
 mod routing_slip_test;
 mod sampling_throttler_test;
 mod sort_step_script_test;

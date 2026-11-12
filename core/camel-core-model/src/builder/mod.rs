@@ -528,6 +528,133 @@ pub trait Dsl: Sized {
         })
     }
 
+    /// Limits the exchanges to the maximum number of requests per time period (default 1000
+    /// millis), waiting for a permit (Java `.throttle(..)`); see
+    /// [`time_period_millis`](Self::time_period_millis),
+    /// [`concurrent_requests_mode`](Self::concurrent_requests_mode),
+    /// [`correlation_expression`](Self::correlation_expression) and
+    /// [`reject_execution`](Self::reject_execution).
+    fn throttle(self, max_requests: impl Into<ExpressionDefinition>) -> Self {
+        self.eip(Eip::Throttle {
+            max_requests: max_requests.into(),
+            time_period_millis: 1000,
+            concurrent: false,
+            correlation: None,
+            reject_execution: false,
+        })
+    }
+
+    /// The time period of the last throttle (total requests mode).
+    fn time_period_millis(mut self, millis: u64) -> Self {
+        if let Some(Eip::Throttle {
+            time_period_millis, ..
+        }) = self.last_mut().map(|l| &mut l.eip)
+        {
+            *time_period_millis = millis;
+        }
+        self
+    }
+
+    /// The last throttle limits the exchanges processed at the same time (Java
+    /// `concurrentRequestsMode()`).
+    fn concurrent_requests_mode(mut self) -> Self {
+        if let Some(Eip::Throttle { concurrent, .. }) = self.last_mut().map(|l| &mut l.eip) {
+            *concurrent = true;
+        }
+        self
+    }
+
+    /// The correlation key of separate limits of the last throttle.
+    fn correlation_expression(mut self, expression: impl Into<ExpressionDefinition>) -> Self {
+        if let Some(Eip::Throttle { correlation, .. }) = self.last_mut().map(|l| &mut l.eip) {
+            *correlation = Some(expression.into());
+        }
+        self
+    }
+
+    /// Whether the exchanges over the limit of the last throttle fail with a
+    /// `ThrottlerRejectedExecutionException` instead of waiting.
+    fn reject_execution(mut self, reject: bool) -> Self {
+        if let Some(Eip::Throttle {
+            reject_execution, ..
+        }) = self.last_mut().map(|l| &mut l.eip)
+        {
+            *reject_execution = reject;
+        }
+        self
+    }
+
+    /// The claim check EIP (Java `.claimCheck(operation, key, filter)`): the operation is
+    /// `Set`, `Get`, `GetAndRemove`, `Push` or `Pop`; the key is a simple expression.
+    fn claim_check(self, operation: &str, key: Option<&str>, filter: Option<&str>) -> Self {
+        self.eip(Eip::ClaimCheck {
+            operation: operation.to_string(),
+            key: key.map(str::to_string),
+            filter: filter.map(str::to_string),
+            strategy: None,
+        })
+    }
+
+    /// Fails the exchange with a `RollbackExchangeException` and marks it for rollback (Java
+    /// `.rollback()`).
+    fn rollback(self) -> Self {
+        self.eip(Eip::Rollback {
+            message: None,
+            mark_rollback_only: false,
+            mark_rollback_only_last: false,
+        })
+    }
+
+    /// [`rollback`](Self::rollback) with the message of the exception.
+    fn rollback_message(self, message: &str) -> Self {
+        self.eip(Eip::Rollback {
+            message: Some(message.to_string()),
+            mark_rollback_only: false,
+            mark_rollback_only_last: false,
+        })
+    }
+
+    /// Only marks the exchange for rollback (Java `.markRollbackOnly()`).
+    fn mark_rollback_only(self) -> Self {
+        self.eip(Eip::Rollback {
+            message: None,
+            mark_rollback_only: true,
+            mark_rollback_only_last: false,
+        })
+    }
+
+    /// Only marks the last transaction of the exchange for rollback (Java
+    /// `.markRollbackOnlyLast()`).
+    fn mark_rollback_only_last(self) -> Self {
+        self.eip(Eip::Rollback {
+            message: None,
+            mark_rollback_only: false,
+            mark_rollback_only_last: true,
+        })
+    }
+
+    /// Converts the header to the Java type (Java `.convertHeaderTo(name, type)`).
+    fn convert_header_to(self, name: &str, type_name: &str) -> Self {
+        self.eip(Eip::ConvertValueTo {
+            variable: false,
+            name: name.to_string(),
+            to_name: None,
+            type_name: type_name.to_string(),
+            mandatory: true,
+        })
+    }
+
+    /// Converts the variable to the Java type (Java `.convertVariableTo(name, type)`).
+    fn convert_variable_to(self, name: &str, type_name: &str) -> Self {
+        self.eip(Eip::ConvertValueTo {
+            variable: true,
+            name: name.to_string(),
+            to_name: None,
+            type_name: type_name.to_string(),
+            mandatory: true,
+        })
+    }
+
     /// Fails the exchange with a `PredicateValidationException` when the predicate does not
     /// match (Java `.validate(..)`).
     fn validate(self, predicate: impl Into<ExpressionDefinition>) -> Self {
@@ -875,7 +1002,8 @@ pub trait Dsl: Sized {
             | Eip::Multicast { strategy: s, .. }
             | Eip::RecipientList { strategy: s, .. }
             | Eip::Enrich { strategy: s, .. }
-            | Eip::PollEnrich { strategy: s, .. },
+            | Eip::PollEnrich { strategy: s, .. }
+            | Eip::ClaimCheck { strategy: s, .. },
         ) = self.last_mut().map(|l| &mut l.eip)
         {
             *s = Some(AggregationRef::Strategy(strategy));
@@ -890,7 +1018,8 @@ pub trait Dsl: Sized {
             | Eip::Multicast { strategy: s, .. }
             | Eip::RecipientList { strategy: s, .. }
             | Eip::Enrich { strategy: s, .. }
-            | Eip::PollEnrich { strategy: s, .. },
+            | Eip::PollEnrich { strategy: s, .. }
+            | Eip::ClaimCheck { strategy: s, .. },
         ) = self.last_mut().map(|l| &mut l.eip)
         {
             *s = Some(AggregationRef::Ref(name.to_string()));
