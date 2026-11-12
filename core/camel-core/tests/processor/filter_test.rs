@@ -40,3 +40,30 @@ async fn test_send_not_matching_message() {
         .unwrap();
     result.assert_is_satisfied().await;
 }
+
+/// Port of `FilterSimpleTest`: the `FilterTest` cases with a simple predicate.
+#[tokio::test]
+async fn test_filter_simple() {
+    let t = ContextTestSupport::with_routes(|r: &mut Routes| {
+        r.add(
+            from("direct:start").filter(simple("${header.foo} == 'bar'"), |f| f.to("mock:result")),
+        );
+    })
+    .await;
+    let result = t.mock("mock:result");
+    result.expected_message_count(1);
+    t.template
+        .send_body_and_header("direct:start", "<matched/>", "foo", "bar")
+        .await
+        .unwrap();
+    t.template
+        .send_body_and_header(
+            "direct:start",
+            "<notMatched/>",
+            "foo",
+            "notMatchedHeaderValue",
+        )
+        .await
+        .unwrap();
+    result.assert_is_satisfied().await;
+}

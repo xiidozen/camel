@@ -47,5 +47,6 @@ mod to_dynamic_test;
 mod to_variable_test;
 mod try_processor_test;
 mod validate_test;
+mod validation_test;
 mod wire_tap_misc_test;
 mod wire_tap_test;

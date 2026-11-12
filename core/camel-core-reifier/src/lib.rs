@@ -300,6 +300,11 @@ impl<'a> RouteReifier<'a> {
                 p,
             ));
         }
+        // a doTry handles its errors itself: neither it nor its blocks are wrapped in the error
+        // handler (Java shouldWrapInErrorHandler)
+        if matches!(def.eip, Eip::DoTry { .. }) {
+            return Ok(p);
+        }
         Ok(match &self.error_handler {
             Some(config) => Arc::new(RedeliveryErrorHandler::new(p, config.clone())),
             None => p,
