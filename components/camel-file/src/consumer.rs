@@ -1,7 +1,7 @@
 //! The file consumer (Java `FileConsumer`, `GenericFileConsumer` and the process strategies
 //! of `GenericFileOnCompletion`): polls the starting directory and routes each file.
 
-use crate::{operation_failed, FileEndpoint, GenericFile};
+use crate::{operation_failed, FileEndpoint, GenericFile, SortBy};
 use camel_api::endpoint::{Consumer, Endpoint, SharedEndpoint};
 use camel_api::error::{CamelError, CamelResult, ErrorKind};
 use camel_api::exchange::Exchange;
@@ -466,9 +466,6 @@ pub(crate) fn candidates(endpoint: &FileEndpoint, filters: &Filters) -> CamelRes
     let mut files = Vec::new();
     list_files(endpoint, dir, 1, &mut files)
         .map_err(|e| operation_failed(format!("Cannot list directory: {}: {e}", c.directory)))?;
-    if c.sort_reverse {
-        files.reverse();
-    }
     let mut answer = Vec::new();
     for path in files {
         let name = path
@@ -479,7 +476,60 @@ pub(crate) fn candidates(endpoint: &FileEndpoint, filters: &Filters) -> CamelRes
             answer.push(path);
         }
     }
+    // the eager limit before sorting, else after (Java eagerMaxMessagesPerPoll)
+    let limit = c.max_messages_per_poll;
+    if limit > 0 && c.eager_max_messages_per_poll {
+        answer.truncate(limit);
+    }
+    let mut answer = sort_files(endpoint, answer)?;
+    if limit > 0 {
+        answer.truncate(limit);
+    }
     Ok(answer)
+}
+
+/// Sorts the files by the `sortBy` groups, evaluated on an exchange with the headers of each
+/// file (Java `GenericFileDefaultSorter`).
+fn sort_files(endpoint: &FileEndpoint, files: Vec<PathBuf>) -> CamelResult<Vec<PathBuf>> {
+    let groups = &endpoint.config.sort_by;
+    if groups.is_empty() || files.len() < 2 {
+        return Ok(files);
+    }
+    let expressions = groups
+        .iter()
+        .map(|g| endpoint.expression(&g.expression))
+        .collect::<CamelResult<Vec<_>>>()?;
+    let mut keyed = Vec::with_capacity(files.len());
+    for path in files {
+        let file = GenericFile::of(&endpoint.config.directory, &path)
+            .map_err(|e| operation_failed(format!("Cannot read file: {}: {e}", path.display())))?;
+        let mut exchange = endpoint.create_exchange();
+        file.populate_headers(&mut exchange);
+        let keys = expressions
+            .iter()
+            .map(|e| e.evaluate_mut(&mut exchange))
+            .collect::<CamelResult<Vec<_>>>()?;
+        keyed.push((keys, path));
+    }
+    keyed.sort_by(|(a, _), (b, _)| compare_groups(groups, a, b, 0));
+    Ok(keyed.into_iter().map(|(_, p)| p).collect())
+}
+
+/// Compares the keys from the group at the index: the nested groups decide the equal keys,
+/// and a reversed group reverses the nested result too (as Java).
+fn compare_groups(groups: &[SortBy], a: &[Value], b: &[Value], i: usize) -> std::cmp::Ordering {
+    let Some(g) = groups.get(i) else {
+        return std::cmp::Ordering::Equal;
+    };
+    let mut o = camel_support::object_helper::compare(&a[i], &b[i], g.ignore_case);
+    if o == std::cmp::Ordering::Equal {
+        o = compare_groups(groups, a, b, i + 1);
+    }
+    if g.reverse {
+        o.reverse()
+    } else {
+        o
+    }
 }
 
 /// One poll: routes the files of the starting directory (Java `GenericFileConsumer.poll`).
@@ -490,10 +540,7 @@ async fn poll(
     state: &State,
 ) -> CamelResult<usize> {
     let c = &endpoint.config;
-    let mut files = candidates(endpoint, filters)?;
-    if c.max_messages_per_poll > 0 {
-        files.truncate(c.max_messages_per_poll);
-    }
+    let files = candidates(endpoint, filters)?;
     let size = files.len();
     let mut count = 0;
     for (index, path) in files.into_iter().enumerate() {

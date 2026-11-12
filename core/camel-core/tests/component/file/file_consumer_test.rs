@@ -1908,3 +1908,206 @@ async fn test_should_skip_done_file() {
         assert!(!f.exists(), "{option}");
     }
 }
+
+/// The bodies in the order of the route consuming the files with the options.
+async fn sorted(name: &str, option: &str, files: &[(&str, &str)], expected: &[&str]) {
+    let dir = TestDirectory::new(name);
+    let t = ContextTestSupport::new();
+    t.context.start().await.unwrap();
+    for (file, body) in files {
+        send(&t, &dir, file, body).await;
+    }
+    let mock = t.mock("mock:result");
+    mock.expected_bodies_received(expected.iter().copied());
+    let uri = dir.file_uri(option);
+    t.context
+        .add_routes(move |r: &mut Routes| {
+            r.add(from(&uri).convert_body_to("String").to("mock:result"));
+        })
+        .await
+        .unwrap();
+    mock.assert_is_satisfied().await;
+}
+
+/// Ports of `FileSortByExpressionTest`, `FileSortByIgnoreCaseExpressionTest`,
+/// `FileSortByNestedExpressionTest` and `FileConsumeMultipleDirectoriesTest` (the order).
+#[tokio::test]
+async fn test_sort_by() {
+    let cities = [
+        ("paris.dat", "Hello Paris"),
+        ("london.txt", "Hello London"),
+        ("copenhagen.xml", "Hello Copenhagen"),
+    ];
+    sorted(
+        "FileSortByExpressionTest",
+        "?initialDelay=0&delay=10&sortBy=file:ext",
+        &cities,
+        &["Hello Paris", "Hello London", "Hello Copenhagen"],
+    )
+    .await;
+    sorted(
+        "FileSortByExpressionTest",
+        "?initialDelay=0&delay=10&sortBy=reverse:file:ext",
+        &cities,
+        &["Hello Copenhagen", "Hello London", "Hello Paris"],
+    )
+    .await;
+
+    let reports = [
+        ("report-3.dat", "Hello Paris"),
+        ("REPORT-2.txt", "Hello London"),
+        ("Report-1.xml", "Hello Copenhagen"),
+    ];
+    sorted(
+        "FileSortByIgnoreCaseExpressionTest",
+        "?sortBy=file:name&initialDelay=0&delay=10",
+        &reports,
+        &["Hello London", "Hello Copenhagen", "Hello Paris"],
+    )
+    .await;
+    sorted(
+        "FileSortByIgnoreCaseExpressionTest",
+        "?initialDelay=0&delay=10&sortBy=ignoreCase:file:name",
+        &reports,
+        &["Hello Copenhagen", "Hello London", "Hello Paris"],
+    )
+    .await;
+    sorted(
+        "FileSortByIgnoreCaseExpressionTest",
+        "?initialDelay=0&delay=10&sortBy=reverse:ignoreCase:file:name",
+        &reports,
+        &["Hello Paris", "Hello London", "Hello Copenhagen"],
+    )
+    .await;
+
+    let nested = [
+        ("paris.txt", "Hello Paris"),
+        ("london.txt", "Hello London"),
+        ("copenhagen.xml", "Hello Copenhagen"),
+        ("dublin.txt", "Hello Dublin"),
+    ];
+    sorted(
+        "FileSortByNestedExpressionTest",
+        "?initialDelay=0&delay=10&sortBy=file:ext;file:name",
+        &nested,
+        &[
+            "Hello Dublin",
+            "Hello London",
+            "Hello Paris",
+            "Hello Copenhagen",
+        ],
+    )
+    .await;
+    sorted(
+        "FileSortByNestedExpressionTest",
+        "?initialDelay=0&delay=10&sortBy=file:ext;reverse:file:name",
+        &nested,
+        &[
+            "Hello Paris",
+            "Hello London",
+            "Hello Dublin",
+            "Hello Copenhagen",
+        ],
+    )
+    .await;
+
+    sorted(
+        "FileConsumeMultipleDirectoriesTest",
+        "?initialDelay=0&delay=10&recursive=true&delete=true&sortBy=file:path",
+        &[
+            ("bye.txt", "Bye World"),
+            ("sub/hello.txt", "Hello World"),
+            ("sub/sub2/godday.txt", "Godday World"),
+        ],
+        &["Bye World", "Hello World", "Godday World"],
+    )
+    .await;
+}
+
+/// Port of `FileConsumeNotEagerMaxMessagesPerPollTest`.
+#[tokio::test]
+async fn test_not_eager_max_messages_per_poll() {
+    use camel_core::api::exchange_constants::BATCH_SIZE;
+    let dir = TestDirectory::new("FileConsumeNotEagerMaxMessagesPerPollTest");
+    let uri = dir.file_uri("?initialDelay=0&delay=10&maxMessagesPerPoll=2&eagerMaxMessagesPerPoll=false&sortBy=file:name");
+    let t = ContextTestSupport::new();
+    t.context
+        .add_routes(move |r: &mut Routes| {
+            r.add(
+                from(&uri)
+                    .route_id("foo")
+                    .auto_startup(false)
+                    .convert_body_to("String")
+                    .to("mock:result"),
+            );
+        })
+        .await
+        .unwrap();
+    t.context.start().await.unwrap();
+    let mock = t.mock("mock:result");
+    mock.expected_bodies_received(["AAA", "BBB"]);
+    send(&t, &dir, "ccc.txt", "CCC").await;
+    send(&t, &dir, "aaa.txt", "AAA").await;
+    send(&t, &dir, "bbb.txt", "BBB").await;
+    t.context.start_route("foo").await.unwrap();
+    mock.expected_property_received(BATCH_SIZE, 2);
+    mock.assert_is_satisfied().await;
+    mock.reset();
+    mock.expected_bodies_received(["CCC"]);
+    mock.expected_property_received(BATCH_SIZE, 1);
+    mock.assert_is_satisfied().await;
+}
+
+/// Port of `FileConsumerRelativeFileNameTest`.
+#[tokio::test]
+async fn test_relative_file_name() {
+    let dir = TestDirectory::new("FileConsumerRelativeFileNameTest");
+    let uri =
+        dir.file_uri("filename-consumer?initialDelay=0&delay=10&recursive=true&sortBy=file:name");
+    let t = ContextTestSupport::new();
+    t.context
+        .add_routes(move |r: &mut Routes| {
+            r.add(
+                from(&uri)
+                    .route_id("foo")
+                    .auto_startup(false)
+                    .to("mock:result"),
+            );
+        })
+        .await
+        .unwrap();
+    t.context.start().await.unwrap();
+    let mock = t.mock("mock:result");
+    mock.expected_message_count(2);
+    mock.all_messages_match(header(FILE_NAME).is_not_null());
+    send(
+        &t,
+        &dir,
+        "filename-consumer/filename-consumer-hello.txt",
+        "Hello World",
+    )
+    .await;
+    send(
+        &t,
+        &dir,
+        "filename-consumer/filename-consumer-bye.txt",
+        "Bye World",
+    )
+    .await;
+    t.context.start_route("foo").await.unwrap();
+    mock.assert_is_satisfied().await;
+    let names: Vec<String> = mock
+        .received_exchanges()
+        .iter()
+        .map(|e| {
+            e.message()
+                .header(FILE_NAME)
+                .map(|v| v.to_string())
+                .unwrap_or_default()
+        })
+        .collect();
+    assert_eq!(
+        vec!["filename-consumer-bye.txt", "filename-consumer-hello.txt"],
+        names
+    );
+}

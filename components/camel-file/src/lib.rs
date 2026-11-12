@@ -178,9 +178,59 @@ pub struct FileConfiguration {
     pub include_hidden_dirs: bool,
     /// The read lock (only `none` is available).
     pub read_lock: String,
-    /// Whether the files are taken in the reverse order of their names (`sortBy`
-    /// `reverse:file:name`; the default order is by name).
-    pub sort_reverse: bool,
+    /// The sort groups of the files of a poll (`sortBy`; the listing is by name).
+    pub sort_by: Vec<SortBy>,
+    /// Whether `maxMessagesPerPoll` limits the files before sorting them (default `true`).
+    pub eager_max_messages_per_poll: bool,
+}
+
+/// A group of the `sortBy` option (Java `GenericFileDefaultSorter`): a file language
+/// expression (`file:name`, `file:modified`, `date:file:yyyyMMdd`, ...) with the `reverse:`
+/// and `ignoreCase:` prefixes; the groups are separated by `;`, the next one sorting the
+/// files the previous one finds equal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SortBy {
+    /// The simple expression (with the file functions).
+    pub expression: String,
+    /// Whether the order is reversed.
+    pub reverse: bool,
+    /// Whether texts are compared ignoring the case.
+    pub ignore_case: bool,
+}
+
+impl SortBy {
+    /// Parses the `sortBy` option (Java `createSortByComparator`).
+    ///
+    /// # Errors
+    ///
+    /// An empty group.
+    pub fn parse(text: &str) -> CamelResult<Vec<SortBy>> {
+        text.split(';')
+            .map(|group| {
+                let reverse = group.starts_with("reverse:");
+                let rest = group.strip_prefix("reverse:").unwrap_or(group);
+                let ignore_case = rest.starts_with("ignoreCase:");
+                let rest = rest.strip_prefix("ignoreCase:").unwrap_or(rest);
+                if rest.is_empty() {
+                    return Err(CamelError::illegal_argument(
+                        "sortBy expression must be specified and not empty",
+                    ));
+                }
+                let mut expression = rest.to_string();
+                if !expression.starts_with("${") {
+                    expression.insert_str(0, "${");
+                }
+                if !expression.ends_with('}') {
+                    expression.push('}');
+                }
+                Ok(SortBy {
+                    expression,
+                    reverse,
+                    ignore_case,
+                })
+            })
+            .collect()
+    }
 }
 
 impl FileConfiguration {
@@ -225,7 +275,8 @@ impl FileConfiguration {
             include_hidden_files: false,
             include_hidden_dirs: false,
             read_lock: "none".into(),
-            sort_reverse: false,
+            sort_by: Vec::new(),
+            eager_max_messages_per_poll: true,
         }
     }
 }
@@ -359,15 +410,10 @@ impl Component for FileComponent {
             c.read_lock = v;
         }
         if let Some(sort) = param::<String>(parameters, "sortBy")? {
-            match sort.as_str() {
-                "file:name" | "file:onlyname" => {}
-                "reverse:file:name" | "reverse:file:onlyname" => c.sort_reverse = true,
-                other => {
-                    return Err(CamelError::illegal_argument(format!(
-                        "The sortBy {other} is not available in the Rust port yet (file:name, reverse:file:name)"
-                    )))
-                }
-            }
+            c.sort_by = SortBy::parse(&sort)?;
+        }
+        if let Some(v) = param(parameters, "eagerMaxMessagesPerPoll")? {
+            c.eager_max_messages_per_poll = v;
         }
         if c.delete && c.move_to.is_some() {
             return Err(CamelError::illegal_argument(
