@@ -4,6 +4,8 @@
 #[path = "../support/mod.rs"]
 mod support;
 
+mod bean_function_factory_test;
+mod bean_test;
 mod date_function_factory_test;
 mod simple_operator_test;
 mod simple_parser_edge_cases_test;

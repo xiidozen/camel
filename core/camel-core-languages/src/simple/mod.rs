@@ -3,6 +3,7 @@
 //! `${header.foo} == 'bar' && ${body} contains 'World'`.
 
 pub mod ast;
+pub mod bean_functions;
 pub mod collection_functions;
 pub mod date_functions;
 pub mod expression_parser;

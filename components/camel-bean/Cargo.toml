@@ -1,0 +1,18 @@
+[package]
+name = "camel-bean"
+description = "Camel :: Bean — the bean language, calling methods of beans from the registry (port of components/camel-bean)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+camel-api = { workspace = true }
+camel-util = { workspace = true }
+camel-support = { workspace = true }
+camel-core-languages = { workspace = true }
+indexmap = "2"
+
+[dev-dependencies]
+camel-core = { workspace = true }

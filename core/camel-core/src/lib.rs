@@ -38,6 +38,7 @@
 #![deny(rustdoc::broken_intra_doc_links)]
 
 use camel_api::endpoint::SharedComponent;
+use camel_api::spi::language::Language;
 use camel_base_engine::context::DefaultCamelContext;
 use std::sync::Arc;
 
@@ -87,11 +88,15 @@ pub fn register_core_components(context: &DefaultCamelContext) {
 }
 
 /// Registers the factories of the core languages (`simple`, `constant`, `header`,
-/// `exchangeProperty`, `variable`) on the context.
+/// `exchangeProperty`, `variable`) and of the `bean` language on the context.
 pub fn register_core_languages(context: &DefaultCamelContext) {
     camel_core_languages::register_core_languages(|name, f| {
         context.register_language_factory(name, Arc::new(f))
     });
+    context.register_language_factory(
+        camel_bean::language::LANGUAGE,
+        Arc::new(|| Arc::new(camel_bean::BeanLanguage::new()) as Arc<dyn Language>),
+    );
 }
 
 /// A new CamelContext with the core components and languages registered (what Java `new

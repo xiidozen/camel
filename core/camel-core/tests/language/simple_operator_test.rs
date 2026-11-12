@@ -1,12 +1,28 @@
-//! Port of `SimpleOperatorTest`. The cases using the bean language (`${bean:generator...}`,
-//! `testRightOperatorIsBeanLanguage`, `testElvisEvaluatesLeftOnce`) wait for it; Java
-//! `BigDecimal` values are decimals here.
+//! Port of `SimpleOperatorTest`. Java `BigDecimal` values are decimals here.
 
-use super::simple_test::{assert_expression, assert_predicate, evaluate, exchange};
+use super::simple_test::{assert_expression, assert_predicate, evaluate};
+use crate::support::ContextTestSupport;
+use camel_bean::MethodBean;
 use camel_core::api::convert::FromValue;
 use camel_core::api::exchange_constants::FILE_NAME;
 use camel_core::api::processor::SharedPredicate;
 use camel_core::prelude::*;
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::Arc;
+
+/// The exchange of the test, with the Java `MyFileNameGenerator` bound as `generator`.
+fn exchange() -> (ContextTestSupport, Exchange) {
+    let (t, e) = super::simple_test::exchange();
+    let generator = MethodBean::new("MyFileNameGenerator")
+        .method("generateFilename", |_| Ok(Value::from("abc")))
+        .method("generateId", |_| Ok(Value::Int(123)));
+    t.context
+        .registry()
+        .unwrap()
+        .bind("generator", generator.into_value())
+        .unwrap();
+    (t, e)
+}
 
 fn create_predicate(e: &Exchange, text: &str) -> SharedPredicate {
     let simple = e.context().resolve_language("simple").unwrap();
@@ -634,6 +650,19 @@ fn test_right_operator_is_simple_language() {
 }
 
 #[test]
+fn test_right_operator_is_bean_language() {
+    let (_t, e) = exchange();
+    // operator on right side is also using ${ } placeholders
+    assert_predicate(
+        &e,
+        "${in.header.foo} == ${bean:generator.generateFilename}",
+        true,
+    );
+    assert_predicate(&e, "${in.header.bar} == ${bean:generator.generateId}", true);
+    assert_predicate(&e, "${in.header.bar} >= ${bean:generator.generateId}", true);
+}
+
+#[test]
 fn test_contains() {
     let (_t, e) = exchange();
     assert_predicate(&e, "${in.header.foo} contains 'a'", true);
@@ -731,13 +760,17 @@ fn test_in() {
     let (_t, e) = exchange();
     // string to string
     assert_predicate(&e, "${in.header.foo} in 'foo,abc,def'", true);
-    // pending the bean language: assert_predicate(&e, "${in.header.foo} in ${bean:generator.generateFilename}", true);
+    assert_predicate(
+        &e,
+        "${in.header.foo} in ${bean:generator.generateFilename}",
+        true,
+    );
     assert_predicate(&e, "${in.header.foo} in 'foo,abc,def'", true);
     assert_predicate(&e, "${in.header.foo} in 'foo,def'", false);
 
     // integer to string
     assert_predicate(&e, "${in.header.bar} in '100,123,200'", true);
-    // pending the bean language: assert_predicate(&e, "${in.header.bar} in ${bean:generator.generateId}", true);
+    assert_predicate(&e, "${in.header.bar} in ${bean:generator.generateId}", true);
     assert_predicate(&e, "${in.header.bar} in '100,200'", false);
 }
 
@@ -746,20 +779,36 @@ fn test_not_in() {
     let (_t, e) = exchange();
     // string to string
     assert_predicate(&e, "${in.header.foo} not in 'foo,abc,def'", false);
-    // pending the bean language: assert_predicate(&e, "${in.header.foo} not in ${bean:generator.generateFilename}", false);
+    assert_predicate(
+        &e,
+        "${in.header.foo} not in ${bean:generator.generateFilename}",
+        false,
+    );
     assert_predicate(&e, "${in.header.foo} not in 'foo,abc,def'", false);
     assert_predicate(&e, "${in.header.foo} not in 'foo,def'", true);
     assert_predicate(&e, "${in.header.foo} !in 'foo,abc,def'", false);
-    // pending the bean language: assert_predicate(&e, "${in.header.foo} !in ${bean:generator.generateFilename}", false);
+    assert_predicate(
+        &e,
+        "${in.header.foo} !in ${bean:generator.generateFilename}",
+        false,
+    );
     assert_predicate(&e, "${in.header.foo} !in 'foo,abc,def'", false);
     assert_predicate(&e, "${in.header.foo} !in 'foo,def'", true);
 
     // integer to string
     assert_predicate(&e, "${in.header.bar} not in '100,123,200'", false);
-    // pending the bean language: assert_predicate(&e, "${in.header.bar} not in ${bean:generator.generateId}", false);
+    assert_predicate(
+        &e,
+        "${in.header.bar} not in ${bean:generator.generateId}",
+        false,
+    );
     assert_predicate(&e, "${in.header.bar} not in '100,200'", true);
     assert_predicate(&e, "${in.header.bar} !in '100,123,200'", false);
-    // pending the bean language: assert_predicate(&e, "${in.header.bar} !in ${bean:generator.generateId}", false);
+    assert_predicate(
+        &e,
+        "${in.header.bar} !in ${bean:generator.generateId}",
+        false,
+    );
     assert_predicate(&e, "${in.header.bar} !in '100,200'", true);
 }
 
@@ -837,10 +886,10 @@ fn test_range() {
     assert_predicate(&e, "${in.header.bar} range '200..300'", false);
 
     assert_predicate(&e, "${in.header.foo} range '200..300'", false);
-    // pending the bean language: assert_predicate(&e, "${bean:generator.generateId} range '123..130'", true);
-    // pending the bean language: assert_predicate(&e, "${bean:generator.generateId} range '120..123'", true);
-    // pending the bean language: assert_predicate(&e, "${bean:generator.generateId} range '120..122'", false);
-    // pending the bean language: assert_predicate(&e, "${bean:generator.generateId} range '124..130'", false);
+    assert_predicate(&e, "${bean:generator.generateId} range '123..130'", true);
+    assert_predicate(&e, "${bean:generator.generateId} range '120..123'", true);
+    assert_predicate(&e, "${bean:generator.generateId} range '120..122'", false);
+    assert_predicate(&e, "${bean:generator.generateId} range '124..130'", false);
 
     assert_syntax_error_at(&e, "${in.header.foo} range abc..200", 23);
 
@@ -879,15 +928,31 @@ fn test_not_range() {
     assert_predicate(&e, "${in.header.bar} !range '200..300'", true);
 
     assert_predicate(&e, "${in.header.foo} not range '200..300'", true);
-    // pending the bean language: assert_predicate(&e, "${bean:generator.generateId} not range '123..130'", false);
-    // pending the bean language: assert_predicate(&e, "${bean:generator.generateId} not range '120..123'", false);
-    // pending the bean language: assert_predicate(&e, "${bean:generator.generateId} not range '120..122'", true);
-    // pending the bean language: assert_predicate(&e, "${bean:generator.generateId} not range '124..130'", true);
+    assert_predicate(
+        &e,
+        "${bean:generator.generateId} not range '123..130'",
+        false,
+    );
+    assert_predicate(
+        &e,
+        "${bean:generator.generateId} not range '120..123'",
+        false,
+    );
+    assert_predicate(
+        &e,
+        "${bean:generator.generateId} not range '120..122'",
+        true,
+    );
+    assert_predicate(
+        &e,
+        "${bean:generator.generateId} not range '124..130'",
+        true,
+    );
     assert_predicate(&e, "${in.header.foo} !range '200..300'", true);
-    // pending the bean language: assert_predicate(&e, "${bean:generator.generateId} !range '123..130'", false);
-    // pending the bean language: assert_predicate(&e, "${bean:generator.generateId} !range '120..123'", false);
-    // pending the bean language: assert_predicate(&e, "${bean:generator.generateId} !range '120..122'", true);
-    // pending the bean language: assert_predicate(&e, "${bean:generator.generateId} !range '124..130'", true);
+    assert_predicate(&e, "${bean:generator.generateId} !range '123..130'", false);
+    assert_predicate(&e, "${bean:generator.generateId} !range '120..123'", false);
+    assert_predicate(&e, "${bean:generator.generateId} !range '120..122'", true);
+    assert_predicate(&e, "${bean:generator.generateId} !range '124..130'", true);
 
     assert_syntax_error_at(&e, "${in.header.foo} not range abc..200", 27);
 
@@ -1418,6 +1483,24 @@ fn test_logical_expression_to_string() {
         .create_expression("${body != null && body.size() > 0}")
         .unwrap();
     assert_eq!("${body} != null && ${body.size()} > 0", exp.describe());
+}
+
+#[test]
+fn test_elvis_evaluates_left_once() {
+    let (t, e) = exchange();
+    // Java MyCounter
+    let count = Arc::new(AtomicI64::new(0));
+    let c = count.clone();
+    let counter = MethodBean::new("MyCounter").method("next", move |_| {
+        Ok(Value::Int(c.fetch_add(1, Ordering::SeqCst) + 1))
+    });
+    t.context
+        .registry()
+        .unwrap()
+        .bind("counter", counter.into_value())
+        .unwrap();
+    assert_expression(&e, "${bean:counter?method=next} ?: 'none'", 1);
+    assert_eq!(1, count.load(Ordering::SeqCst));
 }
 
 #[test]

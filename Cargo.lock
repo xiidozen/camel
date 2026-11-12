@@ -48,11 +48,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "camel-bean"
+version = "4.23.0"
+dependencies = [
+ "camel-api",
+ "camel-core",
+ "camel-core-languages",
+ "camel-support",
+ "camel-util",
+ "indexmap",
+]
+
+[[package]]
 name = "camel-core"
 version = "4.23.0"
 dependencies = [
  "camel-api",
  "camel-base-engine",
+ "camel-bean",
  "camel-core-engine",
  "camel-core-languages",
  "camel-core-model",

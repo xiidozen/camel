@@ -348,7 +348,9 @@ fn lookup_key(
 }
 
 /// Splits `name(args)` into the name and the argument texts (`None` without parentheses).
-fn method_and_args(method: &str) -> (String, Option<Vec<String>>) {
+/// The name and the parameter texts of a method call `name(a, b)` (`None` without
+/// parentheses), split on the commas outside quotes.
+pub fn method_and_args(method: &str) -> (String, Option<Vec<String>>) {
     match method.find('(') {
         Some(i) if method.ends_with(')') => {
             let inner = &method[i + 1..method.len() - 1];
@@ -364,8 +366,13 @@ fn method_and_args(method: &str) -> (String, Option<Vec<String>>) {
 }
 
 /// The value of a method argument (Java bean parameter binding of literal values and simple
-/// expressions).
-fn argument(text: &str, exchange: &Exchange) -> CamelResult<Value> {
+/// expressions): a quoted text, `null`, `true`/`false`, a number, a simple expression, else
+/// the text.
+///
+/// # Errors
+///
+/// The error of evaluating a simple expression.
+pub fn argument(text: &str, exchange: &Exchange) -> CamelResult<Value> {
     let t = text.trim();
     if t.len() >= 2
         && ((t.starts_with('"') && t.ends_with('"')) || (t.starts_with('\'') && t.ends_with('\'')))

@@ -101,6 +101,10 @@ Crates live **in the directory of the Maven module they replace** (`core/camel-a
   are ported (`camel_core_processor::errorhandler`; the reifier wraps each step as Java channels do).
 - `components/camel-log`: **in progress** (formatter options, level, groupSize, log listeners).
 - `components/camel-seda`: **in progress** (queues, concurrent consumers, InOut waiting).
+- `components/camel-bean`: **in progress** — the bean language and `MethodBean`; beans implement
+  `camel_api::bean_binding::ExchangeBean` (Java bean binding without reflection: each method reads
+  its parameters from the `BeanInvocation`, `parameter(i)` = explicit parameter, else the body).
+  `camel_core::default_context()` registers the `bean` language.
 - Test helpers in `core/camel-core/tests/support`: `ContextTestSupport`, `cause_of` (Java
   `getCause()`), `await_until` (Awaitility; never a bare sleep loop), `body_in_aggregating_strategy`.
 - Unit of work: the exchange carries it (`Exchange::begin_unit_of_work`, `original_message`,
@@ -174,6 +178,7 @@ Javadoc must be converted so `cargo doc` produces equivalent documentation:
 | `java.net.URI`, `URLEncoder`, `URLDecoder` | `camel_util::net` (exact JDK semantics — endpoint URI normalization depends on it) |
 | `java.time.Duration` | `camel_util::time_utils::SignedDuration` |
 | `java.util.Date`, `TimeZone`, `SimpleDateFormat` | `camel_util::date` (a `Date` value is a `Value::Object` compared by value; zones from the bundled IANA database) |
+| a Java bean (reflection, parameter binding) | `camel_api::bean_binding::ExchangeBean` or `camel_bean::MethodBean`, bound with `bean_value`/`into_value` |
 | `java.nio.charset.Charset` | `camel_util::charset::Charset` (Java names; ISO-8859-1 is real Latin-1, not windows-1252) |
 | `java.util.Properties` file format | `camel_util::properties::parse_properties` |
 | headers map | `camel_util::case_insensitive_map::CaseInsensitiveMap<Value>` |
