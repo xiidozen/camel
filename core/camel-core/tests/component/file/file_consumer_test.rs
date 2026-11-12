@@ -2934,3 +2934,153 @@ async fn test_alter_file_name_header() {
         }
     }
 }
+
+/// Port of `FileConsumerIdempotentConfirmTest`: the key is confirmed when the file is done.
+#[tokio::test]
+async fn test_idempotent_confirm() {
+    use camel_core::api::spi::idempotent_repository::{
+        IdempotentRepository, SharedIdempotentRepository,
+    };
+    use camel_core::support::idempotent::MemoryIdempotentRepository;
+    #[derive(Default)]
+    struct MyRepo {
+        inner: MemoryIdempotentRepository,
+        key: std::sync::Mutex<Option<String>>,
+    }
+    impl IdempotentRepository for MyRepo {
+        fn add(&self, key: &str) -> bool {
+            self.inner.add(key)
+        }
+        fn contains(&self, key: &str) -> bool {
+            self.inner.contains(key)
+        }
+        fn remove(&self, key: &str) -> bool {
+            self.inner.remove(key)
+        }
+        fn confirm(&self, key: &str) -> bool {
+            *self.key.lock().unwrap() = Some(key.to_string());
+            self.inner.confirm(key)
+        }
+        fn clear(&self) {
+            self.inner.clear()
+        }
+    }
+    let dir = TestDirectory::new("FileConsumerIdempotentConfirmTest");
+    let repo = std::sync::Arc::new(MyRepo::default());
+    let shared: SharedIdempotentRepository = repo.clone();
+    let t = ContextTestSupport::new();
+    t.context
+        .registry()
+        .unwrap()
+        .bind(
+            "myRepo",
+            camel_core::support::idempotent::repository_value(shared),
+        )
+        .unwrap();
+    let uri = dir.file_uri("?idempotent=true&move=done/${file:name}&initialDelay=0&delay=10&idempotentRepository=#myRepo");
+    t.context
+        .add_routes(move |r: &mut Routes| {
+            r.add(from(&uri).convert_body_to("String").to("mock:result"));
+        })
+        .await
+        .unwrap();
+    t.context.start().await.unwrap();
+    assert!(repo.key.lock().unwrap().is_none());
+    let mock = t.mock("mock:result");
+    mock.expected_bodies_received(["Hello World"]);
+    send(&t, &dir, "report.txt", "Hello World").await;
+    mock.assert_is_satisfied().await;
+    let done = dir.test_file("done/report.txt");
+    support_wait(|| done.exists()).await;
+    mock.reset();
+    mock.expected_message_count(0);
+    std::fs::rename(&done, dir.test_file("report.txt")).unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    mock.assert_is_satisfied().await;
+    support_wait(|| repo.key.lock().unwrap().is_some()).await;
+}
+
+/// Port of `FileConsumerMoveExpressionTest` (not the case configuring the endpoint object).
+#[tokio::test]
+async fn test_move_expression() {
+    let bean = || {
+        camel_bean::MethodBean::new("MyGuidGenerator")
+            .method("guid", |_| Ok(Value::from("123")))
+            .into_value()
+    };
+    // ${id} is the message id
+    for (move_to, prefix, suffix) in [
+        ("${id}.bak", "", ".bak"),
+        (
+            "backup-${id}-${file:name.noext}.bak",
+            "backup-",
+            "-report.bak",
+        ),
+    ] {
+        let dir = TestDirectory::new("FileConsumerMoveExpressionTest");
+        let uri = dir.file_uri(&format!(
+            "?initialDelay=0&delay=10&exclude=.*bak&move={move_to}"
+        ));
+        let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+            r.add(from(&uri).convert_body_to("String").to("mock:result"));
+        })
+        .await;
+        let mock = t.mock("mock:result");
+        mock.expected_bodies_received(["Hello World"]);
+        send(&t, &dir, "report.txt", "Hello World").await;
+        mock.assert_is_satisfied().await;
+        let e = &mock.received_exchanges()[0];
+        let id = e
+            .message()
+            .message_id()
+            .unwrap_or(e.exchange_id())
+            .to_string();
+        let moved = dir.test_file(&format!("{prefix}{id}{suffix}"));
+        support_wait(|| moved.exists()).await;
+        assert!(
+            moved.exists(),
+            "File should have been renamed: {}",
+            moved.display()
+        );
+    }
+    for (path, move_to, expected) in [
+        (
+            "",
+            "backup/${bean:myguidgenerator.guid}.txt",
+            "backup/123.txt",
+        ),
+        (
+            "test",
+            "../backup/${file:name}.bak",
+            "backup/report.txt.bak",
+        ),
+    ] {
+        let dir = TestDirectory::new("FileConsumerMoveExpressionTest");
+        let t = ContextTestSupport::new();
+        t.context
+            .registry()
+            .unwrap()
+            .bind("myguidgenerator", bean())
+            .unwrap();
+        let uri = dir.file_uri(&format!(
+            "{path}?initialDelay=0&delay=10&exclude=.*bak&move={move_to}"
+        ));
+        t.context
+            .add_routes(move |r: &mut Routes| {
+                r.add(from(&uri).convert_body_to("String").to("mock:result"));
+            })
+            .await
+            .unwrap();
+        t.context.start().await.unwrap();
+        let mock = t.mock("mock:result");
+        mock.expected_bodies_received(["Bye Big World"]);
+        mock.expected_file_exists(dir.test_file(expected), Some("Bye Big World"));
+        let name = if path.is_empty() {
+            "report.txt".to_string()
+        } else {
+            format!("{path}/report.txt")
+        };
+        send(&t, &dir, &name, "Bye Big World").await;
+        mock.assert_is_satisfied().await;
+    }
+}

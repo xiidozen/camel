@@ -186,6 +186,9 @@ pub struct FileConfiguration {
     /// The key of a file in the idempotent repository (a simple expression; default the
     /// absolute path).
     pub idempotent_key: Option<String>,
+    /// Whether the key is added to the idempotent repository when the file is polled (and
+    /// confirmed when done), else added when done (`idempotentEager`, default `true`).
+    pub idempotent_eager: bool,
     /// Whether the starting directory must exist (default `false`).
     pub starting_directory_must_exist: bool,
     /// Whether the directory must exist when polling (default `false`).
@@ -294,6 +297,7 @@ impl FileConfiguration {
             max_messages_per_poll: 0,
             idempotent: None,
             idempotent_key: None,
+            idempotent_eager: true,
             starting_directory_must_exist: false,
             directory_must_exist: false,
             include_hidden_files: false,
@@ -446,6 +450,9 @@ impl Component for FileComponent {
         }
         c.idempotent = param(parameters, "idempotent")?;
         c.idempotent_key = param(parameters, "idempotentKey")?;
+        if let Some(v) = param(parameters, "idempotentEager")? {
+            c.idempotent_eager = v;
+        }
         if let Some(v) = param(parameters, "startingDirectoryMustExist")? {
             c.starting_directory_must_exist = v;
         }

@@ -305,7 +305,14 @@ pub(crate) async fn begin(
         }
         _ => key.clone(),
     };
-    if idempotent && !endpoint.idempotent.add(&idempotent_key) {
+    // eager: the key is added now (confirmed on commit), else only checked (added on commit)
+    let consumed = idempotent
+        && if c.idempotent_eager {
+            !endpoint.idempotent.add(&idempotent_key)
+        } else {
+            endpoint.idempotent.contains(&idempotent_key)
+        };
+    if consumed {
         endpoint.in_progress.lock().unwrap().remove(&key);
         log::trace!(
             "This consumer is idempotent and the file has been consumed before: {idempotent_key}"
@@ -314,7 +321,7 @@ pub(crate) async fn begin(
     }
     let abort = || {
         endpoint.in_progress.lock().unwrap().remove(&key);
-        if idempotent {
+        if idempotent && c.idempotent_eager {
             endpoint.idempotent.remove(&idempotent_key);
         }
     };
@@ -411,7 +418,7 @@ fn complete(endpoint: &FileEndpoint, taken: &Taken, exchange: &mut Exchange) -> 
     endpoint.in_progress.lock().unwrap().remove(&taken.key);
     let failed = exchange.is_failed() || exchange.is_rollback_only();
     if failed {
-        if taken.idempotent {
+        if taken.idempotent && c.idempotent_eager {
             endpoint.idempotent.remove(&taken.idempotent_key);
         }
         if let Some(e) = exchange.exception() {
@@ -428,6 +435,14 @@ fn complete(endpoint: &FileEndpoint, taken: &Taken, exchange: &mut Exchange) -> 
             rename(&file.file_path, &to)?;
         }
         return Ok(());
+    }
+    // the key of the routed file (Java GenericFileOnCompletion: eager confirms, else adds)
+    if taken.idempotent {
+        if c.idempotent_eager {
+            endpoint.idempotent.confirm(&taken.idempotent_key);
+        } else {
+            endpoint.idempotent.add(&taken.idempotent_key);
+        }
     }
     delete_done_file(endpoint, taken, exchange);
     if c.noop {
