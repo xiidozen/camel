@@ -1,14 +1,13 @@
 //! The file consumer (Java `FileConsumer`, `GenericFileConsumer` and the process strategies
 //! of `GenericFileOnCompletion`): polls the starting directory and routes each file.
 
-use crate::read_lock::{self, ReadLock};
+use crate::read_lock::{self, Outcome, ReadLock};
 use crate::{operation_failed, FileEndpoint, GenericFile, SortBy};
 use camel_api::endpoint::{Consumer, Endpoint, SharedEndpoint};
 use camel_api::error::{CamelError, CamelResult, ErrorKind};
 use camel_api::exchange::Exchange;
 use camel_api::processor::{BoxFuture, SharedProcessor};
 use camel_api::service::Service;
-use camel_api::spi::idempotent_repository::IdempotentRepository;
 use camel_util::value::Value;
 use regex::{Regex, RegexBuilder};
 use std::path::{Path, PathBuf};
@@ -264,7 +263,7 @@ pub(crate) async fn begin(
     }
     // the key in the idempotent repository: the idempotentKey expression, or the path
     let idempotent_key = match &c.idempotent_key {
-        Some(expr) if idempotent => {
+        Some(expr) if idempotent || c.read_lock.kind.is_idempotent() => {
             let mut e = endpoint.create_exchange();
             file.populate_headers(&mut e);
             match endpoint
@@ -294,7 +293,7 @@ pub(crate) async fn begin(
         }
     };
     // the exclusive read lock (Java processStrategy.begin)
-    let lock = match read_lock::acquire(endpoint, &file, stopped).await {
+    let lock = match read_lock::acquire(endpoint, &file, &idempotent_key, stopped).await {
         Ok(Some(lock)) => lock,
         Ok(None) => {
             log::debug!(
@@ -326,7 +325,7 @@ pub(crate) async fn begin(
             exchange,
         ))),
         Err(e) => {
-            lock.release();
+            lock.release(Outcome::Abort);
             abort();
             Err(e)
         }
@@ -361,9 +360,14 @@ pub(crate) fn commit(
     taken: &Taken,
     exchange: &mut Exchange,
 ) -> CamelResult<()> {
+    let failed = exchange.is_failed() || exchange.is_rollback_only();
     let result = complete(endpoint, taken, exchange);
     // the read lock is released last (Java GenericFileProcessStrategySupport)
-    taken.lock.release();
+    taken.lock.release(if failed {
+        Outcome::Rollback
+    } else {
+        Outcome::Commit
+    });
     result
 }
 
@@ -436,7 +440,13 @@ async fn process_file(
     if let Err(e) = processor.process(&mut exchange).await {
         exchange.set_exception(Some(e));
     }
-    commit(endpoint, &taken, &mut exchange)
+    let result = commit(endpoint, &taken, &mut exchange);
+    // a delayed release of the read lock holds the consumer (Java sleeps)
+    let wait = endpoint.config.read_lock.release_wait();
+    if wait > 0 {
+        tokio::time::sleep(Duration::from_millis(wait)).await;
+    }
+    result
 }
 
 /// The candidate files of a poll, filtered (Java `pollDirectory` with `isValidFile`).

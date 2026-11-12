@@ -422,6 +422,39 @@ impl Component for FileComponent {
         if let Some(v) = param(parameters, "readLockDeleteOrphanLockFiles")? {
             c.read_lock.delete_orphan_lock_files = v;
         }
+        if let Some(v) = param(parameters, "readLockRemoveOnCommit")? {
+            c.read_lock.remove_on_commit = v;
+        }
+        if let Some(v) = param(parameters, "readLockRemoveOnRollback")? {
+            c.read_lock.remove_on_rollback = v;
+        }
+        c.read_lock.idempotent_release_delay = millis(
+            parameters,
+            "readLockIdempotentReleaseDelay",
+            c.read_lock.idempotent_release_delay,
+        )?;
+        if let Some(v) = param(parameters, "readLockIdempotentReleaseAsync")? {
+            c.read_lock.idempotent_release_async = v;
+        }
+        let _: Option<String> = param(parameters, "readLockIdempotentReleaseAsyncPoolSize")?;
+        // the repository of the idempotent consumer and read locks (a bean of the registry)
+        let idempotent = match param::<String>(parameters, "idempotentRepository")? {
+            Some(name) => {
+                let name = name.strip_prefix('#').unwrap_or(&name);
+                let name = name.strip_prefix("bean:").unwrap_or(name);
+                context
+                    .registry()
+                    .and_then(|r| r.lookup_by_name(name))
+                    .and_then(|v| camel_support::idempotent::repository_of(&v))
+                    .ok_or_else(|| CamelError::no_such_bean(name))?
+            }
+            None if c.read_lock.kind == ReadLockKind::Idempotent => {
+                return Err(CamelError::illegal_argument(
+                    "IdempotentRepository must be configured when using readLock=idempotent",
+                ))
+            }
+            None => Arc::new(camel_support::idempotent::MemoryIdempotentRepository::default()),
+        };
         if let Some(v) = param::<String>(parameters, "readLockLoggingLevel")? {
             c.read_lock.logging_level = match v.to_ascii_uppercase().as_str() {
                 "OFF" => None,
@@ -456,14 +489,10 @@ impl Component for FileComponent {
         // accepted without effect (the Java scheduling, logging and cache options)
         for name in [
             "runLoggingLevel",
-            "eagerMaxMessagesPerPoll",
             "useFixedDelay",
             "synchronous",
             "bridgeErrorHandler",
             "lazyStartProducer",
-            "readLockMinLength",
-            "readLockTimeout",
-            "readLockCheckInterval",
         ] {
             let _: Option<String> = param(parameters, name)?;
         }
@@ -471,7 +500,7 @@ impl Component for FileComponent {
             uri: uri.to_string(),
             config: c,
             context: Arc::downgrade(context),
-            idempotent: Arc::new(camel_support::idempotent::MemoryIdempotentRepository::default()),
+            idempotent,
             in_progress: std::sync::Mutex::new(std::collections::HashSet::new()),
         }))
     }
@@ -490,7 +519,7 @@ pub struct FileEndpoint {
     uri: String,
     config: FileConfiguration,
     context: Weak<dyn CamelContext>,
-    idempotent: Arc<camel_support::idempotent::MemoryIdempotentRepository>,
+    idempotent: camel_api::spi::idempotent_repository::SharedIdempotentRepository,
     in_progress: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 

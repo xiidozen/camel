@@ -3,6 +3,7 @@
 
 use crate::support::{await_until, ContextTestSupport, TestDirectory};
 use camel_core::api::exchange_constants::{FILE_LENGTH, FILE_NAME, FILE_PATH};
+use camel_core::api::spi::idempotent_repository::IdempotentRepository;
 use camel_core::prelude::*;
 use std::io::Write;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -391,5 +392,151 @@ async fn test_changed_read_lock_min_age_not_acquired() {
         stop.elapsed() < Duration::from_secs(5),
         "{:?}",
         stop.elapsed()
+    );
+}
+
+/// A context with the `myRepo` memory idempotent repository in the registry.
+fn with_repository() -> (
+    ContextTestSupport,
+    Arc<camel_core::support::idempotent::MemoryIdempotentRepository>,
+) {
+    use camel_core::api::spi::idempotent_repository::SharedIdempotentRepository;
+    let repository =
+        Arc::new(camel_core::support::idempotent::MemoryIdempotentRepository::default());
+    let shared: SharedIdempotentRepository = repository.clone();
+    let t = ContextTestSupport::new();
+    t.context
+        .registry()
+        .unwrap()
+        .bind(
+            "myRepo",
+            camel_core::support::idempotent::repository_value(shared),
+        )
+        .unwrap();
+    (t, repository)
+}
+
+/// Ports of `FileIdempotentReadLockTest`, `FileIdempotentChangedReadLockTest`,
+/// `FileIdempotentRenameReadLockTest`, `FileIdempotentReadLockDelayedTest` and
+/// `FileIdempotentReadLockDelayedAsyncTest`: the keys of the files stay in the repository; a
+/// delayed release holds the consumer unless asynchronous.
+#[tokio::test]
+async fn test_idempotent_read_lock() {
+    for (option, gap) in [
+        ("readLock=idempotent", None),
+        ("readLockCheckInterval=100&readLock=idempotent-changed", None),
+        ("readLockCheckInterval=100&readLock=idempotent-rename", None),
+        ("readLock=idempotent&readLockIdempotentReleaseDelay=1000", Some((800, 1800))),
+        ("readLock=idempotent&readLockIdempotentReleaseDelay=1000&readLockIdempotentReleaseAsync=true", Some((0, 700))),
+    ] {
+        let dir = TestDirectory::new("FileIdempotentReadLockTest");
+        let (t, repository) = with_repository();
+        assert_eq!(0, repository.size());
+        let uri = dir.file_uri(&format!("?initialDelay=0&delay=10&{option}&idempotentRepository=#myRepo"));
+        let (repo, times) = (repository.clone(), Arc::new(std::sync::Mutex::new(Vec::new())));
+        let arrivals = times.clone();
+        t.context
+            .add_routes(move |r: &mut Routes| {
+                let (repo, arrivals) = (repo.clone(), arrivals.clone());
+                r.add(
+                    from(&uri)
+                        .process_fn(move |_| {
+                            let size = repo.size();
+                            assert!(size == 1 || size == 2, "{size}");
+                            arrivals.lock().unwrap().push(Instant::now());
+                            Ok(())
+                        })
+                        .to("mock:result"),
+                );
+            })
+            .await
+            .unwrap();
+        t.context.start().await.unwrap();
+        let mock = t.mock("mock:result");
+        mock.expected_message_count(2);
+        mock.set_result_wait_time(5000);
+        for (name, body) in [("hello.txt", "Hello World"), ("bye.txt", "Bye World")] {
+            t.template
+                .send_body_and_header(&dir.file_uri(""), body, FILE_NAME, name)
+                .await
+                .unwrap();
+        }
+        mock.assert_is_satisfied().await;
+        if let Some((min, max)) = gap {
+            let times = times.lock().unwrap().clone();
+            let gap = times[1].duration_since(times[0]).as_millis();
+            assert!(gap >= min && gap <= max, "{option}: {gap}");
+        }
+        wait(|| repository.size() == 2).await;
+        assert_eq!(2, repository.size(), "{option}");
+        t.context.stop().await.unwrap();
+    }
+}
+
+/// Port of `FileIdempotentReadLockPreMoveTest`: the key is removed on rollback, also with a
+/// preMove.
+#[tokio::test]
+async fn test_idempotent_read_lock_pre_move_rollback() {
+    let dir = TestDirectory::new("FileIdempotentReadLockPreMoveTest");
+    let (t, repository) = with_repository();
+    let uri = dir.file_uri("?initialDelay=0&delay=10&readLock=idempotent&idempotentRepository=#myRepo&preMove=work&moveFailed=error");
+    t.context
+        .add_routes(move |r: &mut Routes| {
+            r.error_handler(no_error_handler());
+            r.add(from(&uri).throw_exception(CamelError::illegal_state("Forced failure")));
+        })
+        .await
+        .unwrap();
+    t.context.start().await.unwrap();
+    t.template
+        .send_body_and_header(&dir.file_uri(""), "Hello World", FILE_NAME, "hello.txt")
+        .await
+        .unwrap();
+    // the plain moveFailed directory is relative to the pre-moved file
+    let failed = dir.test_file("work/error/hello.txt");
+    wait(|| failed.exists()).await;
+    assert!(failed.exists());
+    wait(|| repository.size() == 0).await;
+    assert_eq!(0, repository.size());
+}
+
+/// Port of `FileIdempotentChangedReadLockRemoveOnCommitTest`: the confirmed key of the
+/// idempotentKey keeps a file of the same name out.
+#[tokio::test]
+async fn test_idempotent_changed_read_lock_remove_on_commit_false() {
+    let dir = TestDirectory::new("FileIdempotentChangedReadLockRemoveOnCommitTest");
+    let (t, repository) = with_repository();
+    let uri = dir.file_uri("?initialDelay=0&delay=50&readLockCheckInterval=50&readLock=idempotent-changed&idempotentRepository=#myRepo&idempotentKey=${file:onlyname}&readLockRemoveOnCommit=false");
+    t.context
+        .add_routes(move |r: &mut Routes| {
+            r.add(from(&uri).to("mock:result"));
+        })
+        .await
+        .unwrap();
+    t.context.start().await.unwrap();
+    let mock = t.mock("mock:result");
+    mock.expected_message_count(1);
+    t.template
+        .send_body_and_header(&dir.file_uri(""), "Hello World", FILE_NAME, "hello.txt")
+        .await
+        .unwrap();
+    mock.assert_is_satisfied().await;
+    wait(|| repository.contains("hello.txt")).await;
+    mock.reset();
+    mock.expected_message_count(0);
+    t.template
+        .send_body_and_header(
+            &dir.file_uri(""),
+            "Hello World Again",
+            FILE_NAME,
+            "hello.txt",
+        )
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    mock.assert_is_satisfied().await;
+    assert!(
+        repository.contains("hello.txt"),
+        "existing idempotent entry must be retained when readLockRemoveOnCommit=false"
     );
 }

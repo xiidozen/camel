@@ -10,6 +10,13 @@
 //!   file being at least `readLockMinLength` long (Java `FileChangedExclusiveReadLockStrategy`).
 //! - `rename`: the marker file, then renames the file to itself (with a temporary name) until
 //!   it succeeds (Java `FileRenameExclusiveReadLockStrategy`).
+//! - `idempotent`: the key of the file (its path, or the `idempotentKey`) added to the
+//!   `idempotentRepository` of the endpoint, failing if present (for clustered consumers
+//!   sharing the repository); `idempotent-changed` and `idempotent-rename` also wait as
+//!   `changed` and `rename` (without marker file). On commit the key is confirmed (removed with
+//!   `readLockRemoveOnCommit`), on rollback removed (confirmed with
+//!   `readLockRemoveOnRollback=false`), after `readLockIdempotentReleaseDelay` millis (Java
+//!   `FileIdempotentRepositoryReadLockStrategy` and its variants).
 //!
 //! The waiting locks give up after `readLockTimeout` millis (`0`: no limit), checking every
 //! `readLockCheckInterval` millis. With `readLockMarkerFile=false` no marker file is used, and
@@ -18,6 +25,7 @@
 
 use crate::{operation_failed, FileEndpoint, GenericFile};
 use camel_api::error::{CamelError, CamelResult};
+use camel_api::spi::idempotent_repository::SharedIdempotentRepository;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime};
@@ -37,6 +45,24 @@ pub enum ReadLockKind {
     Changed,
     /// The marker file and a rename of the file.
     Rename,
+    /// The key of the file in the idempotent repository.
+    Idempotent,
+    /// The idempotent repository and a file no longer changing.
+    IdempotentChanged,
+    /// The idempotent repository and a rename of the file.
+    IdempotentRename,
+}
+
+impl ReadLockKind {
+    /// Whether the lock is a key in the idempotent repository.
+    pub fn is_idempotent(self) -> bool {
+        matches!(
+            self,
+            ReadLockKind::Idempotent
+                | ReadLockKind::IdempotentChanged
+                | ReadLockKind::IdempotentRename
+        )
+    }
 }
 
 impl std::str::FromStr for ReadLockKind {
@@ -48,11 +74,12 @@ impl std::str::FromStr for ReadLockKind {
             "markerFile" => Ok(ReadLockKind::MarkerFile),
             "changed" => Ok(ReadLockKind::Changed),
             "rename" => Ok(ReadLockKind::Rename),
-            "fileLock" | "idempotent" | "idempotent-changed" | "idempotent-rename" => {
-                Err(CamelError::illegal_argument(format!(
-                    "The readLock {s} is not available in the Rust port yet (none, markerFile, changed, rename)"
-                )))
-            }
+            "idempotent" => Ok(ReadLockKind::Idempotent),
+            "idempotent-changed" => Ok(ReadLockKind::IdempotentChanged),
+            "idempotent-rename" => Ok(ReadLockKind::IdempotentRename),
+            "fileLock" => Err(CamelError::illegal_argument(
+                "The readLock fileLock is not available in the Rust port yet",
+            )),
             other => Err(CamelError::illegal_argument(format!(
                 "Invalid readLock option: {other}"
             ))),
@@ -82,6 +109,18 @@ pub struct ReadLockOptions {
     /// The level of the logs of a lock not acquired (`readLockLoggingLevel`, default `DEBUG`;
     /// `None` for `OFF`).
     pub logging_level: Option<log::Level>,
+    /// Whether an idempotent lock is removed on commit, else confirmed
+    /// (`readLockRemoveOnCommit`, default `false`).
+    pub remove_on_commit: bool,
+    /// Whether an idempotent lock is removed on rollback, else confirmed
+    /// (`readLockRemoveOnRollback`, default `true`).
+    pub remove_on_rollback: bool,
+    /// The millis before an idempotent lock is released (`readLockIdempotentReleaseDelay`,
+    /// default 0); the consumer waits them unless `readLockIdempotentReleaseAsync`.
+    pub idempotent_release_delay: u64,
+    /// Whether the delayed release does not hold the consumer
+    /// (`readLockIdempotentReleaseAsync`, default `false`).
+    pub idempotent_release_async: bool,
 }
 
 impl Default for ReadLockOptions {
@@ -95,6 +134,10 @@ impl Default for ReadLockOptions {
             marker_file: true,
             delete_orphan_lock_files: true,
             logging_level: Some(log::Level::Debug),
+            remove_on_commit: false,
+            remove_on_rollback: true,
+            idempotent_release_delay: 0,
+            idempotent_release_async: false,
         }
     }
 }
@@ -102,24 +145,77 @@ impl Default for ReadLockOptions {
 impl ReadLockOptions {
     /// Whether the kind uses the marker file.
     fn uses_marker(&self) -> bool {
-        self.kind != ReadLockKind::None && self.marker_file
+        matches!(
+            self.kind,
+            ReadLockKind::MarkerFile | ReadLockKind::Changed | ReadLockKind::Rename
+        ) && self.marker_file
+    }
+
+    /// The millis the consumer waits after a file for a delayed release (Java sleeps before
+    /// releasing an idempotent lock).
+    pub(crate) fn release_wait(&self) -> u64 {
+        if self.kind.is_idempotent() && !self.idempotent_release_async {
+            self.idempotent_release_delay
+        } else {
+            0
+        }
     }
 }
 
-/// An acquired read lock: the marker file to delete on release.
-#[derive(Debug, Default)]
+/// How the file was done.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Outcome {
+    /// Routed.
+    Commit,
+    /// Failed.
+    Rollback,
+    /// Not routed (the begin failed).
+    Abort,
+}
+
+/// An acquired read lock: the marker file to delete, the idempotent key to release.
+#[derive(Default)]
 pub(crate) struct ReadLock {
     marker: Option<PathBuf>,
+    idempotent: Option<(SharedIdempotentRepository, String)>,
+    options: Option<ReadLockOptions>,
 }
 
 impl ReadLock {
-    /// Releases the lock: deletes the marker file.
-    pub(crate) fn release(&self) {
+    /// Releases the lock: deletes the marker file, removes or confirms the idempotent key
+    /// (after the release delay, on a task).
+    pub(crate) fn release(&self, outcome: Outcome) {
         if let Some(marker) = &self.marker {
             if marker.exists() {
                 log::trace!("Unlocking file: {}", marker.display());
                 let _ = std::fs::remove_file(marker);
             }
+        }
+        let (Some((repository, key)), Some(o)) = (&self.idempotent, &self.options) else {
+            return;
+        };
+        let remove = match outcome {
+            Outcome::Commit => o.remove_on_commit,
+            Outcome::Rollback => o.remove_on_rollback,
+            Outcome::Abort => true,
+        };
+        let (repository, key) = (repository.clone(), key.clone());
+        let release = move || {
+            if remove {
+                repository.remove(&key);
+            } else {
+                repository.confirm(&key);
+            }
+        };
+        let delay = o.idempotent_release_delay;
+        if delay > 0 && outcome != Outcome::Abort && tokio::runtime::Handle::try_current().is_ok() {
+            log::debug!("Scheduling read lock release task to run asynchronous delayed after {delay} millis");
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(delay)).await;
+                release();
+            });
+        } else {
+            release();
         }
     }
 }
@@ -141,10 +237,31 @@ fn marker_of(path: &Path) -> PathBuf {
 pub(crate) async fn acquire(
     endpoint: &FileEndpoint,
     file: &GenericFile,
+    key: &str,
     stopped: Option<&AtomicBool>,
 ) -> CamelResult<Option<ReadLock>> {
     let o = &endpoint.config.read_lock;
-    let mut lock = ReadLock::default();
+    let mut lock = ReadLock {
+        options: Some(o.clone()),
+        ..ReadLock::default()
+    };
+    if o.kind.is_idempotent() {
+        if !file.file_path.exists() {
+            return Ok(None);
+        }
+        let repository = endpoint.idempotent.clone();
+        if !repository.add(key) {
+            if let Some(level) = o.logging_level {
+                log::log!(
+                    level,
+                    "Cannot acquire read lock. Will skip the file: {}",
+                    file.file_path.display()
+                );
+            }
+            return Ok(None);
+        }
+        lock.idempotent = Some((repository, key.to_string()));
+    }
     if o.uses_marker() {
         let marker = marker_of(&file.file_path);
         log::trace!(
@@ -168,15 +285,24 @@ pub(crate) async fn acquire(
         }
     }
     let acquired = match o.kind {
-        ReadLockKind::None | ReadLockKind::MarkerFile => true,
-        ReadLockKind::Changed => changed(o, &file.file_path, stopped).await,
-        ReadLockKind::Rename => renamed(o, &file.file_path, stopped).await?,
+        ReadLockKind::None | ReadLockKind::MarkerFile | ReadLockKind::Idempotent => Ok(true),
+        ReadLockKind::Changed | ReadLockKind::IdempotentChanged => {
+            Ok(changed(o, &file.file_path, stopped).await)
+        }
+        ReadLockKind::Rename | ReadLockKind::IdempotentRename => {
+            renamed(o, &file.file_path, stopped).await
+        }
     };
-    if acquired {
-        Ok(Some(lock))
-    } else {
-        lock.release();
-        Ok(None)
+    match acquired {
+        Ok(true) => Ok(Some(lock)),
+        Ok(false) => {
+            lock.release(Outcome::Abort);
+            Ok(None)
+        }
+        Err(e) => {
+            lock.release(Outcome::Abort);
+            Err(e)
+        }
     }
 }
 
