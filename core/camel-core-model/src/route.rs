@@ -45,6 +45,26 @@ pub struct RouteDefinition {
     pub builder_intercept_froms: Vec<InterceptFromDefinition>,
     /// The `interceptSendToEndpoint`s of the route builder.
     pub builder_intercept_send_to_endpoints: Vec<InterceptSendToEndpointDefinition>,
+    /// The policies of the route (Java `routePolicy` and `routePolicyRef`).
+    pub route_policies: Vec<RoutePolicyRef>,
+}
+
+/// A policy of a route: the policy, or the name of a policy bean of the registry.
+#[derive(Clone)]
+pub enum RoutePolicyRef {
+    /// The policy.
+    Policy(camel_api::spi::route_policy::SharedRoutePolicy),
+    /// The name of the policy bean.
+    Ref(String),
+}
+
+impl fmt::Debug for RoutePolicyRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RoutePolicyRef::Policy(_) => write!(f, "RoutePolicy"),
+            RoutePolicyRef::Ref(name) => write!(f, "RoutePolicyRef[{name}]"),
+        }
+    }
 }
 
 impl RouteDefinition {
@@ -67,6 +87,7 @@ impl RouteDefinition {
             builder_intercepts: Vec::new(),
             builder_intercept_froms: Vec::new(),
             builder_intercept_send_to_endpoints: Vec::new(),
+            route_policies: Vec::new(),
         }
     }
 }

@@ -11,9 +11,10 @@ use camel_api::processor::{
 use camel_api::route::Route;
 use camel_api::service::ServiceState;
 use camel_api::service::{Service, StatefulService, SuspendableService};
+use camel_api::spi::route_policy::SharedRoutePolicy;
 use camel_core_processor::unit_of_work::UnitOfWorkProcessor;
 use camel_util::value::ValueMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Instant;
 
 /// What is needed to create a route: the endpoint uri to consume from, the processor to route
@@ -40,6 +41,8 @@ pub struct RouteSpec {
     pub source_location: Option<String>,
     /// The route properties.
     pub properties: ValueMap,
+    /// The policies of the route.
+    pub route_policies: Vec<SharedRoutePolicy>,
 }
 
 impl RouteSpec {
@@ -56,6 +59,7 @@ impl RouteSpec {
             description: None,
             source_location: None,
             properties: ValueMap::new(),
+            route_policies: Vec::new(),
         }
     }
 
@@ -85,10 +89,13 @@ impl RouteSpec {
     }
 }
 
-/// Sets the route id on the exchanges entering the route, then runs the route processor.
+/// Sets the route id on the exchanges entering the route, then runs the route processor, with
+/// the exchange callbacks of the route policies (Java `RoutePolicyAdvice`).
 struct RouteProcessor {
     route_id: String,
     processor: SharedProcessor,
+    policies: Vec<SharedRoutePolicy>,
+    route: Arc<OnceLock<Weak<DefaultRoute>>>,
 }
 
 impl Processor for RouteProcessor {
@@ -104,7 +111,24 @@ impl Processor for RouteProcessor {
         if exchange.from_route_id().is_none() {
             exchange.set_from_route_id(self.route_id.clone());
         }
-        self.processor.process(exchange)
+        let route = if self.policies.is_empty() {
+            None
+        } else {
+            self.route.get().and_then(Weak::upgrade)
+        };
+        let Some(route) = route else {
+            return self.processor.process(exchange);
+        };
+        Box::pin(async move {
+            for p in &self.policies {
+                p.on_exchange_begin(route.as_ref(), exchange);
+            }
+            let result = self.processor.process(exchange).await;
+            for p in &self.policies {
+                p.on_exchange_done(route.as_ref(), exchange);
+            }
+            result
+        })
     }
 }
 
@@ -123,14 +147,19 @@ pub struct DefaultRoute {
     description: Option<String>,
     source_location: Option<String>,
     properties: ValueMap,
+    policies: Vec<SharedRoutePolicy>,
+    this: Arc<OnceLock<Weak<DefaultRoute>>>,
 }
 
 impl DefaultRoute {
     /// Creates the route from the spec, with the resolved endpoint.
     pub fn new(id: String, custom_id: bool, endpoint: SharedEndpoint, spec: RouteSpec) -> Self {
+        let this = Arc::new(OnceLock::new());
         let processor: SharedProcessor = Arc::new(RouteProcessor {
             route_id: id.clone(),
             processor: Arc::new(UnitOfWorkProcessor::new(Some(id.clone()), spec.processor)),
+            policies: spec.route_policies.clone(),
+            route: this.clone(),
         });
         DefaultRoute {
             id,
@@ -146,6 +175,30 @@ impl DefaultRoute {
             description: spec.description,
             source_location: spec.source_location,
             properties: spec.properties,
+            policies: spec.route_policies,
+            this,
+        }
+    }
+
+    /// Binds the route to itself (for the exchange callbacks of its policies), and initializes
+    /// its policies (Java `onInit` and the start of the policy services).
+    pub fn init(self: &Arc<Self>) {
+        let _ = self.this.set(Arc::downgrade(self));
+        for p in &self.policies {
+            p.start();
+            p.on_init(self.as_ref());
+        }
+    }
+
+    /// The policies of the route.
+    pub fn route_policies(&self) -> &[SharedRoutePolicy] {
+        &self.policies
+    }
+
+    /// Calls the policies.
+    fn policies(&self, f: impl Fn(&SharedRoutePolicy, &dyn Route)) {
+        for p in &self.policies {
+            f(p, self);
         }
     }
 
@@ -179,15 +232,23 @@ impl DefaultRoute {
 impl Service for DefaultRoute {
     fn start(&self) -> BoxFuture<'_, CamelResult<()>> {
         Box::pin(async move {
-            self.state
-                .start(|| self.do_start())
-                .await
-                .map_err(|e| CamelError::failed_to_start_route_cause(&self.id, &e.to_string(), e))
+            self.state.start(|| self.do_start()).await.map_err(|e| {
+                CamelError::failed_to_start_route_cause(&self.id, &e.to_string(), e)
+            })?;
+            self.policies(|p, r| p.on_start(r));
+            Ok(())
         })
     }
 
     fn stop(&self) -> BoxFuture<'_, CamelResult<()>> {
-        Box::pin(self.state.stop(|| self.do_stop()))
+        Box::pin(async move {
+            let started = self.state.status().is_started() || self.state.status().is_suspended();
+            let r = self.state.stop(|| self.do_stop()).await;
+            if started {
+                self.policies(|p, r| p.on_stop(r));
+            }
+            r
+        })
     }
 }
 
@@ -201,23 +262,35 @@ impl SuspendableService for DefaultRoute {
     /// Suspends the route: the consumer stops consuming (a direct consumer is removed, so
     /// producers block or fail), but the route keeps its resources.
     fn suspend(&self) -> BoxFuture<'_, CamelResult<()>> {
-        Box::pin(self.state.suspend(|| async {
-            let consumer = self.consumer.lock().unwrap().clone();
-            match consumer {
-                Some(c) => c.stop().await,
-                None => Ok(()),
-            }
-        }))
+        Box::pin(async move {
+            self.state
+                .suspend(|| async {
+                    let consumer = self.consumer.lock().unwrap().clone();
+                    match consumer {
+                        Some(c) => c.stop().await,
+                        None => Ok(()),
+                    }
+                })
+                .await?;
+            self.policies(|p, r| p.on_suspend(r));
+            Ok(())
+        })
     }
 
     fn resume(&self) -> BoxFuture<'_, CamelResult<()>> {
-        Box::pin(self.state.resume(|| async {
-            let consumer = self.consumer.lock().unwrap().clone();
-            match consumer {
-                Some(c) => c.start().await,
-                None => Ok(()),
-            }
-        }))
+        Box::pin(async move {
+            self.state
+                .resume(|| async {
+                    let consumer = self.consumer.lock().unwrap().clone();
+                    match consumer {
+                        Some(c) => c.start().await,
+                        None => Ok(()),
+                    }
+                })
+                .await?;
+            self.policies(|p, r| p.on_resume(r));
+            Ok(())
+        })
     }
 }
 

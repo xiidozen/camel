@@ -11,6 +11,7 @@ pub mod log_listener;
 pub mod poll_strategy;
 pub mod properties;
 pub mod registry;
+pub mod route_policy;
 pub mod simple_function;
 pub mod synchronization;
 pub mod uuid;

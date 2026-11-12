@@ -63,6 +63,9 @@ pub struct DefaultCamelContext {
     /// The routes whose `RouteAdded` event was sent (the routes added before the start are
     /// announced when starting, as Java creates them then).
     announced_routes: Mutex<HashSet<String>>,
+    route_policy_factories: RwLock<Vec<camel_api::spi::route_policy::SharedRoutePolicyFactory>>,
+    /// The policies of the routes, services of the context (stopped with it).
+    route_policies: Mutex<Vec<camel_api::spi::route_policy::SharedRoutePolicy>>,
     state: ServiceState,
 }
 
@@ -100,6 +103,8 @@ impl DefaultCamelContext {
             event_notifiers: RwLock::new(Vec::new()),
             initialized: AtomicBool::new(false),
             announced_routes: Mutex::new(HashSet::new()),
+            route_policy_factories: RwLock::new(Vec::new()),
+            route_policies: Mutex::new(Vec::new()),
             state: ServiceState::new(),
         })
     }
@@ -412,7 +417,24 @@ impl DefaultCamelContext {
                 e,
             )
         })?;
+        // the policies of the factories of the context (Java RoutePolicyFactory)
+        let mut spec = spec;
+        let factories = self.route_policy_factories.read().unwrap().clone();
+        let context = self.as_shared();
+        for f in factories {
+            spec.route_policies
+                .extend(f.create_route_policy(&context, &id));
+        }
         let route = Arc::new(DefaultRoute::new(id.clone(), custom, endpoint, spec));
+        route.init();
+        {
+            let mut services = self.route_policies.lock().unwrap();
+            for p in route.route_policies() {
+                if !services.iter().any(|s| Arc::ptr_eq(s, p)) {
+                    services.push(p.clone());
+                }
+            }
+        }
         self.routes.write().unwrap().push(route.clone());
         if self.state.status().is_started() {
             self.announce_route(&id);
@@ -422,6 +444,15 @@ impl DefaultCamelContext {
             }
         }
         Ok(id)
+    }
+
+    /// Adds a factory creating the policies of the routes added from now on (Java
+    /// `addRoutePolicyFactory`).
+    pub fn add_route_policy_factory(
+        &self,
+        factory: camel_api::spi::route_policy::SharedRoutePolicyFactory,
+    ) {
+        self.route_policy_factories.write().unwrap().push(factory);
     }
 
     /// Generates a route id: `route1`, `route2`, ... (Java `NodeIdFactory` for routes).
@@ -500,8 +531,11 @@ impl DefaultCamelContext {
         let mut routes = self.routes.write().unwrap();
         match routes.iter().position(|r| r.id() == id) {
             Some(i) if !routes[i].status().is_started() && !routes[i].status().is_suspended() => {
-                routes.remove(i);
+                let route = routes.remove(i);
                 drop(routes);
+                for p in route.route_policies() {
+                    p.on_remove(route.as_ref());
+                }
                 if self.announced_routes.lock().unwrap().remove(id) {
                     self.notify(CamelEvent::RouteRemoved(id));
                 }
@@ -601,6 +635,10 @@ impl DefaultCamelContext {
                     }
                 }
                 self.notify(CamelEvent::CamelContextRoutesStopped);
+                let policies = self.route_policies.lock().unwrap().clone();
+                for p in policies {
+                    p.stop();
+                }
                 let components: Vec<SharedComponent> =
                     self.components.read().unwrap().values().cloned().collect();
                 for c in components.iter().rev() {

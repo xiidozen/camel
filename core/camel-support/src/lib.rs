@@ -18,6 +18,7 @@ pub mod message_helper;
 pub mod object_helper;
 pub mod pattern_helper;
 pub mod resource_helper;
+pub mod route_policy_support;
 pub mod simple_registry;
 pub mod tokenizer;
 pub mod type_conversion;

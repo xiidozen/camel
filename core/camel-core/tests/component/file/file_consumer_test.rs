@@ -3654,3 +3654,53 @@ async fn test_poll_strategy_rollback() {
     assert!(cause.contains("Forced"), "{cause}");
     t.context.stop().await.unwrap();
 }
+
+/// Port of `FileConsumerSuspendTest`: a route policy stops the consumer after the first file.
+#[tokio::test]
+async fn test_consumer_suspend() {
+    use camel_core::api::route::Route;
+    use camel_core::api::spi::route_policy::{RoutePolicy, SharedRoutePolicy};
+    #[derive(Default)]
+    struct MyPolicy {
+        counter: std::sync::atomic::AtomicUsize,
+    }
+    impl RoutePolicy for MyPolicy {
+        fn on_exchange_done(&self, route: &dyn Route, _: &Exchange) {
+            if self
+                .counter
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                == 0
+            {
+                if let Some(consumer) = route.consumer() {
+                    camel_core::support::route_policy_support::stop_consumer(consumer);
+                }
+            }
+        }
+    }
+    let dir = TestDirectory::new("FileConsumerSuspendTest");
+    let uri = dir.file_uri("?maxMessagesPerPoll=1&delete=true&initialDelay=0&delay=10");
+    let t = ContextTestSupport::new();
+    t.context.start().await.unwrap();
+    send(&t, &dir, "bye.txt", "Bye World").await;
+    send(&t, &dir, "hello.txt", "Hello World").await;
+    let policy: SharedRoutePolicy = std::sync::Arc::new(MyPolicy::default());
+    t.context
+        .add_routes(move |r: &mut Routes| {
+            r.add(
+                from(&uri)
+                    .route_policy(policy.clone())
+                    .route_id("myRoute")
+                    .convert_body_to("String")
+                    .to("mock:result"),
+            );
+        })
+        .await
+        .unwrap();
+    let mock = t.mock("mock:result");
+    mock.expected_message_count(1);
+    mock.assert_is_satisfied().await;
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert_eq!(1, mock.received_counter());
+    let files = std::fs::read_dir(dir.path()).unwrap().count();
+    assert_eq!(1, files, "The file should exists");
+}

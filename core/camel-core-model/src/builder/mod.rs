@@ -1666,6 +1666,25 @@ impl RouteDsl {
         self
     }
 
+    /// Adds a policy to the route (Java `.routePolicy(policy)`).
+    pub fn route_policy(mut self, policy: camel_api::spi::route_policy::SharedRoutePolicy) -> Self {
+        self.def
+            .route_policies
+            .push(crate::route::RoutePolicyRef::Policy(policy));
+        self
+    }
+
+    /// Adds the policy beans of the registry to the route, by their names separated by commas
+    /// (Java `.routePolicyRef("a, b")`).
+    pub fn route_policy_ref(mut self, names: &str) -> Self {
+        for name in names.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+            self.def
+                .route_policies
+                .push(crate::route::RoutePolicyRef::Ref(name.to_string()));
+        }
+        self
+    }
+
     /// Sets the error handler of the route (Java `.errorHandler(..)` on the route).
     pub fn error_handler(mut self, error_handler: impl Into<ErrorHandlerDefinition>) -> Self {
         self.def.error_handler = Some(error_handler.into());

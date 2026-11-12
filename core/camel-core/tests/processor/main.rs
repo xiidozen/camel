@@ -32,6 +32,7 @@ mod recipient_list_parallel_test;
 mod recipient_list_test;
 mod resequencer_test;
 mod rollback_throttle_test;
+mod route_policy_test;
 mod routing_slip_test;
 mod sampling_throttler_test;
 mod set_remove_transform_test;

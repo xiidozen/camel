@@ -106,6 +106,17 @@ impl ModelCamelContext for DefaultCamelContext {
                 spec.description = def.description.clone();
                 spec.source_location = def.source_location.clone();
                 spec.properties = def.properties.clone();
+                // the policies of the route: the policies, or the policy beans of the registry
+                for policy in &def.route_policies {
+                    spec.route_policies.push(match policy {
+                        camel_core_model::route::RoutePolicyRef::Policy(p) => p.clone(),
+                        camel_core_model::route::RoutePolicyRef::Ref(name) => context
+                            .registry()
+                            .and_then(|r| r.lookup_by_name(name))
+                            .and_then(|v| camel_api::spi::route_policy::route_policy_of(&v))
+                            .ok_or_else(|| CamelError::no_such_bean(name))?,
+                    });
+                }
                 ids.push(self.add_route(spec).await.map_err(|e| {
                     if e.is(camel_api::error::ErrorKind::FailedToCreateRoute) {
                         e
