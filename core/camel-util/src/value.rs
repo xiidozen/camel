@@ -702,6 +702,50 @@ macro_rules! reverse_eq {
 }
 reverse_eq!(&str, i64, i32, bool);
 
+/// An entry of a map (Java `Map.Entry`): what splitting a map gives, with the `key` and
+/// `value` properties (`${body.key}`) and the Java text `key=value`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MapEntry {
+    /// The key.
+    pub key: String,
+    /// The value.
+    pub value: Value,
+}
+
+impl MapEntry {
+    /// The entry as a value (an object with its bean properties and text).
+    pub fn into_value(self) -> Value {
+        Value::Object(ObjectRef::new_display(self).with_bean::<MapEntry>())
+    }
+}
+
+impl fmt::Display for MapEntry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}={}", self.key, self.value)
+    }
+}
+
+impl Bean for MapEntry {
+    fn property(&self, name: &str) -> Option<Value> {
+        match name {
+            "key" => Some(Value::from(self.key.clone())),
+            "value" => Some(self.value.clone()),
+            _ => None,
+        }
+    }
+
+    fn invoke(&self, method: &str, args: &[Value]) -> Option<Result<Value, String>> {
+        if !args.is_empty() {
+            return None;
+        }
+        match method {
+            "getKey" => Some(Ok(Value::from(self.key.clone()))),
+            "getValue" => Some(Ok(self.value.clone())),
+            _ => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

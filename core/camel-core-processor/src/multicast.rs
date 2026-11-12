@@ -316,15 +316,23 @@ impl Processor for MulticastProcessor {
 }
 
 /// The items to split a value into (Java `ObjectHelper.createIterator` with the delimiter):
-/// a list, the parts of a text separated by the delimiter (empty parts skipped), the values of
-/// a map, or the value itself.
+/// a list, the parts of a text separated by the delimiter (empty parts skipped; `false` does
+/// not split), the entries of a map ([`camel_util::value::MapEntry`]), or the value itself.
 pub fn split_items(value: Value, delimiter: &str) -> Vec<Value> {
     match value {
         Value::Null => vec![],
         Value::List(l) => l,
-        Value::Map(m) => m.into_values().collect(),
+        // the entries of a map (Java Map.entrySet())
+        Value::Map(m) => m
+            .into_iter()
+            .map(|(key, value)| camel_util::value::MapEntry { key, value }.into_value())
+            .collect(),
         Value::Text(t) => {
-            if delimiter.is_empty() || !t.contains(delimiter) {
+            // the delimiter false turns the splitting of texts off
+            if delimiter.is_empty()
+                || delimiter.eq_ignore_ascii_case("false")
+                || !t.contains(delimiter)
+            {
                 if t.is_empty() {
                     vec![]
                 } else {

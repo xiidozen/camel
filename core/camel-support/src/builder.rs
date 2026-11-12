@@ -524,6 +524,31 @@ impl ValueBuilder {
         }))
     }
 
+    /// The text of the value split by the token (Java `tokenize(token)`, a `Scanner` with the
+    /// token as delimiter: empty tokens are kept, except a last one); a missing value stays
+    /// null.
+    pub fn tokenize(&self, token: &str) -> ValueBuilder {
+        let l = self.expression.clone();
+        let token = token.to_string();
+        let name = format!("tokenize({}, {token})", l.describe());
+        ValueBuilder::new(named_expression(name, move |e| {
+            let v = l.evaluate(e)?;
+            if v.is_null() {
+                return Ok(v);
+            }
+            let text = v.to_string();
+            let mut parts: Vec<Value> = if token.is_empty() {
+                vec![Value::from(text)]
+            } else {
+                text.split(token.as_str()).map(Value::from).collect()
+            };
+            if matches!(parts.last(), Some(Value::Text(t)) if t.is_empty()) {
+                parts.pop();
+            }
+            Ok(Value::List(parts))
+        }))
+    }
+
     /// The value converted to text, `convertToString(left)`.
     pub fn convert_to_string(&self) -> ValueBuilder {
         let l = self.expression.clone();
