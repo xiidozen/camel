@@ -494,3 +494,103 @@ async fn test_simple_processor() {
         .unwrap();
     assert_eq!("Bye World", out.to_string());
 }
+
+/// Port of `RouteWithConstantFieldFromExchangeTest`: an `Exchange.XXX` header name is the
+/// constant.
+#[tokio::test]
+async fn test_route_with_constant_field_from_exchange() {
+    let t = ContextTestSupport::with_routes(|r: &mut Routes| {
+        r.add(
+            from("direct:start")
+                .set_header("Exchange.FILE_NAME", constant("foo.txt"))
+                .to("mock:result"),
+        );
+    })
+    .await;
+    let mock = t.mock("mock:result");
+    mock.expected_message_count(1);
+    mock.expected_header_received(camel_core::api::exchange_constants::FILE_NAME, "foo.txt");
+    t.template
+        .send_body("direct:start", "Hello World")
+        .await
+        .unwrap();
+    mock.assert_is_satisfied().await;
+}
+
+/// Port of `ProcessRefBeanIdTest`: `#bean:` refers to a processor bean.
+#[tokio::test]
+async fn test_process_ref_bean_id() {
+    let t = ContextTestSupport::new();
+    let echo = camel_bean::processor_value(std::sync::Arc::new(
+        camel_core::api::processor::processor_fn(|e: &mut Exchange| {
+            let body = e.message().body().to_string();
+            e.message_mut().set_body(format!("{body}{body}"));
+            Ok(())
+        }),
+    ));
+    t.context.registry().unwrap().bind("myEcho", echo).unwrap();
+    t.context
+        .add_routes(|r: &mut Routes| {
+            r.add(
+                from("direct:start")
+                    .process_ref("#bean:myEcho")
+                    .to("mock:result"),
+            );
+        })
+        .await
+        .unwrap();
+    t.context.start().await.unwrap();
+    t.mock("mock:result")
+        .expected_bodies_received(["CamelCamel"]);
+    t.template.send_body("direct:start", "Camel").await.unwrap();
+    t.assert_mock_endpoints_satisfied().await;
+}
+
+/// Port of `TryProcessorOnWhenTest`.
+#[tokio::test]
+async fn test_try_processor_on_when() {
+    for (body, result, catch, catch_camel, fails) in [
+        ("Damn IO", 0, 1, 0, false),
+        ("Damn State", 0, 1, 0, false),
+        ("Camel", 0, 0, 1, false),
+        ("Other Bug", 0, 0, 0, true),
+        ("Hello World", 1, 0, 0, false),
+    ] {
+        let t = ContextTestSupport::with_routes(|r: &mut Routes| {
+            r.add(from("direct:start").do_try(|t| {
+                t.process_fn(|e| match e.message().body().to_string().as_str() {
+                    "Damn IO" => Err(CamelError::new(ErrorKind::Io, "Damn IO")),
+                    "Damn State" => Err(CamelError::illegal_state("Damn State")),
+                    "Other Bug" => Err(CamelError::illegal_state("Other Bug")),
+                    "Camel" => Err(CamelError::camel_exchange("Sorry old Camel", e)),
+                    _ => Ok(()),
+                })
+                .to("mock:result")
+                .do_catch_when(
+                    [
+                        ErrorType::Kind(ErrorKind::Io),
+                        ErrorType::Kind(ErrorKind::IllegalState),
+                    ],
+                    simple("${exception.message} contains 'Damn'"),
+                    |c| c.to("mock:catch"),
+                )
+                .do_catch(ErrorKind::CamelExchange, |c| c.to("mock:catchCamel"))
+                .do_finally(|f| f.to("mock:finally"))
+            }));
+        })
+        .await;
+        t.mock("mock:result").expected_message_count(result);
+        t.mock("mock:catch").expected_message_count(catch);
+        t.mock("mock:catchCamel")
+            .expected_message_count(catch_camel);
+        t.mock("mock:finally").expected_message_count(1);
+        let r = t.template.send_body("direct:start", body).await;
+        assert_eq!(fails, r.is_err(), "{body}");
+        if let Err(e) = r {
+            let cause = crate::support::cause_of(&e);
+            assert!(cause.is(ErrorKind::IllegalState), "{e}");
+            assert_eq!(Some("Other Bug"), cause.message());
+        }
+        t.assert_mock_endpoints_satisfied().await;
+    }
+}

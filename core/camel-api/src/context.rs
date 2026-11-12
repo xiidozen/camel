@@ -75,14 +75,24 @@ pub trait CamelContext: Send + Sync {
     /// Replaces the property placeholders (`{{key}}`) of the text (Java
     /// `resolvePropertyPlaceholders`); a text without placeholders, or a context without a
     /// properties component, keeps the text. `None` for a single optional placeholder of a
-    /// missing property.
+    /// missing property. A text `Exchange.FIELD` is the constant of the field (such as
+    /// `Exchange.FILE_NAME` for `CamelFileName`).
     ///
     /// # Errors
     ///
     /// An `IllegalArgumentException` for a missing property (see
-    /// [`PropertiesComponent::parse_uri`]).
+    /// [`PropertiesComponent::parse_uri`]) or an unknown `Exchange` constant.
     fn resolve_property_placeholders(&self, text: &str) -> CamelResult<Option<String>> {
         if !text.contains(PREFIX_TOKEN) {
+            // a constant of the Exchange interface (Java DefaultCamelContextExtension)
+            if let Some(field) = text.strip_prefix("Exchange.") {
+                return match crate::exchange_constants::lookup(field) {
+                    Some(constant) => Ok(Some(constant.to_string())),
+                    None => Err(crate::error::CamelError::illegal_argument(format!(
+                        "Constant field with name: {field} not found on Exchange.class"
+                    ))),
+                };
+            }
             return Ok(Some(text.to_string()));
         }
         match self.properties_component() {

@@ -504,12 +504,14 @@ impl<'a> RouteReifier<'a> {
                 Arc::new(Pipeline::new(processors))
             }
             Eip::SetBody(e) | Eip::Transform(e) => Arc::new(SetBodyProcessor::new(self.expr(e)?)),
-            Eip::SetHeader { name, expression } => {
-                Arc::new(SetHeaderProcessor::new(name, self.expr(expression)?))
-            }
-            Eip::SetProperty { name, expression } => {
-                Arc::new(SetPropertyProcessor::new(name, self.expr(expression)?))
-            }
+            Eip::SetHeader { name, expression } => Arc::new(SetHeaderProcessor::new(
+                &resolve_placeholders(self.context, name)?,
+                self.expr(expression)?,
+            )),
+            Eip::SetProperty { name, expression } => Arc::new(SetPropertyProcessor::new(
+                &resolve_placeholders(self.context, name)?,
+                self.expr(expression)?,
+            )),
             Eip::SetVariable { name, expression } => {
                 Arc::new(SetVariableProcessor::new(name, self.expr(expression)?))
             }
@@ -1262,6 +1264,11 @@ pub fn resolve_process_ref(
     match r {
         ProcessRef::Processor(p) => Ok(p.clone()),
         ProcessRef::Ref(name) => {
+            // a bean reference (Java mandatoryLookup: `#bean:name` or `#name`)
+            let name = name
+                .strip_prefix("#bean:")
+                .or_else(|| name.strip_prefix('#'))
+                .unwrap_or(name);
             let not_found =
                 || CamelError::no_such_bean_of_type(Some(name), "org.apache.camel.Processor");
             let registry = context.registry().ok_or_else(not_found)?;
