@@ -281,6 +281,7 @@ fn done(
     stop_on_exception: bool,
     force_exhaust: bool,
 ) {
+    let result_failed = result.as_ref().is_some_and(|r| r.exception().is_some());
     if let Some(r) = result {
         if r.exception().is_some() && stop_on_exception {
             original.set_exception(r.exception().cloned());
@@ -295,8 +296,11 @@ fn done(
             }
         }
     }
-    if force_exhaust && original.exception().is_some() {
-        original.set_redelivery_exhausted(true);
+    // the error handlers of the copies tried to redeliver: tell the error handlers around the
+    // EIP not to redeliver again (Java doDone: exhausted when the result failed)
+    if original.exception().is_some() {
+        let exhausted = force_exhaust || original.is_redelivery_exhausted() || result_failed;
+        original.set_redelivery_exhausted(exhausted);
     }
 }
 

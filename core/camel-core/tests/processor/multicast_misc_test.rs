@@ -258,3 +258,175 @@ async fn test_multicast_dsl() {
     t.template.send_body("direct:start", 1).await.unwrap();
     mock.assert_is_satisfied().await;
 }
+
+/// Port of `MulticastFineGrainedErrorHandlingTest` (each step of the multicast is a branch).
+#[tokio::test]
+async fn test_fine_grained_error_handling() {
+    for error in [false, true] {
+        let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+            r.on_exception(
+                on_exception(ErrorType::Any)
+                    .redelivery_delay(0)
+                    .maximum_redeliveries(2),
+            );
+            r.add(
+                from("direct:start")
+                    .to("mock:a")
+                    .multicast(move |m| {
+                        let m = m.to("mock:foo").to("mock:bar");
+                        if error {
+                            m.throw_exception(CamelError::illegal_argument("Damn"))
+                                .to("mock:baz")
+                        } else {
+                            m.to("mock:baz")
+                        }
+                    })
+                    .stop_on_exception(),
+            );
+        })
+        .await;
+        for m in ["mock:a", "mock:foo", "mock:bar"] {
+            t.mock(m).expected_message_count(1);
+        }
+        t.mock("mock:baz")
+            .expected_message_count(if error { 0 } else { 1 });
+        let r = t.template.send_body("direct:start", "Hello World").await;
+        assert_eq!(error, r.is_err());
+        t.assert_mock_endpoints_satisfied().await;
+    }
+}
+
+/// The `MulticastParallelFailureEndpointTest` case without doTry (with doTry Java has no
+/// failure endpoint after the catch, which the Rust catch keeps).
+#[tokio::test]
+async fn test_parallel_failure_endpoint() {
+    use camel_core::api::exchange_constants::FAILURE_ENDPOINT;
+    for uri in ["direct:run"] {
+        let t = ContextTestSupport::with_routes(|r: &mut Routes| {
+            r.add(
+                from("direct:start")
+                    .do_try(|b| {
+                        b.to("direct:run")
+                            .do_catch(ErrorKind::IllegalArgument, |c| c)
+                    })
+                    .to("mock:result"),
+            );
+            r.add(
+                from("direct:run")
+                    .multicast(|m| m.to("direct:a").to("direct:b"))
+                    .parallel_processing()
+                    .to("mock:run"),
+            );
+            r.add(
+                from("direct:a")
+                    .throw_exception(CamelError::illegal_argument("Oops..."))
+                    .to("mock:a"),
+            );
+            r.add(
+                from("direct:b")
+                    .set_body(constant("Bye World"))
+                    .to("mock:b"),
+            );
+        })
+        .await;
+        t.mock("mock:run").expected_message_count(0);
+        t.mock("mock:a").expected_message_count(0);
+        t.mock("mock:b").expected_message_count(1);
+        if uri == "direct:start" {
+            t.mock("mock:result")
+                .expected_bodies_received(["Bye World"]);
+        }
+        let mut request = t
+            .template
+            .create_exchange(uri, ExchangePattern::InOut)
+            .unwrap();
+        request.message_mut().set_body("Hello World");
+        let result = t.template.send(uri, request).await.unwrap();
+        t.assert_mock_endpoints_satisfied().await;
+        if uri == "direct:run" {
+            assert_eq!(
+                Some(&Value::from("direct://a")),
+                result.property(FAILURE_ENDPOINT)
+            );
+        } else {
+            assert_eq!(None, result.property(FAILURE_ENDPOINT));
+        }
+    }
+}
+
+/// Port of `MulticastUseOriginalNotPropagateExceptionTest`.
+#[tokio::test]
+async fn test_use_original_not_propagate_exception() {
+    fn recipient(r: &mut Routes, n: u8) {
+        let name = format!("recipient{n}");
+        let throw = format!("throw{n}");
+        let message = name.clone();
+        r.add(
+            from(&format!("direct:{name}"))
+                .log(&name)
+                .choice(move |c| {
+                    c.when(body().contains(throw.as_str()), move |w| {
+                        let message = message.clone();
+                        w.process_fn(move |_| Err(CamelError::runtime(message.clone())))
+                    })
+                })
+                .set_body(constant(name.clone()))
+                .to(&format!("mock:{name}")),
+        );
+    }
+    let t = ContextTestSupport::with_routes(|r: &mut Routes| {
+        r.add(
+            from("direct:start")
+                .error_handler(no_error_handler())
+                .multicast(|m| m.to("direct:recipient1").to("direct:recipient2"))
+                .aggregation_strategy(Arc::new(UseOriginalAggregationStrategy::new(false)))
+                .to("mock:result"),
+        );
+        recipient(r, 1);
+        recipient(r, 2);
+    })
+    .await;
+    for body in ["body", "throw1", "throw2", "throw1;throw2"] {
+        let (r1, r2, result) = (
+            t.mock("mock:recipient1"),
+            t.mock("mock:recipient2"),
+            t.mock("mock:result"),
+        );
+        r1.reset();
+        r2.reset();
+        result.reset();
+        r1.expected_message_count(if body.contains("throw1") { 0 } else { 1 });
+        r2.expected_message_count(if body.contains("throw2") { 0 } else { 1 });
+        result.expected_bodies_received([body]);
+        t.template.send_body("direct:start", body).await.unwrap();
+        t.assert_mock_endpoints_satisfied().await;
+    }
+}
+
+/// Port of `MulticastGroupedExchangeExceptionTest`.
+#[tokio::test]
+async fn test_grouped_exchange_exception() {
+    use camel_core::processor::aggregate::GroupedExchangeAggregationStrategy;
+    for failing in [None, Some("mock:endpointB"), Some("mock:endpointA")] {
+        let t = ContextTestSupport::with_routes(|r: &mut Routes| {
+            r.add(
+                from("direct:start")
+                    .multicast(|m| m.to("mock:endpointA").to("mock:endpointB"))
+                    .aggregation_strategy(Arc::new(GroupedExchangeAggregationStrategy))
+                    .to("mock:result"),
+            );
+        })
+        .await;
+        let result = t.mock("mock:result");
+        result.expected_message_count(1);
+        if let Some(uri) = failing {
+            t.mock(uri)
+                .when_any_exchange_received(Arc::new(processor_fn(|_| {
+                    Err(CamelError::illegal_argument("Fake exception"))
+                })));
+        }
+        t.template.send_body("direct:start", "dummy").await.unwrap();
+        t.assert_mock_endpoints_satisfied().await;
+        assert!(!result.received_exchanges()[0].is_failed(), "no exception");
+    }
+}

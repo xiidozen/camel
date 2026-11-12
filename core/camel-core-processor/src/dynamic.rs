@@ -225,6 +225,7 @@ pub struct RecipientListProcessor {
     config: MulticastConfig,
     ignore_invalid_endpoints: bool,
     cache: Arc<ProducerCache>,
+    error_handler: Option<Arc<crate::errorhandler::ErrorHandlerConfig>>,
 }
 
 impl RecipientListProcessor {
@@ -242,7 +243,19 @@ impl RecipientListProcessor {
             config,
             ignore_invalid_endpoints,
             cache: Arc::new(ProducerCache::default()),
+            error_handler: None,
         }
+    }
+
+    /// Sends each copy through the error handler (Java `RecipientListProcessor`
+    /// `createErrorHandler`: the error handler of the route handles the failures of each
+    /// recipient).
+    pub fn with_error_handler(
+        mut self,
+        config: Arc<crate::errorhandler::ErrorHandlerConfig>,
+    ) -> Self {
+        self.error_handler = Some(config);
+        self
     }
 
     /// Sets the delimiter of the uris in a text (default `,`; `false` to not split).
@@ -278,7 +291,18 @@ impl Processor for RecipientListProcessor {
             let mut targets: Vec<SharedProcessor> = Vec::new();
             for uri in items.iter().filter_map(recipient) {
                 match self.cache.acquire(exchange, &uri).await {
-                    Ok(target) => targets.push(Arc::new(SendToTarget(target))),
+                    Ok(target) => {
+                        let send: SharedProcessor = Arc::new(SendToTarget(target));
+                        targets.push(match &self.error_handler {
+                            Some(config) => {
+                                Arc::new(crate::errorhandler::RedeliveryErrorHandler::new(
+                                    send,
+                                    config.clone(),
+                                ))
+                            }
+                            None => send,
+                        });
+                    }
                     Err(e) if self.ignore_invalid_endpoints => {
                         log::debug!(
                             "Endpoint uri is invalid: {uri}. This exception will be ignored. {e}"

@@ -609,6 +609,9 @@ impl<'a> RouteReifier<'a> {
                 if let Some(d) = delimiter {
                     p = p.with_delimiter(d);
                 }
+                if let Some(config) = &self.error_handler {
+                    p = p.with_error_handler(config.clone());
+                }
                 Arc::new(p)
             }
             Eip::WireTap {
