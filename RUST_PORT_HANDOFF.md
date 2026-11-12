@@ -144,6 +144,12 @@ Crates live **in the directory of the Maven module they replace** (`core/camel-a
   `context.set_message_history(true)` is set before the routes are added; dumped by
   `camel_support::message_helper::dump_message_history_stacktrace` (simple `${messageHistory}`, exhausted
   error logs).
+- Route policies: `camel_api::spi::route_policy` (callbacks get the `SharedRoute`), resolved by the engine from
+  `RouteDefinition::route_policies` and the context factories; `DefaultRoute` calls the lifecycle callbacks, its route
+  processor the exchange ones. Policies stop/start consumers on another task (`camel_support::route_policy_support`).
+  Done: ThrottlingInflightRoutePolicy, ThrottlingExceptionRoutePolicy (camel-support `throttling`),
+  DurationRoutePolicy (base engine). The inflight repository is a context plugin
+  (`camel_api::spi::inflight`). Pending: scheduled route policies, FlipRoutePolicy-like tests, consumer status.
 - **Next:** continue the file component (`components/camel-file`, **in progress**, tests in
   `core/camel-core/tests/component/file`, `TestDirectory` in the test support, mock `expected_file_exists`). Done:
   producer (fileName/overrule, fileExist modes with moveExisting, temp names, done files, forceWrites,
