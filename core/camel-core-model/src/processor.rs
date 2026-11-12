@@ -712,6 +712,13 @@ pub enum Eip {
         /// Whether an invalid endpoint uri is ignored.
         ignore_invalid_endpoint: bool,
     },
+    /// Polls a message from the endpoint as the new message (`poll`, Java `PollDefinition`).
+    Poll {
+        /// The uri (an expression).
+        uri: ExpressionDefinition,
+        /// The timeout in millis: negative waits without limit, `0` does not wait.
+        timeout: i64,
+    },
     /// Lets one exchange through per number of messages or per period (`sample`).
     Sample {
         /// The number of messages per sample.
@@ -831,6 +838,7 @@ impl Eip {
             Eip::ConvertValueTo { variable: true, .. } => "convertVariableTo",
             Eip::Enrich { .. } => "enrich",
             Eip::PollEnrich { .. } => "pollEnrich",
+            Eip::Poll { .. } => "poll",
             Eip::Sample { .. } => "sample",
             Eip::IdempotentConsumer(_) => "idempotentConsumer",
             Eip::LoadBalance { .. } => "loadBalance",
@@ -1009,6 +1017,7 @@ impl fmt::Display for ProcessorDefinition {
             }
             Eip::Enrich { uri, .. } => write!(f, "Enrich[{uri}]"),
             Eip::PollEnrich { uri, .. } => write!(f, "PollEnrich[{uri}]"),
+            Eip::Poll { uri, .. } => write!(f, "Poll[{uri}]"),
             Eip::Sample {
                 message_frequency,
                 period_millis,

@@ -692,6 +692,10 @@ fn step(
             }
             one(s)
         }
+        "poll" => {
+            let uri = node.required("uri", eip)?;
+            one(d.poll_timeout(&uri, node.number::<i64>("timeout")?.unwrap_or(20000)))
+        }
         "validate" => one(d.validate(node.required_expression(eip)?)),
         "script" => one(d.script(node.required_expression(eip)?)),
         "sort" => match node.expression()? {

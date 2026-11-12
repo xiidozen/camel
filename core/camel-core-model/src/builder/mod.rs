@@ -546,6 +546,22 @@ pub trait Dsl: Sized {
         })
     }
 
+    /// Polls a message from the endpoint of the uri (a simple expression without the file
+    /// functions) as the new message, waiting up to 20 seconds (Java `.poll(uri)`).
+    fn poll(self, uri: &str) -> Self {
+        self.poll_timeout(uri, 20000)
+    }
+
+    /// Polls a message from the endpoint of the uri as the new message, waiting up to the
+    /// timeout in millis (negative: without limit, `0`: not at all); the body is empty when
+    /// nothing was polled (Java `.poll(uri, timeout)`).
+    fn poll_timeout(self, uri: &str, timeout: i64) -> Self {
+        self.eip(Eip::Poll {
+            uri: ExpressionDefinition::language("simple", uri),
+            timeout,
+        })
+    }
+
     /// Whether the last enrich or pollEnrich merges a failed reply too (Java
     /// `aggregateOnException`).
     fn aggregate_on_exception(mut self, aggregate: bool) -> Self {

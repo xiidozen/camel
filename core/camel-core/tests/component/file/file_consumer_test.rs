@@ -1036,3 +1036,27 @@ async fn test_intercept_empty_file() {
     send(&t, &dir, "empty2.txt", "").await;
     t.assert_mock_endpoints_satisfied().await;
 }
+
+/// Port of `PollSimpleMoveTest`.
+#[tokio::test]
+async fn test_poll_simple_move() {
+    let dir = TestDirectory::new("PollSimpleMoveTest");
+    let uri = dir.file_uri("?move=backup/my-${file:onlyname}");
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(
+            from("direct:start")
+                .poll_timeout(&uri, 5000)
+                .to("mock:result"),
+        );
+    })
+    .await;
+    let mock = t.mock("mock:result");
+    mock.expected_message_count(1);
+    mock.expected_file_exists(dir.test_file("backup/my-hello.txt"), None);
+    send(&t, &dir, "hello.txt", "Hello World").await;
+    t.template
+        .send_body("direct:start", "Trigger")
+        .await
+        .unwrap();
+    mock.assert_is_satisfied().await;
+}

@@ -2,6 +2,7 @@
 
 mod enricher_test;
 mod poll_enricher_test;
+mod poll_test;
 
 use camel_core::api::processor::{aggregation_fn, SharedAggregationStrategy};
 use std::sync::Arc;

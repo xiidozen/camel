@@ -769,6 +769,13 @@ impl<'a> RouteReifier<'a> {
                     *ignore_invalid_endpoint,
                 ))
             }
+            Eip::Poll { uri, timeout } => Arc::new(PollEnrichProcessor::new(
+                self.uri_expr(uri)?,
+                *timeout,
+                None,
+                false,
+                false,
+            )),
             Eip::Sample {
                 message_frequency,
                 period_millis,
