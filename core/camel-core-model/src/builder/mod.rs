@@ -309,6 +309,19 @@ pub trait Dsl: Sized {
         self.eip(Eip::WireTap {
             uri: uri.to_string(),
             ignore_invalid_endpoint: false,
+            on_prepare: None,
+            variable_send: None,
+        })
+    }
+
+    /// Sends a copy with the value of the variable as body to the endpoint in the background
+    /// (Java `.wireTap(uri, variableSend)`).
+    fn wire_tap_variable(self, uri: &str, variable: &str) -> Self {
+        self.eip(Eip::WireTap {
+            uri: uri.to_string(),
+            ignore_invalid_endpoint: false,
+            on_prepare: None,
+            variable_send: Some(variable.to_string()),
         })
     }
 
@@ -1232,20 +1245,27 @@ pub trait Dsl: Sized {
 
     /// The last step (split, multicast, recipient list) prepares each copy with the processor
     /// before it is sent (Java `.onPrepare(processor)`); a failure fails the copy.
-    fn on_prepare(mut self, processor: SharedProcessor) -> Self {
+    fn on_prepare(self, processor: SharedProcessor) -> Self {
+        self.set_on_prepare(ProcessRef::Processor(processor))
+    }
+
+    /// Sets the onPrepare of the last split, multicast, recipient list or wire tap.
+    #[doc(hidden)]
+    fn set_on_prepare(mut self, prepare: ProcessRef) -> Self {
+        if let Some(Eip::WireTap { on_prepare, .. }) = self.last_mut().map(|l| &mut l.eip) {
+            *on_prepare = Some(prepare);
+            return self;
+        }
         if let Some(o) = self.last_multicast_options() {
-            o.on_prepare = Some(ProcessRef::Processor(processor));
+            o.on_prepare = Some(prepare);
         }
         self
     }
 
     /// The last step (split, multicast, recipient list) prepares each copy with the processor
     /// bean of the registry (Java `.onPrepare("#name")`).
-    fn on_prepare_ref(mut self, name: &str) -> Self {
-        if let Some(o) = self.last_multicast_options() {
-            o.on_prepare = Some(ProcessRef::Ref(name.to_string()));
-        }
-        self
+    fn on_prepare_ref(self, name: &str) -> Self {
+        self.set_on_prepare(ProcessRef::Ref(name.to_string()))
     }
 
     /// The last step (split, multicast or recipient list) stops on the first failed copy

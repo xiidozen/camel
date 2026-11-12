@@ -617,10 +617,16 @@ impl<'a> RouteReifier<'a> {
             Eip::WireTap {
                 uri,
                 ignore_invalid_endpoint,
-            } => Arc::new(WireTapProcessor::new(
-                self.expr(&ExpressionDefinition::language("simple", uri))?,
-                *ignore_invalid_endpoint,
-            )),
+                on_prepare,
+                variable_send,
+            } => Arc::new(
+                WireTapProcessor::new(
+                    self.expr(&ExpressionDefinition::language("simple", uri))?,
+                    *ignore_invalid_endpoint,
+                )
+                .with_on_prepare(optional_ref(self.context, on_prepare)?)
+                .with_variable_send(variable_send.clone()),
+            ),
             Eip::SetExchangePattern(p) => Arc::new(SetExchangePatternProcessor(*p)),
             Eip::ConvertBodyTo {
                 type_name,

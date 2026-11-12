@@ -332,6 +332,8 @@ impl Processor for RecipientListProcessor {
 /// the copy, as Java does.
 pub struct WireTapProcessor {
     send: Arc<SendDynamicProcessor>,
+    on_prepare: Option<SharedProcessor>,
+    variable_send: Option<String>,
 }
 
 impl WireTapProcessor {
@@ -343,7 +345,21 @@ impl WireTapProcessor {
                 None,
                 ignore_invalid_endpoint,
             )),
+            on_prepare: None,
+            variable_send: None,
         }
+    }
+
+    /// Prepares the copy with the processor before it is sent (Java `onPrepare`).
+    pub fn with_on_prepare(mut self, on_prepare: Option<SharedProcessor>) -> Self {
+        self.on_prepare = on_prepare;
+        self
+    }
+
+    /// Sends the value of the variable as the body (Java `variableSend`).
+    pub fn with_variable_send(mut self, variable: Option<String>) -> Self {
+        self.variable_send = variable;
+        self
     }
 }
 
@@ -365,8 +381,19 @@ impl Processor for WireTapProcessor {
             }
             let mut copy = create_correlated_copy(exchange);
             copy.set_pattern(ExchangePattern::InOnly);
+            if let Some(v) = &self.variable_send {
+                let value = copy.variable(v).cloned().unwrap_or_default();
+                copy.message_mut().set_body(value);
+            }
             let send = self.send.clone();
+            let on_prepare = self.on_prepare.clone();
             tokio::spawn(async move {
+                if let Some(p) = &on_prepare {
+                    if let Err(e) = p.process(&mut copy).await {
+                        log::warn!("Error preparing wire-tapped exchange: {copy}. Caused by: {e}");
+                        return;
+                    }
+                }
                 if let Err(e) = send.process(&mut copy).await {
                     copy.set_exception(Some(e));
                 }

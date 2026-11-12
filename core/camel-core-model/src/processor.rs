@@ -586,6 +586,10 @@ pub enum Eip {
         uri: String,
         /// Whether an invalid endpoint uri is ignored.
         ignore_invalid_endpoint: bool,
+        /// The processor preparing the copy before it is sent (`onPrepare`).
+        on_prepare: Option<ProcessRef>,
+        /// The variable whose value is the body sent (`variableSend`).
+        variable_send: Option<String>,
     },
     /// Sets the exchange pattern (`setExchangePattern`).
     SetExchangePattern(ExchangePattern),
