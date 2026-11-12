@@ -1085,3 +1085,122 @@ async fn test_from_file_multicast_to_files() {
         t.assert_mock_endpoints_satisfied().await;
     }
 }
+
+/// Port of `FileURLDecodingTest`: the fileName option is URL decoded unless RAW.
+#[tokio::test]
+async fn test_url_decoding() {
+    for (encoded, expected) in [
+        ("data.txt", "data.txt"),
+        ("data .txt", "data .txt"),
+        ("data%20.txt", "data .txt"),
+        ("RAW(data%2B.txt)", "data%2B.txt"),
+        ("RAW(data+.txt)", "data+.txt"),
+        ("RAW(data%20.txt)", "data%20.txt"),
+        ("RAW(data%%.txt)", "data%%.txt"),
+    ] {
+        let dir = TestDirectory::new("FileURLDecodingTest");
+        let uri = dir.file_uri(&format!("?fileName={encoded}"));
+        let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+            r.add(from("direct:start").to(&uri));
+        })
+        .await;
+        let result = t
+            .template
+            .request_body("direct:start", "Kermit")
+            .await
+            .unwrap();
+        assert_eq!("Kermit", result.to_string());
+        assert_eq!(Some("Kermit".to_string()), dir.read(expected), "{encoded}");
+    }
+}
+
+/// Port of `FileConcurrentWriteAppendSameFileTest`: parallel appends to the same file.
+#[tokio::test]
+async fn test_concurrent_write_append_same_file() {
+    let dir = TestDirectory::new("FileConcurrentWriteAppendSameFileTest");
+    let (from_uri, out) = (
+        dir.file_uri("?initialDelay=0&delay=10"),
+        dir.file_uri("outbox?fileExist=Append&fileName=result.txt"),
+    );
+    let t = ContextTestSupport::new();
+    t.context
+        .add_routes(move |r: &mut Routes| {
+            let out = out.clone();
+            r.add(
+                from(&from_uri)
+                    .route_id("foo")
+                    .auto_startup(false)
+                    .split(body().tokenize("\n"), move |s| {
+                        s.set_body(body().append(":Status=OK").append("\n"))
+                            .to(&out)
+                            .to("mock:result")
+                    })
+                    .parallel_processing()
+                    .streaming(),
+            );
+        })
+        .await
+        .unwrap();
+    t.context.start().await.unwrap();
+    let data: String = (0..100).map(|i| format!("Line {i}\n")).collect();
+    put(&t, &dir, "", &data, "input.txt").await.unwrap();
+    let mock = t.mock("mock:result");
+    mock.expected_message_count(100);
+    mock.expects_no_duplicates(body().expression());
+    mock.set_result_wait_time(30000);
+    t.context.start_route("foo").await.unwrap();
+    mock.assert_is_satisfied().await;
+    let mut actual: Vec<String> = dir
+        .read("outbox/result.txt")
+        .unwrap()
+        .lines()
+        .map(str::to_string)
+        .collect();
+    let mut expected: Vec<String> = data.lines().map(|l| format!("{l}:Status=OK")).collect();
+    actual.sort();
+    expected.sort();
+    assert_eq!(expected, actual);
+}
+
+/// Port of `FileToFileWithFlattenTest`: flatten on the consumer or the producer.
+#[tokio::test]
+async fn test_file_to_file_with_flatten() {
+    for (consumer, producer) in [("&flatten=true", ""), ("", "?flatten=true")] {
+        let dir = TestDirectory::new("FileToFileWithFlattenTest");
+        let t = ContextTestSupport::new();
+        for (name, body) in [
+            ("bye.txt", "Bye World"),
+            ("sub/hello.txt", "Hello World"),
+            ("sub/sub2/goodday.txt", "Goodday World"),
+        ] {
+            put(&t, &dir, "flatten-in", body, name).await.unwrap();
+        }
+        let (from_uri, to_uri) = (
+            dir.file_uri(&format!(
+                "flatten-in?initialDelay=0&delay=10&recursive=true{consumer}"
+            )),
+            dir.file_uri(&format!("flatten-out{producer}")),
+        );
+        t.context
+            .add_routes(move |r: &mut Routes| {
+                r.add(from(&from_uri).to(&to_uri).to("mock:result"));
+            })
+            .await
+            .unwrap();
+        t.context.start().await.unwrap();
+        let mock = t.mock("mock:result");
+        mock.expected_message_count(3);
+        for f in [
+            "flatten-out/bye.txt",
+            "flatten-out/hello.txt",
+            "flatten-out/goodday.txt",
+            "flatten-in/.camel/bye.txt",
+            "flatten-in/sub/.camel/hello.txt",
+            "flatten-in/sub/sub2/.camel/goodday.txt",
+        ] {
+            mock.expected_file_exists(dir.test_file(f), None);
+        }
+        mock.assert_is_satisfied().await;
+        t.context.stop().await.unwrap();
+    }
+}

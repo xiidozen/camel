@@ -46,6 +46,10 @@ pub fn create_endpoint(
     };
     // the hash option is internal only
     parameters.shift_remove("hash");
+    // the RAW(value) parameters as their value (Java DefaultComponent.createEndpoint)
+    if component.resolve_raw_parameter_values() {
+        camel_util::uri_support::resolve_raw_parameter_values(&mut parameters);
+    }
     let uri = if component.use_raw_uri() {
         uri.to_string()
     } else {

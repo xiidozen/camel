@@ -149,6 +149,13 @@ pub trait Component: Service {
         false
     }
 
+    /// Whether the `RAW(value)` parameter values are resolved to their value before the
+    /// endpoint is created (Java `resolveRawParameterValues`, default `true`); a component
+    /// proxying another endpoint may keep them.
+    fn resolve_raw_parameter_values(&self) -> bool {
+        true
+    }
+
     /// The default name (scheme) of the component, if any.
     fn default_name(&self) -> Option<&str> {
         None

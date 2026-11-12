@@ -374,6 +374,13 @@ fn prepare(
             .map_err(|e| operation_failed(format!("Cannot read file: {}: {e}", to.display())))?;
         file.populate_headers(&mut exchange);
     }
+    // with flatten the file name has no path (Java configureMessage)
+    if c.flatten {
+        exchange.message_mut().set_header(
+            camel_api::exchange_constants::FILE_NAME,
+            file.file_name_only(),
+        );
+    }
     let body = read_body(&file.file_path, c.charset.as_deref())?;
     exchange.message_mut().set_body(body);
     Ok((file, exchange))
