@@ -1,0 +1,19 @@
+[package]
+name = "camel-xml-io-dsl"
+description = "Camel :: XML IO DSL — routes in XML (port of dsl/camel-xml-io-dsl)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+camel-api = { workspace = true }
+camel-core-model = { workspace = true }
+camel-yaml-dsl = { workspace = true }
+roxmltree = "0.20"
+serde_yaml = "0.9"
+
+[dev-dependencies]
+camel-core = { workspace = true }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros"] }

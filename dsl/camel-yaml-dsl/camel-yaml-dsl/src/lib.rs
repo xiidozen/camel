@@ -71,10 +71,11 @@ use camel_core_model::errorhandler::{ErrorHandlerDefinition, OnExceptionDefiniti
 use camel_core_model::expression::ExpressionDefinition;
 use camel_core_model::processor::ProcessorDefinition;
 use camel_core_model::route::RouteDefinition;
-use serde_yaml::Value as Yaml;
+/// The YAML tree of the documents (`serde_yaml::Value`).
+pub use serde_yaml::Value as Yaml;
 
 /// The languages an expression may be written in (the keys of an expression).
-const LANGUAGES: &[&str] = &[
+pub const LANGUAGES: &[&str] = &[
     "simple",
     "constant",
     "header",
@@ -105,7 +106,7 @@ const LANGUAGES: &[&str] = &[
 ];
 
 /// The EIPs whose nested steps are the following steps when given without `steps`.
-const OUTPUT_EIPS: &[&str] = &[
+pub const OUTPUT_EIPS: &[&str] = &[
     "filter",
     "split",
     "multicast",
@@ -1052,6 +1053,16 @@ impl YamlRoutes {
     pub fn parse(yaml: &str) -> CamelResult<Self> {
         let doc: Yaml =
             serde_yaml::from_str(yaml).map_err(|e| error(format!("Invalid YAML: {e}")))?;
+        Self::from_value(doc)
+    }
+
+    /// The routes of a YAML document already parsed (used by the XML DSL, which converts its
+    /// elements to the same tree).
+    ///
+    /// # Errors
+    ///
+    /// An unknown node or an invalid option (an `IllegalArgumentException`).
+    pub fn from_value(doc: Yaml) -> CamelResult<Self> {
         let items = match doc {
             Yaml::Sequence(s) => s,
             Yaml::Null => Vec::new(),

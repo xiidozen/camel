@@ -131,6 +131,8 @@ Crates live **in the directory of the Maven module they replace** (`core/camel-a
 - `dsl/camel-yaml-dsl/camel-yaml-dsl`: **in progress** — `camel_yaml_dsl::YamlRoutes::parse(text)` then
   `context.add_routes(routes)` (call `bind_beans` first for `beans`); new EIPs must be added to its `step`
   function.
+- `dsl/camel-xml-io-dsl`: **in progress** — `XmlRoutes::parse(xml)` converts the XML to the YAML DSL tree
+  (`camel_yaml_dsl::YamlRoutes::from_value`), so both DSLs share the EIP mapping.
 - **Next:** threads, the rest of the simple functions (init blocks, type/message/output), then
   camel-main and the YAML/XML DSLs.
 - Java files still present in `core/camel-api/src/main/java` are the ones not ported yet.

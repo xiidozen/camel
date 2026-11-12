@@ -114,7 +114,7 @@ progress and what is still to do. Update it in the same commit as each port.
 | `dsl/camel-jbang/camel-launcher-container` | 0 | 0 | todo | |
 | `dsl/camel-kamelet-main` | 67 | 24 | todo | |
 | `dsl/camel-kamelet-main-support` | 5 | 0 | todo | |
-| `dsl/camel-xml-io-dsl` | 3 | 28 | todo | |
+| `dsl/camel-xml-io-dsl` | 3 | 28 | wip | Rust crate `camel-xml-io-dsl` (`XmlRoutes`, on roxmltree): `<routes>`/`<camel>`/`<route>` documents (with or without the xml-io namespace) converted to the tree of the YAML DSL (attributes as options, language elements as expressions, option elements such as `<when>`, `<doCatch>`, `<exception>`, `<onWhen>`, `<handled>`, the other elements as nested steps); top level `onException`, `intercept*`, `errorHandler`. Pending: rests, route templates, route configurations, beans, kamelets. Tests: `XmlLoadTest` (routes cases), `XmlRoutesBuilderLoaderTest.canLoadRoutes` and Rust tests (`tests/xml_dsl.rs`). |
 | `dsl/camel-xml-jaxb-dsl` | 2 | 8 | todo | |
 | `dsl/camel-xml-jaxb-dsl-test` | 0 | 0 | todo | |
 | `dsl/camel-xml-jaxb-dsl-test/definition` | 0 | 9 | todo | |
