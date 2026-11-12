@@ -2824,3 +2824,113 @@ async fn test_auto_create_directory() {
         "Directory should NOT be created"
     );
 }
+
+/// Port of `FileConsumerFailureHandledTest`: a handled failure deletes the file, a failure not
+/// handled keeps it.
+#[tokio::test]
+async fn test_failure_handled() {
+    for (city, mock_uri, expected, deleted) in [
+        ("Paris", "mock:valid", "Hello Paris", true),
+        ("London", "mock:invalid", "London", true),
+        ("Dublin", "mock:beer", "Dublin", false),
+        ("Madrid", "mock:error", "Madrid", true),
+    ] {
+        let dir = TestDirectory::new("FileConsumerFailureHandledTest");
+        let uri = dir.file_uri("?initialDelay=0&delay=10&delete=true");
+        let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+            r.error_handler(
+                dead_letter_channel("mock:error")
+                    .maximum_redeliveries(2)
+                    .redelivery_delay(0)
+                    .log_stack_trace(false),
+            );
+            r.on_exception(
+                on_exception(ErrorType::Kind(ErrorKind::Validation))
+                    .on_when(simple("${exception.message} contains 'beer'"))
+                    .handled(false)
+                    .to("mock:beer"),
+            );
+            r.on_exception(
+                on_exception(ErrorType::Kind(ErrorKind::Validation))
+                    .handled(true)
+                    .to("mock:invalid"),
+            );
+            r.add(
+                from(&uri)
+                    .process_fn(|e| {
+                        let body = e.message().body().to_string();
+                        match body.as_str() {
+                            "London" => {
+                                Err(CamelError::validation(e, "Forced exception by unit test"))
+                            }
+                            "Madrid" => Err(CamelError::runtime("Madrid is not a supported city")),
+                            "Dublin" => Err(CamelError::validation(e, "Dublin have good beer")),
+                            _ => {
+                                e.message_mut().set_body(format!("Hello {body}"));
+                                Ok(())
+                            }
+                        }
+                    })
+                    .to("mock:valid"),
+            );
+        })
+        .await;
+        let mock = t.mock(mock_uri);
+        mock.expected_bodies_received([expected]);
+        send(&t, &dir, &format!("{}.txt", city.to_lowercase()), city).await;
+        mock.assert_is_satisfied().await;
+        let file = dir.test_file(&format!("{}.txt", city.to_lowercase()));
+        support_wait(|| file.exists() != deleted).await;
+        assert_eq!(deleted, !file.exists(), "{city}");
+        t.context.stop().await.unwrap();
+        assert!(!dir
+            .test_file(&format!("{}.txt.camelLock", city.to_lowercase()))
+            .exists());
+    }
+}
+
+/// Port of `FileConsumeAlterFileNameHeaderIssueTest`: the route changing or removing the file
+/// headers does not change the file deleted or moved.
+#[tokio::test]
+async fn test_alter_file_name_header() {
+    for (option, remove, done) in [
+        ("?initialDelay=0&delay=10&delete=true", true, None),
+        ("?initialDelay=0&delay=10&delete=true", false, None),
+        ("?initialDelay=0&delay=10", true, Some(".camel/hello.txt")),
+        ("?initialDelay=0&delay=10", false, Some(".camel/hello.txt")),
+    ] {
+        let dir = TestDirectory::new("FileConsumeAlterFileNameHeaderIssueTest");
+        let uri = dir.file_uri(option);
+        let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+            let route = from(&uri);
+            let route = if remove {
+                route.remove_headers("*")
+            } else {
+                route.set_header(FILE_NAME, constant("bye.txt"))
+            };
+            r.add(route.to("mock:result"));
+        })
+        .await;
+        let mock = t.mock("mock:result");
+        mock.expected_bodies_received(["Hello World"]);
+        if !remove {
+            mock.expected_header_received(FILE_NAME, "bye.txt");
+        }
+        send(&t, &dir, "hello.txt", "Hello World").await;
+        mock.assert_is_satisfied().await;
+        if remove {
+            assert!(
+                mock.received_exchanges()[0].message().headers().is_empty(),
+                "Headers should have been removed"
+            );
+        }
+        let gone = dir.test_file("hello.txt");
+        support_wait(|| !gone.exists()).await;
+        assert!(!gone.exists(), "{option}");
+        if let Some(done) = done {
+            let f = dir.test_file(done);
+            support_wait(|| f.exists()).await;
+            assert!(f.exists(), "File should been moved");
+        }
+    }
+}
