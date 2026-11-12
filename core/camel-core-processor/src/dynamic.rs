@@ -201,7 +201,7 @@ impl Processor for SendDynamicProcessor {
 }
 
 /// Sends to a resolved target (one recipient of a recipient list).
-struct SendToTarget(Target);
+pub(crate) struct SendToTarget(pub(crate) Target);
 
 impl Processor for SendToTarget {
     fn process<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>> {

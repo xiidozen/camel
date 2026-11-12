@@ -3,6 +3,8 @@
 //! `CBRSimplePredicateEmptyBodyTest` and `SendToNonExistingEndpointTest`.
 
 use crate::support::ContextTestSupport;
+use camel_core::api::error::ErrorType;
+use camel_core::model::expression::ExpressionDefinition;
 use camel_core::prelude::*;
 
 #[tokio::test]
@@ -279,4 +281,216 @@ async fn test_correct_route_id() {
         .await
         .unwrap();
     t.assert_mock_endpoints_satisfied().await;
+}
+
+/// The destination of `DynamicRouterOnExceptionTest.whereTo`: `mock:route` once, then the end.
+fn where_to() -> camel_core::api::processor::SharedExpression {
+    std::sync::Arc::new(camel_core::api::processor::expression_fn(|e: &Exchange| {
+        Ok(if e.property("invoked").is_none() {
+            Value::from("mock:route")
+        } else {
+            Value::Null
+        })
+    }))
+}
+
+/// Ports of `DynamicRouterOnExceptionTest` and `RoutingSlipOnExceptionTest`: a failed
+/// destination is redelivered.
+#[tokio::test]
+async fn test_dynamic_router_and_routing_slip_on_exception() {
+    for (slip, case) in [
+        (false, 0),
+        (false, 1),
+        (false, 2),
+        (true, 0),
+        (true, 1),
+        (true, 2),
+    ] {
+        let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+            r.on_exception(
+                on_exception_kind(ErrorKind::IllegalArgument)
+                    .redelivery_delay(0)
+                    .maximum_redeliveries(5),
+            );
+            let route = from("direct:start");
+            let route = if slip {
+                route.routing_slip(ExpressionDefinition::Expression(where_to()))
+            } else {
+                route.dynamic_router(ExpressionDefinition::Expression(where_to()))
+            };
+            r.add(route.to("mock:end"));
+        })
+        .await;
+        let route = t.mock("mock:route");
+        // the destination marks the exchange as invoked
+        let invoked = |body: Option<&'static str>,
+                       fail: bool|
+         -> camel_core::api::processor::SharedProcessor {
+            std::sync::Arc::new(camel_core::api::processor::processor_fn(
+                move |e: &mut Exchange| {
+                    e.set_property("invoked", true);
+                    if let Some(b) = body {
+                        e.message_mut().set_body(b);
+                    }
+                    if fail {
+                        return Err(CamelError::illegal_argument("Forced"));
+                    }
+                    Ok(())
+                },
+            ))
+        };
+        route.when_any_exchange_received(invoked(None, false));
+        match case {
+            0 => {
+                t.mock("mock:end").expected_message_count(1);
+                route.expected_message_count(1);
+                t.template
+                    .send_body("direct:start", "Hello World")
+                    .await
+                    .unwrap();
+            }
+            1 => {
+                t.mock("mock:end").expected_message_count(1);
+                route.when_exchange_received(1, invoked(None, true));
+                route.when_exchange_received(2, invoked(Some("Bye World"), false));
+                route.expected_message_count(2);
+                t.template
+                    .send_body("direct:start", "Hello World")
+                    .await
+                    .unwrap();
+            }
+            _ => {
+                t.mock("mock:end").expected_message_count(2);
+                route.when_exchange_received(1, invoked(None, true));
+                route.when_exchange_received(2, invoked(Some("Bye World"), false));
+                route.when_exchange_received(3, invoked(None, true));
+                route.when_exchange_received(4, invoked(Some("Bye World"), false));
+                route.expected_message_count(4);
+                t.template
+                    .send_body("direct:start", "Hello World")
+                    .await
+                    .unwrap();
+                t.template
+                    .send_body("direct:start", "Bye World")
+                    .await
+                    .unwrap();
+            }
+        }
+        t.assert_mock_endpoints_satisfied().await;
+    }
+}
+
+/// The `testOk` and `testWithError` cases of `DefaultErrorHandlerTest` and
+/// `DefaultErrorHandlerExplicitConfiguredTest`.
+#[tokio::test]
+async fn test_default_error_handler() {
+    for explicit in [false, true] {
+        let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+            if explicit {
+                r.error_handler(default_error_handler());
+            }
+            r.add(
+                from("direct:start")
+                    .process_fn(|e| {
+                        if matches!(e.message().body(), Value::Text(b) if b == "Kaboom") {
+                            return Err(CamelError::illegal_argument("Boom"));
+                        }
+                        e.message_mut().set_body("Bye World");
+                        Ok(())
+                    })
+                    .to("mock:result"),
+            );
+        })
+        .await;
+        let mock = t.mock("mock:result");
+        mock.expected_bodies_received(["Bye World"]);
+        t.template
+            .send_body("direct:start", "Hello World")
+            .await
+            .unwrap();
+        assert!(t
+            .template
+            .send_body("direct:start", "Kaboom")
+            .await
+            .is_err());
+        mock.assert_is_satisfied().await;
+    }
+}
+
+/// Port of `TryCatchMustHaveExceptionConfiguredTest`.
+#[tokio::test]
+async fn test_try_catch_must_have_exception_configured() {
+    let t = ContextTestSupport::new();
+    let r = t
+        .context
+        .add_routes(|r: &mut Routes| {
+            r.add(from("direct:a").do_try(|t| {
+                t.to("mock:b")
+                    .throw_exception(CamelError::illegal_argument("Damn"))
+                    .do_catch(Vec::<ErrorType>::new(), |c| c.to("mock:catch"))
+            }));
+        })
+        .await;
+    let e = match r {
+        Err(e) => e,
+        Ok(_) => t.context.start().await.unwrap_err(),
+    };
+    assert!(
+        e.to_string()
+            .contains("At least one Exception must be configured to catch"),
+        "{e}"
+    );
+}
+
+/// Port of `FailoverRoundRobinGoodBadTest`.
+#[tokio::test]
+async fn test_failover_round_robin_good_bad() {
+    let t = ContextTestSupport::with_routes(|r: &mut Routes| {
+        let failover = LoadBalancerDefinition::Failover {
+            exceptions: Vec::new(),
+            round_robin: true,
+            sticky: false,
+            maximum_failover_attempts: 1,
+        };
+        r.add(
+            from("direct:start").load_balance(failover, |b| b.to("direct:good").to("direct:bad")),
+        );
+        r.add(from("direct:good").to("mock:good"));
+        r.add(
+            from("direct:bad")
+                .to("mock:bad")
+                .throw_exception(CamelError::illegal_argument("Damn")),
+        );
+    })
+    .await;
+    t.mock("mock:good")
+        .expected_bodies_received(["Hello World", "Bye World"]);
+    t.mock("mock:bad").expected_bodies_received(["Bye World"]);
+    t.template
+        .send_body("direct:start", "Hello World")
+        .await
+        .unwrap();
+    t.template
+        .send_body("direct:start", "Bye World")
+        .await
+        .unwrap();
+    t.assert_mock_endpoints_satisfied().await;
+}
+
+/// Port of `SimpleProcessorTest`.
+#[tokio::test]
+async fn test_simple_processor() {
+    let t = ContextTestSupport::with_routes(|r: &mut Routes| {
+        r.add(from("direct:start").process_fn(|e| {
+            e.message_mut().set_body("Bye World");
+            Ok(())
+        }));
+    })
+    .await;
+    let out = t
+        .template
+        .request_body("direct:start", "Hello World")
+        .await
+        .unwrap();
+    assert_eq!("Bye World", out.to_string());
 }

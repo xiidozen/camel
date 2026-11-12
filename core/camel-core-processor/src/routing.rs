@@ -145,6 +145,7 @@ pub struct RoutingSlipProcessor {
     ignore_invalid_endpoints: bool,
     dynamic: bool,
     cache: Arc<ProducerCache>,
+    error_handler: Option<Arc<crate::errorhandler::ErrorHandlerConfig>>,
 }
 
 impl RoutingSlipProcessor {
@@ -156,7 +157,18 @@ impl RoutingSlipProcessor {
             ignore_invalid_endpoints: false,
             dynamic: false,
             cache: Arc::new(ProducerCache::default()),
+            error_handler: None,
         }
+    }
+
+    /// Each endpoint is sent to through the error handler (Java `RoutingSlip.createErrorHandler`):
+    /// a failed endpoint is redelivered, not the whole slip.
+    pub fn with_error_handler(
+        mut self,
+        config: Arc<crate::errorhandler::ErrorHandlerConfig>,
+    ) -> Self {
+        self.error_handler = Some(config);
+        self
     }
 
     /// A dynamic router of the expression (evaluated after each endpoint).
@@ -185,7 +197,17 @@ impl RoutingSlipProcessor {
         match self.cache.acquire(exchange, uri).await {
             Ok(target) => {
                 exchange.set_property(SLIP_ENDPOINT, target.uri());
-                send_to(&target, None, exchange).await;
+                match &self.error_handler {
+                    Some(config) => {
+                        let send: SharedProcessor = Arc::new(crate::dynamic::SendToTarget(target));
+                        let p =
+                            crate::errorhandler::RedeliveryErrorHandler::new(send, config.clone());
+                        if let Err(e) = p.process(exchange).await {
+                            exchange.set_exception(Some(e));
+                        }
+                    }
+                    None => send_to(&target, None, exchange).await,
+                }
             }
             Err(e) if self.ignore_invalid_endpoints => {
                 log::debug!("Endpoint uri is invalid: {uri}. This exception will be ignored. {e}");

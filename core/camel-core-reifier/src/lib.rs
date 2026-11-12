@@ -722,18 +722,29 @@ impl<'a> RouteReifier<'a> {
                 expression,
                 delimiter,
                 ignore_invalid_endpoints,
-            } => Arc::new(
-                RoutingSlipProcessor::new(self.expr(expression)?, delimiter.as_deref())
-                    .with_ignore_invalid_endpoints(*ignore_invalid_endpoints),
-            ),
+            } => {
+                let mut p = RoutingSlipProcessor::new(self.expr(expression)?, delimiter.as_deref())
+                    .with_ignore_invalid_endpoints(*ignore_invalid_endpoints);
+                if let Some(config) = &self.error_handler {
+                    p = p.with_error_handler(config.clone());
+                }
+                Arc::new(p)
+            }
             Eip::DynamicRouter {
                 expression,
                 delimiter,
                 ignore_invalid_endpoints,
-            } => Arc::new(
-                RoutingSlipProcessor::dynamic_router(self.expr(expression)?, delimiter.as_deref())
-                    .with_ignore_invalid_endpoints(*ignore_invalid_endpoints),
-            ),
+            } => {
+                let mut p = RoutingSlipProcessor::dynamic_router(
+                    self.expr(expression)?,
+                    delimiter.as_deref(),
+                )
+                .with_ignore_invalid_endpoints(*ignore_invalid_endpoints);
+                if let Some(config) = &self.error_handler {
+                    p = p.with_error_handler(config.clone());
+                }
+                Arc::new(p)
+            }
             Eip::Sort {
                 expression,
                 comparator,
@@ -994,6 +1005,12 @@ impl<'a> RouteReifier<'a> {
                     Arc::new(Pipeline::new(inner.step_list(steps)?));
                 let mut clauses: Vec<SharedProcessor> = Vec::new();
                 for c in catches {
+                    // Java CatchReifier
+                    if c.exceptions.is_empty() {
+                        return Err(CamelError::illegal_argument(
+                            "At least one Exception must be configured to catch",
+                        ));
+                    }
                     let on_when = match &c.on_when {
                         Some(p) => Some(reify_predicate(self.context, p)?),
                         None => None,
