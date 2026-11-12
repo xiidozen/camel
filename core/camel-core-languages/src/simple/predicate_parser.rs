@@ -627,6 +627,16 @@ impl SimplePredicateParser {
                     ));
                 }
             }
+            if logical && !is_predicate_operand(&left) {
+                return Err(ParserError::new(
+                    format!(
+                        "Logical operator {} does not support left hand side token {}",
+                        token.text(),
+                        left.token()
+                    ),
+                    token.index,
+                ));
+            }
             let Some(right) = iter.next() else {
                 return Err(ParserError::new(
                     format!(
@@ -636,6 +646,16 @@ impl SimplePredicateParser {
                     token.index,
                 ));
             };
+            if logical && !is_predicate_operand(&right) {
+                return Err(ParserError::new(
+                    format!(
+                        "Logical operator {} does not support right hand side token {}",
+                        token.text(),
+                        right.token()
+                    ),
+                    token.index,
+                ));
+            }
             stack.push(if logical {
                 Node::Logical {
                     token,
@@ -873,4 +893,20 @@ impl camel_api::processor::Predicate for DescribedPredicate {
 #[allow(dead_code)]
 fn numeric(text: &str) -> Value {
     numeric_value(text)
+}
+
+/// Whether the node is an operand of a logical operator (Java
+/// `LogicalExpression.isValidPredicateOperand`): a comparison, a logical expression, a
+/// function (boolean zen), or a negated function.
+fn is_predicate_operand(node: &Node) -> bool {
+    matches!(
+        node,
+        Node::Binary { .. }
+            | Node::Logical { .. }
+            | Node::FunctionStart { .. }
+            | Node::Unary {
+                operator: super::ast::UnaryOperator::Not,
+                ..
+            }
+    )
 }
