@@ -42,6 +42,10 @@ pub enum EventType {
     CamelContextStopping,
     CamelContextStopped,
     CamelContextStopFailure,
+    CamelContextSuspending,
+    CamelContextSuspended,
+    CamelContextResuming,
+    CamelContextResumed,
     CamelContextRoutesStarting,
     CamelContextRoutesStarted,
     CamelContextRoutesStopping,
@@ -82,6 +86,14 @@ pub enum CamelEvent<'a> {
     CamelContextStopped,
     /// The context failed to stop.
     CamelContextStopFailure(&'a CamelError),
+    /// The context is suspending.
+    CamelContextSuspending,
+    /// The context is suspended.
+    CamelContextSuspended,
+    /// The context is resuming.
+    CamelContextResuming,
+    /// The context resumed.
+    CamelContextResumed,
     /// The routes are starting (with the context).
     CamelContextRoutesStarting,
     /// The routes started (with the context).
@@ -168,6 +180,10 @@ impl CamelEvent<'_> {
             E::CamelContextStopping => EventType::CamelContextStopping,
             E::CamelContextStopped => EventType::CamelContextStopped,
             E::CamelContextStopFailure(_) => EventType::CamelContextStopFailure,
+            E::CamelContextSuspending => EventType::CamelContextSuspending,
+            E::CamelContextSuspended => EventType::CamelContextSuspended,
+            E::CamelContextResuming => EventType::CamelContextResuming,
+            E::CamelContextResumed => EventType::CamelContextResumed,
             E::CamelContextRoutesStarting => EventType::CamelContextRoutesStarting,
             E::CamelContextRoutesStarted => EventType::CamelContextRoutesStarted,
             E::CamelContextRoutesStopping => EventType::CamelContextRoutesStopping,
@@ -322,6 +338,12 @@ impl<F: Fn(&CamelEvent<'_>) + Send + Sync> EventNotifierSupport<F> {
             ignore_exchange_sending: false,
             ignore_exchange_sent: false,
         }
+    }
+
+    /// A notifier of the context and route events only (Java `SimpleEventNotifierSupport`,
+    /// ignoring the exchange events).
+    pub fn simple(function: F) -> Self {
+        Self::new(function).ignore_exchange_events(true)
     }
 
     /// Ignores the events of the context.

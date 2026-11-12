@@ -623,6 +623,62 @@ impl DefaultCamelContext {
             .await
     }
 
+    /// Suspends the context (Java `suspend`): the started routes are suspended (their
+    /// consumers stop consuming), in reverse startup order.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first route failing to suspend.
+    pub async fn suspend(&self) -> CamelResult<()> {
+        self.state
+            .suspend(|| async {
+                log::info!(
+                    "Apache Camel {} ({}) is suspending",
+                    env!("CARGO_PKG_VERSION"),
+                    self.name.read().unwrap()
+                );
+                self.notify(CamelEvent::CamelContextSuspending);
+                let mut routes = self.routes();
+                routes.sort_by_key(|r| r.startup_order().unwrap_or(i32::MAX));
+                for r in routes.iter().rev() {
+                    if r.status().is_started() {
+                        r.suspend().await?;
+                    }
+                }
+                self.notify(CamelEvent::CamelContextSuspended);
+                Ok(())
+            })
+            .await
+    }
+
+    /// Resumes the suspended context (Java `resume`): the suspended routes are resumed, in
+    /// startup order.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first route failing to resume.
+    pub async fn resume(&self) -> CamelResult<()> {
+        self.state
+            .resume(|| async {
+                log::info!(
+                    "Apache Camel {} ({}) is resuming",
+                    env!("CARGO_PKG_VERSION"),
+                    self.name.read().unwrap()
+                );
+                self.notify(CamelEvent::CamelContextResuming);
+                let mut routes = self.routes();
+                routes.sort_by_key(|r| r.startup_order().unwrap_or(i32::MAX));
+                for r in &routes {
+                    if r.status().is_suspended() {
+                        r.resume().await?;
+                    }
+                }
+                self.notify(CamelEvent::CamelContextResumed);
+                Ok(())
+            })
+            .await
+    }
+
     /// Creates a producer template to send messages to endpoints.
     pub fn create_producer_template(&self) -> ProducerTemplate {
         ProducerTemplate::new(

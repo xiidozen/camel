@@ -594,3 +594,178 @@ async fn test_exchange_redelivery() {
         assert_eq!(vec![1, 2, 3, 4], attempts);
     }
 }
+
+/// Port of `EventNotifierEventsTest.testSuspendResume`.
+#[tokio::test]
+async fn test_suspend_resume() {
+    let (events, notifier) = recorder();
+    let t = context_with(notifier, events_routes).await;
+    assert_eq!(STARTED.to_vec(), types(&events));
+    t.context.suspend().await.unwrap();
+    let mut expected = STARTED.to_vec();
+    expected.extend([T::CamelContextSuspending, T::CamelContextSuspended]);
+    assert_eq!(expected, types(&events));
+    assert!(t.context.status().is_suspended());
+    t.context.resume().await.unwrap();
+    expected.extend([T::CamelContextResuming, T::CamelContextResumed]);
+    assert_eq!(expected, types(&events));
+    // the routes work again
+    let mock = t.mock("mock:result");
+    mock.expected_message_count(1);
+    t.template
+        .send_body("direct:start", "Hello World")
+        .await
+        .unwrap();
+    mock.assert_is_satisfied().await;
+    t.context.stop().await.unwrap();
+}
+
+/// Port of `SimpleEventNotifierEventsTest` (the exchange events are ignored).
+#[tokio::test]
+async fn test_simple_event_notifier() {
+    for case in ["done", "failed", "suspend"] {
+        let events: Events = Arc::default();
+        let e = events.clone();
+        let t = context_with(
+            EventNotifierSupport::simple(move |event: &CamelEvent<'_>| record(&e, event)),
+            events_routes,
+        )
+        .await;
+        assert_eq!(STARTED.to_vec(), types(&events));
+        let mut expected = STARTED.to_vec();
+        match case {
+            "done" => {
+                let mock = t.mock("mock:result");
+                mock.expected_message_count(1);
+                t.template
+                    .send_body("direct:start", "Hello World")
+                    .await
+                    .unwrap();
+                mock.assert_is_satisfied().await;
+            }
+            "failed" => {
+                let e = t
+                    .template
+                    .send_body("direct:fail", "Hello World")
+                    .await
+                    .expect_err("Should have thrown an exception");
+                assert!(support::cause_of(&e).is(ErrorKind::IllegalArgument));
+            }
+            _ => {
+                t.context.suspend().await.unwrap();
+                t.context.resume().await.unwrap();
+                expected.extend([
+                    T::CamelContextSuspending,
+                    T::CamelContextSuspended,
+                    T::CamelContextResuming,
+                    T::CamelContextResumed,
+                ]);
+            }
+        }
+        assert_eq!(expected, types(&events), "{case}");
+        if case != "suspend" {
+            t.context.stop().await.unwrap();
+            expected.extend(STOPPED);
+            assert_eq!(expected, types(&events), "{case}");
+        }
+    }
+}
+
+/// Port of `MultipleEventNotifierEventsTest`: a notifier of all the events and one of the
+/// exchange events only.
+#[tokio::test]
+async fn test_multiple_event_notifiers() {
+    for fail in [false, true] {
+        let (events, notifier) = recorder();
+        let events2: Events = Arc::default();
+        let e2 = events2.clone();
+        let t = ContextTestSupport::new();
+        t.context.add_event_notifier(Arc::new(notifier));
+        t.context.add_event_notifier(Arc::new(
+            EventNotifierSupport::new(move |event: &CamelEvent<'_>| record(&e2, event))
+                .ignore_camel_context_events(true)
+                .ignore_route_events(true),
+        ));
+        t.context.add_routes(events_routes).await.unwrap();
+        t.context.start().await.unwrap();
+        let exchange_events = if fail {
+            t.template
+                .send_body("direct:fail", "Hello World")
+                .await
+                .unwrap_err();
+            vec![
+                T::ExchangeSending,
+                T::ExchangeCreated,
+                T::ExchangeFailed,
+                T::ExchangeSent,
+            ]
+        } else {
+            let mock = t.mock("mock:result");
+            mock.expected_message_count(1);
+            t.template
+                .send_body("direct:start", "Hello World")
+                .await
+                .unwrap();
+            mock.assert_is_satisfied().await;
+            vec![
+                T::ExchangeSending,
+                T::ExchangeCreated,
+                T::ExchangeSending,
+                T::ExchangeSent,
+                T::ExchangeSending,
+                T::ExchangeSent,
+                T::ExchangeCompleted,
+                T::ExchangeSent,
+            ]
+        };
+        let mut expected = STARTED.to_vec();
+        expected.extend(exchange_events.iter().copied());
+        assert_eq!(expected, types(&events));
+        assert_eq!(exchange_events, types(&events2));
+        t.context.stop().await.unwrap();
+        expected.extend(STOPPED);
+        assert_eq!(expected, types(&events));
+        assert_eq!(exchange_events, types(&events2));
+    }
+}
+
+/// Port of `EventNotifierExchangeSentParallelTest` (its other cases are the ones of
+/// `EventNotifierExchangeSentTest`, unchanged by the parallel recipient list).
+#[tokio::test]
+async fn test_exchange_sent_recipient_parallel() {
+    let events: Events = Arc::default();
+    let t = context_with(sent_notifier(&events), |r: &mut Routes| {
+        r.add(
+            from("direct:start")
+                .to("log:foo")
+                .to("direct:bar")
+                .to("mock:result"),
+        );
+        r.add(from("direct:bar").delay(constant(500)));
+        r.add(
+            from("direct:foo")
+                .recipient_list(header("foo"))
+                .parallel_processing(),
+        );
+        r.add(from("direct:cool").delay(constant(1000)));
+    })
+    .await;
+    t.mock("mock:result").expected_message_count(1);
+    t.template
+        .send_body_and_header(
+            "direct:foo",
+            "Hello World",
+            "foo",
+            "direct:cool,direct:start",
+        )
+        .await
+        .unwrap();
+    t.mock("mock:result").assert_is_satisfied().await;
+    t.context.stop().await.unwrap();
+    let all = types(&events);
+    assert!(all.len() >= 11, "Should be 11 or more, was: {}", all.len());
+    let sending = all.iter().filter(|t| **t == T::ExchangeSending).count();
+    let sent = all.len() - sending;
+    assert!(sending >= 5, "There should be 5 or more, was {sending}");
+    assert!(sent >= 5, "There should be 5 or more, was {sent}");
+}
