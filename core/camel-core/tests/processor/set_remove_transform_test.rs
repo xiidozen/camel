@@ -8,6 +8,14 @@
 use crate::support::ContextTestSupport;
 use camel_core::prelude::*;
 
+/// A case: the uri, the headers sent, the headers expected, the number of headers left.
+type Case = (
+    &'static str,
+    Vec<(String, Value)>,
+    Vec<(&'static str, &'static str)>,
+    usize,
+);
+
 fn headers(pairs: &[(&str, &str)]) -> Vec<(String, Value)> {
     pairs
         .iter()
@@ -171,7 +179,7 @@ async fn test_remove_headers() {
         );
     })
     .await;
-    let cases: Vec<(&str, Vec<(String, Value)>, Vec<(&str, &str)>, usize)> = vec![
+    let cases: Vec<Case> = vec![
         (
             "direct:exclude",
             headers(&[
