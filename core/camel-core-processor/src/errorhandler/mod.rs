@@ -216,7 +216,7 @@ impl<'a> Task<'a> {
                 self.on_exception_occurred = Some(pr.clone());
             }
         }
-        if let Some(id) = exchange.from_route_id().map(str::to_string) {
+        if let Some(id) = exchange.route_id().map(str::to_string) {
             exchange.set_property(FAILURE_ROUTE_ID, id);
         }
         if !exchange.is_failure_handled() {
@@ -346,7 +346,7 @@ impl<'a> Task<'a> {
         if let Some(to) = exchange.property(TO_ENDPOINT).cloned() {
             exchange.set_property(FAILURE_ENDPOINT, to);
         }
-        if let Some(id) = exchange.from_route_id().map(str::to_string) {
+        if let Some(id) = exchange.route_id().map(str::to_string) {
             exchange.set_property(FAILURE_ROUTE_ID, id);
         }
         let mut suffix = String::new();

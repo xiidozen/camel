@@ -122,3 +122,161 @@ async fn test_send_to_non_existing_endpoint() {
     assert!(e.is(ErrorKind::NoSuchEndpoint), "{e:?}");
     assert!(e.to_string().contains("thisUriDoesNotExist"), "{e}");
 }
+
+/// Ports of `DeadLetterChannelFailureRouteIdTest` and `OnExceptionFailureRouteIdTest`: the
+/// failure route id is the route that failed.
+#[tokio::test]
+async fn test_failure_route_id() {
+    use camel_core::api::exchange_constants::FAILURE_ROUTE_ID;
+    for on_exception in [false, true] {
+        let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+            if on_exception {
+                r.on_exception(
+                    on_exception_kind(ErrorKind::IllegalArgument)
+                        .handled(true)
+                        .to("direct:dead"),
+                );
+            } else {
+                r.error_handler(dead_letter_channel("direct:dead"));
+            }
+            r.add(
+                from("direct:foo")
+                    .route_id("foo")
+                    .to("mock:foo")
+                    .to("direct:bar")
+                    .to("mock:result"),
+            );
+            r.add(
+                from("direct:bar")
+                    .route_id("bar")
+                    .to("mock:bar")
+                    .throw_exception(CamelError::illegal_argument("Forced")),
+            );
+            r.add(
+                from("direct:dead")
+                    .log("Failed at route ${exchangeProperty.CamelFailureRouteId}")
+                    .to("mock:dead"),
+            );
+        })
+        .await;
+        t.mock("mock:foo").expected_message_count(1);
+        t.mock("mock:bar").expected_message_count(1);
+        t.mock("mock:result").expected_message_count(0);
+        let dead = t.mock("mock:dead");
+        dead.expected_message_count(1);
+        dead.expected_property_received(FAILURE_ROUTE_ID, "bar");
+        t.template
+            .send_body("direct:foo", "Hello World")
+            .await
+            .unwrap();
+        t.assert_mock_endpoints_satisfied().await;
+    }
+}
+
+fn on_exception_kind(kind: ErrorKind) -> OnExceptionDsl {
+    on_exception(camel_core::api::error::ErrorType::Kind(kind))
+}
+
+/// Ports of `DeadLetterChannelExceptionCausePropagatedTest` and
+/// `DeadLetterChannelExceptionCausePropagatedWithDefaultErrorHandlerTest`.
+#[tokio::test]
+async fn test_exception_cause_propagated() {
+    use camel_core::api::exchange_constants::EXCEPTION_CAUGHT;
+    for dlc in [true, false] {
+        let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+            if dlc {
+                r.error_handler(
+                    dead_letter_channel("mock:error")
+                        .redelivery_delay(0)
+                        .maximum_redeliveries(3),
+                );
+            }
+            r.on_exception(
+                on_exception_kind(ErrorKind::RuntimeCamel)
+                    .handled(true)
+                    .to("mock:failed"),
+            );
+            r.add(
+                from("direct:start")
+                    .process_fn(|_| Err(CamelError::runtime("Expected exception.")))
+                    .to("mock:success"),
+            );
+        })
+        .await;
+        let failed = t.mock("mock:failed");
+        failed.expected_bodies_received(["<hello>world!</hello>"]);
+        failed.message_matches(0, exchange_property(EXCEPTION_CAUGHT).is_not_null());
+        t.mock("mock:success").expected_message_count(0);
+        t.template
+            .send_body("direct:start", "<hello>world!</hello>")
+            .await
+            .unwrap();
+        t.assert_mock_endpoints_satisfied().await;
+        let received = &failed.received_exchanges()[0];
+        assert!(received.exception().is_none());
+        let caught = received
+            .property(EXCEPTION_CAUGHT)
+            .map(|v| v.to_string())
+            .unwrap_or_default();
+        assert!(caught.contains("Expected exception."), "{caught}");
+    }
+}
+
+/// Port of `MulticastCorrelationIdTest`.
+#[tokio::test]
+async fn test_multicast_correlation_id() {
+    use camel_core::api::exchange_constants::CORRELATION_ID;
+    let t = ContextTestSupport::with_routes(|r: &mut Routes| {
+        r.add(from("direct:start").multicast(|s| s.to("direct:a").to("direct:b")));
+        r.add(from("direct:a").log("Route a"));
+        r.add(from("direct:b").log("Route b"));
+    })
+    .await;
+    let mut exchange = t
+        .template
+        .create_exchange("direct:start", ExchangePattern::InOut)
+        .unwrap();
+    exchange.set_property(CORRELATION_ID, "SOME_ID");
+    let exchange = t.template.send("direct:start", exchange).await.unwrap();
+    assert_eq!(
+        Some("SOME_ID".to_string()),
+        exchange.property(CORRELATION_ID).map(|v| v.to_string())
+    );
+}
+
+/// Port of `CorrectRouteIdTest`.
+#[tokio::test]
+async fn test_correct_route_id() {
+    let t = ContextTestSupport::with_routes(|r: &mut Routes| {
+        r.add(
+            from("direct:foo")
+                .route_id("foo")
+                .set_header("foo", simple("${routeId}"))
+                .to("mock:foo")
+                .to("seda:bar")
+                .to("mock:result"),
+        );
+        r.add(
+            from("seda:bar")
+                .route_id("bar")
+                .set_header("bar", simple("${routeId}"))
+                .to("mock:bar")
+                .to("direct:baz"),
+        );
+        r.add(
+            from("direct:baz")
+                .route_id("baz")
+                .set_header("baz", simple("${routeId}"))
+                .to("mock:baz"),
+        );
+    })
+    .await;
+    t.mock("mock:foo").expected_header_received("foo", "foo");
+    t.mock("mock:bar").expected_header_received("bar", "bar");
+    t.mock("mock:baz").expected_header_received("baz", "baz");
+    t.template
+        .request_body("direct:foo", "Hello World")
+        .await
+        .unwrap();
+    t.assert_mock_endpoints_satisfied().await;
+}

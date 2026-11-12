@@ -130,7 +130,9 @@ impl Processor for RouteProcessor {
                     p.on_exchange_begin(route, exchange);
                 }
             }
+            exchange.push_route(self.route_id.clone());
             let result = self.processor.process(exchange).await;
+            exchange.pop_route();
             if let Some(i) = &inflight {
                 i.remove_from_route(exchange, &self.route_id);
             }

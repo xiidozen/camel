@@ -419,12 +419,12 @@ fn direct_function(function: &str) -> Option<SharedExpression> {
                 .unwrap_or_default())
         }),
         "camelId" => named_expression("camelId", |e| Ok(Value::from(e.context().name()))),
-        "routeId" | "fromRouteId" => {
-            let name = function.to_string();
-            named_expression(name, |e| {
-                Ok(e.from_route_id().map(Value::from).unwrap_or_default())
-            })
-        }
+        "routeId" => named_expression("routeId", |e| {
+            Ok(e.route_id().map(Value::from).unwrap_or_default())
+        }),
+        "fromRouteId" => named_expression("fromRouteId", |e| {
+            Ok(e.from_route_id().map(Value::from).unwrap_or_default())
+        }),
         "routeGroup" => named_expression("routeGroup", |_| Ok(Value::Null)),
         "stepId" => named_expression("stepId", |e| {
             Ok(e.property("CamelStepId").cloned().unwrap_or_default())

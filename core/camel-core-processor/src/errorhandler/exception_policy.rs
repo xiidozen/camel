@@ -89,7 +89,7 @@ pub fn find_exception_policy(
     exchange: &Exchange,
     error: &CamelError,
 ) -> Option<Arc<ExceptionPolicy>> {
-    let route_id = exchange.from_route_id();
+    let route_id = exchange.route_id();
     let (route_scoped, context_scoped): (Vec<_>, Vec<_>) =
         policies.iter().partition(|p| p.route_id.is_some());
     let chain = camel_util::object_helper::create_exception_iterable(error);

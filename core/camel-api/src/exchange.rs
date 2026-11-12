@@ -57,6 +57,7 @@ pub struct Exchange {
     variables: ValueMap,
     from_endpoint: Option<String>,
     from_route_id: Option<String>,
+    route_stack: Vec<String>,
     from_route_group: Option<String>,
     route_stop: bool,
     rollback_only: bool,
@@ -131,6 +132,7 @@ impl Exchange {
             variables: ValueMap::new(),
             from_endpoint: None,
             from_route_id: None,
+            route_stack: Vec::new(),
             from_route_group: None,
             route_stop: false,
             rollback_only: false,
@@ -534,6 +536,25 @@ impl Exchange {
     /// Sets the id of the route the exchange was created by.
     pub fn set_from_route_id(&mut self, route_id: impl Into<String>) {
         self.from_route_id = Some(route_id.into());
+    }
+
+    /// The id of the route the exchange is in (Java `ExchangeHelper.getRouteId`: the route of
+    /// the unit of work), else the route it was created by.
+    pub fn route_id(&self) -> Option<&str> {
+        self.route_stack
+            .last()
+            .map(String::as_str)
+            .or(self.from_route_id.as_deref())
+    }
+
+    /// The exchange enters the route (Java `UnitOfWork.pushRoute`).
+    pub fn push_route(&mut self, route_id: impl Into<String>) {
+        self.route_stack.push(route_id.into());
+    }
+
+    /// The exchange leaves the current route (Java `UnitOfWork.popRoute`).
+    pub fn pop_route(&mut self) {
+        self.route_stack.pop();
     }
 
     /// Clears the id of the route the exchange was created by, so the next route that routes

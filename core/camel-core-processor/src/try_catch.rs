@@ -95,7 +95,7 @@ impl Processor for TryProcessor {
                 }
                 if !failure_origin_captured && exchange.exception().is_some() {
                     failure_origin_captured = true;
-                    if let Some(id) = exchange.from_route_id().map(str::to_string) {
+                    if let Some(id) = exchange.route_id().map(str::to_string) {
                         exchange.set_property(FAILURE_ROUTE_ID, id);
                     }
                 }
