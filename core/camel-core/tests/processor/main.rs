@@ -15,6 +15,7 @@ mod delayer_test;
 mod enricher;
 mod filter_test;
 mod idempotent_consumer_test;
+mod intercept;
 mod load_balancer_test;
 mod loop_test;
 mod multicast_parallel_test;

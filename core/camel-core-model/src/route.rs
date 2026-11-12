@@ -1,6 +1,9 @@
 //! Routes of the model (Java `RouteDefinition` and `FromDefinition`).
 
 use crate::errorhandler::{ErrorHandlerDefinition, OnExceptionDefinition};
+use crate::intercept::{
+    InterceptDefinition, InterceptFromDefinition, InterceptSendToEndpointDefinition,
+};
 use crate::processor::{OnCompletionDefinition, ProcessorDefinition, Steps};
 use camel_util::uri_support::sanitize_uri;
 use camel_util::value::ValueMap;
@@ -36,6 +39,12 @@ pub struct RouteDefinition {
     pub builder_on_exceptions: Vec<OnExceptionDefinition>,
     /// The `onCompletion`s of the route builder (they apply to its routes without their own).
     pub builder_on_completions: Vec<OnCompletionDefinition>,
+    /// The `intercept`s of the route builder.
+    pub builder_intercepts: Vec<InterceptDefinition>,
+    /// The `interceptFrom`s of the route builder.
+    pub builder_intercept_froms: Vec<InterceptFromDefinition>,
+    /// The `interceptSendToEndpoint`s of the route builder.
+    pub builder_intercept_send_to_endpoints: Vec<InterceptSendToEndpointDefinition>,
 }
 
 impl RouteDefinition {
@@ -55,6 +64,9 @@ impl RouteDefinition {
             on_exceptions: Vec::new(),
             builder_on_exceptions: Vec::new(),
             builder_on_completions: Vec::new(),
+            builder_intercepts: Vec::new(),
+            builder_intercept_froms: Vec::new(),
+            builder_intercept_send_to_endpoints: Vec::new(),
         }
     }
 }

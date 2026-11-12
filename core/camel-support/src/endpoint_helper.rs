@@ -135,6 +135,66 @@ fn is_unresolved(value: &ParamValue, prefix: &str) -> bool {
     false
 }
 
+/// The uri with the scheme separator toggled between `scheme:path` and `scheme://path`.
+fn toggle_uri_scheme_separators(uri: &str) -> String {
+    match uri.split_once("://") {
+        Some((scheme, path)) => format!("{scheme}:{path}"),
+        None => match uri.split_once(':') {
+            Some((scheme, path)) => format!("{scheme}://{path}"),
+            None => uri.to_string(),
+        },
+    }
+}
+
+fn do_match_endpoint(uri: &str, pattern: &str, regexp: bool) -> bool {
+    let m = |u: &str| {
+        if regexp {
+            crate::pattern_helper::match_regex(u, pattern)
+        } else {
+            crate::pattern_helper::match_pattern(u, pattern)
+        }
+    };
+    let toggled = toggle_uri_scheme_separators(uri);
+    if m(uri) || m(&toggled) {
+        return true;
+    }
+    if !regexp && pattern.contains('?') {
+        // the pattern normalized, so the parameters are in the same order as in the uri
+        if let Ok(p) = camel_util::uri_support::normalize_uri(pattern) {
+            return uri.eq_ignore_ascii_case(&p) || toggled.eq_ignore_ascii_case(&p);
+        }
+    }
+    false
+}
+
+/// Whether the endpoint uri matches the pattern (Java `EndpointHelper.matchEndpoint`): the
+/// uri (its property placeholders resolved, normalized) is the pattern, matches it as a
+/// wildcard (`*`) or regex pattern, with or without the `//` of the scheme.
+///
+/// # Errors
+///
+/// A missing property of the uri.
+///
+/// # Examples
+///
+/// ```
+/// use camel_api::context::StandaloneContext;
+/// use camel_support::endpoint_helper::match_endpoint;
+///
+/// let context = StandaloneContext::shared();
+/// assert!(match_endpoint(context.as_ref(), "mock:foo", "mock:foo").unwrap());
+/// assert!(match_endpoint(context.as_ref(), "mock://foo", "mock:*").unwrap());
+/// assert!(match_endpoint(context.as_ref(), "mock:foo?b=2&a=1", "mock:foo?a=1&b=2").unwrap());
+/// assert!(!match_endpoint(context.as_ref(), "mock:bar", "mock:foo").unwrap());
+/// ```
+pub fn match_endpoint(context: &dyn CamelContext, uri: &str, pattern: &str) -> CamelResult<bool> {
+    let resolved = resolve_endpoint_uri_property_placeholders(context, uri)?;
+    let normalized = camel_util::uri_support::normalize_uri(&resolved)
+        .map_err(|e| CamelError::resolve_endpoint_failed(uri, camel_api::error::box_error(e)))?;
+    Ok(do_match_endpoint(&normalized, pattern, false)
+        || do_match_endpoint(&normalized, pattern, true))
+}
+
 #[cfg(test)]
 mod tests {
     use super::remove_unresolved_optional;

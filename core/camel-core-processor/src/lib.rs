@@ -20,6 +20,7 @@ pub mod enricher;
 pub mod errorhandler;
 pub mod filter;
 pub mod idempotent;
+pub mod intercept;
 pub mod loadbalancer;
 pub mod log_processor;
 pub mod multicast;

@@ -37,6 +37,10 @@ use camel_core_processor::errorhandler::redelivery_policy::RedeliveryPolicyOverr
 use camel_core_processor::errorhandler::{ErrorHandlerConfig, RedeliveryErrorHandler};
 use camel_core_processor::filter::FilterProcessor;
 use camel_core_processor::idempotent::{IdempotentConsumerProcessor, IdempotentOptions};
+use camel_core_processor::intercept::{
+    InterceptFromProcessor, InterceptProcessor, InterceptSendToEndpointProcessor, Interceptor,
+    SendInterceptor,
+};
 use camel_core_processor::loadbalancer::{FailoverOptions, LoadBalance, LoadBalancerProcessor};
 use camel_core_processor::log_processor::LogProcessor;
 use camel_core_processor::multicast::{
@@ -57,6 +61,7 @@ use camel_core_processor::transform::{
     ValidateProcessor,
 };
 use camel_core_processor::try_catch::{CatchProcessor, FinallyProcessor, TryProcessor};
+use camel_support::endpoint_helper::match_endpoint;
 use camel_util::value::Value;
 use std::sync::Arc;
 use std::time::Duration;
@@ -147,6 +152,16 @@ pub struct RouteReifier<'a> {
     context: &'a Arc<dyn CamelContext>,
     route_id: &'a str,
     error_handler: Option<Arc<ErrorHandlerConfig>>,
+    intercepts: Interception,
+}
+
+/// The interceptors applied to the steps of a route (`intercept` and
+/// `interceptSendToEndpoint`).
+#[derive(Clone, Default)]
+struct Interception {
+    route_uri: String,
+    intercepts: Arc<Vec<Interceptor>>,
+    send: Arc<Vec<(String, SendInterceptor)>>,
 }
 
 impl<'a> RouteReifier<'a> {
@@ -156,6 +171,7 @@ impl<'a> RouteReifier<'a> {
             context,
             route_id,
             error_handler: None,
+            intercepts: Interception::default(),
         }
     }
 
@@ -170,6 +186,7 @@ impl<'a> RouteReifier<'a> {
             context,
             route_id,
             error_handler,
+            intercepts: Interception::default(),
         }
     }
 
@@ -180,6 +197,7 @@ impl<'a> RouteReifier<'a> {
             context: self.context,
             route_id: self.route_id,
             error_handler: None,
+            intercepts: self.intercepts.clone(),
         }
     }
 
@@ -189,7 +207,16 @@ impl<'a> RouteReifier<'a> {
     ///
     /// Returns an error if the endpoint, expression or bean of the step cannot be resolved.
     pub fn step(&self, def: &ProcessorDefinition) -> CamelResult<SharedProcessor> {
-        let p = self.create(def)?;
+        let mut p = self.create(def)?;
+        if !self.intercepts.intercepts.is_empty() {
+            p = Arc::new(InterceptProcessor::new(
+                self.intercepts.intercepts.clone(),
+                self.route_id,
+                &self.intercepts.route_uri,
+                def.id.as_deref(),
+                p,
+            ));
+        }
         Ok(match &self.error_handler {
             Some(config) => Arc::new(RedeliveryErrorHandler::new(p, config.clone())),
             None => p,
@@ -233,7 +260,24 @@ impl<'a> RouteReifier<'a> {
     pub fn create(&self, def: &ProcessorDefinition) -> CamelResult<SharedProcessor> {
         let p: SharedProcessor = match &def.eip {
             Eip::To { uri, pattern } => {
-                Arc::new(SendProcessor::new(self.context.endpoint(uri)?, *pattern))
+                let endpoint = self.context.endpoint(uri)?;
+                let send: SharedProcessor =
+                    Arc::new(SendProcessor::new(endpoint.clone(), *pattern));
+                let mut matching = Vec::new();
+                for (p, i) in self.intercepts.send.iter() {
+                    if match_endpoint(self.context.as_ref(), endpoint.endpoint_uri(), p)? {
+                        matching.push(i.clone());
+                    }
+                }
+                if matching.is_empty() {
+                    send
+                } else {
+                    Arc::new(InterceptSendToEndpointProcessor::new(
+                        endpoint.endpoint_uri(),
+                        matching,
+                        send,
+                    ))
+                }
             }
             Eip::Filter {
                 predicate,
@@ -751,8 +795,64 @@ pub fn reify_route(
             e,
         )
     })?;
-    let reifier = RouteReifier::with_error_handler(context, route_id, error_handler);
+    let mut reifier = RouteReifier::with_error_handler(context, route_id, error_handler);
+    let failed = |e: CamelError| {
+        let mut route = def.clone();
+        route.id = Some(route_id.to_string());
+        CamelError::failed_to_create_route(
+            route_id,
+            def.source_location.as_deref(),
+            &route.to_string(),
+            e,
+        )
+    };
     let mut processors = Vec::new();
+    // the interceptors of the route builder: their steps are not intercepted
+    let mut intercepts = Vec::new();
+    for i in &def.builder_intercepts {
+        intercepts.push(interceptor(&reifier, &i.on_when, &i.steps).map_err(failed)?);
+    }
+    let mut send = Vec::new();
+    for i in &def.builder_intercept_send_to_endpoints {
+        let after = match &i.after_uri {
+            Some(u) => Some(
+                reifier
+                    .create(&ProcessorDefinition::new(Eip::To {
+                        uri: u.clone(),
+                        pattern: None,
+                    }))
+                    .map_err(failed)?,
+            ),
+            None => None,
+        };
+        send.push((
+            i.uri.clone(),
+            SendInterceptor {
+                interceptor: interceptor(&reifier, &i.on_when, &i.steps).map_err(failed)?,
+                skip: i.skip_send_to_original_endpoint,
+                after,
+            },
+        ));
+    }
+    for i in &def.builder_intercept_froms {
+        let applies = match &i.uri {
+            Some(pattern) => {
+                match_endpoint(context.as_ref(), &def.from, pattern).map_err(failed)?
+            }
+            None => true,
+        };
+        if applies {
+            let it = interceptor(&reifier, &i.on_when, &i.steps).map_err(failed)?;
+            processors.push(
+                Arc::new(InterceptFromProcessor::new(it, route_id, &def.from)) as SharedProcessor,
+            );
+        }
+    }
+    reifier.intercepts = Interception {
+        route_uri: def.from.clone(),
+        intercepts: Arc::new(intercepts),
+        send: Arc::new(send),
+    };
     // the onCompletions first (Java RouteDefinitionHelper.initOnCompletions): the ones of the
     // route, else the ones of the route builder
     let scoped: Vec<&OnCompletionDefinition> = def
@@ -801,6 +901,22 @@ pub fn reify_route(
         processors.push(p);
     }
     Ok(Arc::new(Pipeline::new(processors)))
+}
+
+/// An interceptor of the steps (their steps reified without interception).
+fn interceptor(
+    reifier: &RouteReifier<'_>,
+    on_when: &Option<ExpressionDefinition>,
+    steps: &[ProcessorDefinition],
+) -> CamelResult<Interceptor> {
+    let on_when = match on_when {
+        Some(p) => Some(reify_predicate(reifier.context, p)?),
+        None => None,
+    };
+    Ok(Interceptor {
+        on_when,
+        processor: reifier.steps(steps)?,
+    })
 }
 
 /// The processor of a `process` reference: the processor itself, or a bean from the registry.

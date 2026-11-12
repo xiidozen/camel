@@ -42,6 +42,9 @@ pub use errorhandler::*;
 
 use crate::errorhandler::{ErrorHandlerDefinition, OnExceptionDefinition};
 use crate::expression::ExpressionDefinition;
+use crate::intercept::{
+    InterceptDefinition, InterceptFromDefinition, InterceptSendToEndpointDefinition,
+};
 use crate::processor::IdempotentConsumerDefinition;
 use crate::processor::{
     AggregateDefinition, AggregationRef, CatchDefinition, Eip, MulticastOptions,
@@ -1499,6 +1502,50 @@ impl Dsl for OnCompletionDsl {
     }
 }
 
+/// The steps and options of an interceptor (see [`Routes::intercept`],
+/// [`Routes::intercept_from`] and [`Routes::intercept_send_to_endpoint`]).
+#[derive(Default)]
+pub struct InterceptDsl {
+    steps: Vec<ProcessorDefinition>,
+    on_when: Option<ExpressionDefinition>,
+    skip: bool,
+    after_uri: Option<String>,
+}
+
+impl InterceptDsl {
+    /// Only intercepts the exchanges matching the predicate (Java `.when(..)` of the
+    /// interceptors).
+    pub fn on_when(mut self, predicate: impl Into<ExpressionDefinition>) -> Self {
+        self.on_when = Some(predicate.into());
+        self
+    }
+
+    /// The intercepted exchange is not sent to the original endpoint (interceptSendToEndpoint
+    /// only, Java `skipSendToOriginalEndpoint()`).
+    pub fn skip_send_to_original_endpoint(mut self) -> Self {
+        self.skip = true;
+        self
+    }
+
+    /// The intercepted exchange is sent to the uri after the original endpoint
+    /// (interceptSendToEndpoint only, Java `afterUri(..)`).
+    pub fn after_uri(mut self, uri: &str) -> Self {
+        self.after_uri = Some(uri.to_string());
+        self
+    }
+}
+
+impl Dsl for InterceptDsl {
+    fn push(mut self, step: ProcessorDefinition) -> Self {
+        self.steps.push(step);
+        self
+    }
+
+    fn last_mut(&mut self) -> Option<&mut ProcessorDefinition> {
+        self.steps.last_mut()
+    }
+}
+
 /// The routes collected by a [`RouteBuilder`], with the error handler, `onException` and
 /// `onCompletion` clauses that apply to all of them.
 #[derive(Default)]
@@ -1507,6 +1554,9 @@ pub struct Routes {
     error_handler: Option<ErrorHandlerDefinition>,
     on_exceptions: Vec<OnExceptionDefinition>,
     on_completions: Vec<OnCompletionDefinition>,
+    intercepts: Vec<InterceptDefinition>,
+    intercept_froms: Vec<InterceptFromDefinition>,
+    intercept_send_to_endpoints: Vec<InterceptSendToEndpointDefinition>,
 }
 
 impl Routes {
@@ -1540,6 +1590,56 @@ impl Routes {
         self
     }
 
+    /// Intercepts each step of the routes of this builder with the steps of the block (Java
+    /// `intercept()`): a `stop()` in the block stops the routing; see [`InterceptDsl::on_when`].
+    pub fn intercept<F>(&mut self, block: F) -> &mut Self
+    where
+        F: FnOnce(InterceptDsl) -> InterceptDsl,
+    {
+        let d = block(InterceptDsl::default());
+        self.intercepts.push(InterceptDefinition {
+            on_when: d.on_when,
+            steps: d.steps,
+        });
+        self
+    }
+
+    /// Intercepts the exchanges the routes of this builder consume, from the endpoints matching
+    /// the pattern (`None`: all, else an uri, a wildcard `*` or a regex), with the steps of the
+    /// block (Java `interceptFrom(uri)`).
+    pub fn intercept_from<F>(&mut self, uri: Option<&str>, block: F) -> &mut Self
+    where
+        F: FnOnce(InterceptDsl) -> InterceptDsl,
+    {
+        let d = block(InterceptDsl::default());
+        self.intercept_froms.push(InterceptFromDefinition {
+            uri: uri.map(str::to_string),
+            on_when: d.on_when,
+            steps: d.steps,
+        });
+        self
+    }
+
+    /// Intercepts the sending of the routes of this builder to the endpoints matching the
+    /// pattern (an uri, a wildcard `*` or a regex) with the steps of the block (Java
+    /// `interceptSendToEndpoint(uri)`); see [`InterceptDsl::skip_send_to_original_endpoint`]
+    /// and [`InterceptDsl::after_uri`].
+    pub fn intercept_send_to_endpoint<F>(&mut self, uri: &str, block: F) -> &mut Self
+    where
+        F: FnOnce(InterceptDsl) -> InterceptDsl,
+    {
+        let d = block(InterceptDsl::default());
+        self.intercept_send_to_endpoints
+            .push(InterceptSendToEndpointDefinition {
+                uri: uri.to_string(),
+                on_when: d.on_when,
+                skip_send_to_original_endpoint: d.skip,
+                after_uri: d.after_uri,
+                steps: d.steps,
+            });
+        self
+    }
+
     /// The route definitions.
     pub fn definitions(&self) -> &[RouteDefinition] {
         &self.definitions
@@ -1550,6 +1650,11 @@ impl Routes {
     pub fn into_definitions(self) -> Vec<RouteDefinition> {
         let (error_handler, on_exceptions, on_completions) =
             (self.error_handler, self.on_exceptions, self.on_completions);
+        let (intercepts, intercept_froms, intercept_send_to_endpoints) = (
+            self.intercepts,
+            self.intercept_froms,
+            self.intercept_send_to_endpoints,
+        );
         self.definitions
             .into_iter()
             .map(|mut d| {
@@ -1558,6 +1663,9 @@ impl Routes {
                 }
                 d.builder_on_exceptions = on_exceptions.clone();
                 d.builder_on_completions = on_completions.clone();
+                d.builder_intercepts = intercepts.clone();
+                d.builder_intercept_froms = intercept_froms.clone();
+                d.builder_intercept_send_to_endpoints = intercept_send_to_endpoints.clone();
                 d
             })
             .collect()

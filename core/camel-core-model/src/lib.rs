@@ -35,5 +35,6 @@
 pub mod builder;
 pub mod errorhandler;
 pub mod expression;
+pub mod intercept;
 pub mod processor;
 pub mod route;
