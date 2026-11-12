@@ -255,3 +255,104 @@ async fn test_consumed_file_name() {
     send(&t, &dir, "hello.123.txt", "Hello World").await;
     mock.assert_is_satisfied().await;
 }
+
+/// Ports of `FileConsumerAbsolutePathTest`, `FileConsumerAbsolutePathWithRelativeMoveTest`,
+/// `FileConsumeSimpleAbsoluteMoveToRelativeTest` and `FileConsumeSimpleRelativeMoveToAbsoluteTest`
+/// (the test directories are absolute).
+#[tokio::test]
+async fn test_absolute_paths_and_moves() {
+    // delete
+    let dir = TestDirectory::new("FileConsumerAbsolutePathTest");
+    let uri = dir.file_uri("?initialDelay=0&delay=100&delete=true");
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(from(&uri).convert_body_to("String").to("mock:report"));
+    })
+    .await;
+    t.mock("mock:report")
+        .expected_bodies_received(["Hello Paris"]);
+    send(&t, &dir, "paris.txt", "Hello Paris").await;
+    t.assert_mock_endpoints_satisfied().await;
+
+    // a relative move expression
+    let dir = TestDirectory::new("FileConsumerAbsolutePathWithRelativeMoveTest");
+    let uri = format!(
+        "file://{}/dir?initialDelay=0&delay=10&move=../done/${{file:onlyname}}",
+        dir.path()
+    );
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(from(&uri).convert_body_to("String").to("mock:report"));
+    })
+    .await;
+    let mock = t.mock("mock:report");
+    mock.expected_bodies_received(["Hello Paris"]);
+    mock.expected_file_exists(dir.test_file("dir/../done/paris.txt"), None);
+    send(&t, &dir, "dir/paris.txt", "Hello Paris").await;
+    mock.assert_is_satisfied().await;
+
+    // a move to an absolute directory
+    let dir = TestDirectory::new("FileConsumeSimpleRelativeMoveToAbsoluteTest");
+    let base = format!("{}/.done", dir.path());
+    let uri = dir.file_uri(&format!(
+        "?recursive=true&move={base}&initialDelay=0&delay=10"
+    ));
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(from(&uri).convert_body_to("String").to("mock:result"));
+    })
+    .await;
+    let mock = t.mock("mock:result");
+    mock.expected_message_count(3);
+    for f in [".done/bye.txt", ".done/hello.txt", ".done/goodday.txt"] {
+        mock.expected_file_exists(dir.test_file(f), None);
+    }
+    send(&t, &dir, "bye.txt", "Bye World").await;
+    send(&t, &dir, "sub/hello.txt", "Hello World").await;
+    send(&t, &dir, "sub/sub2/goodday.txt", "Goodday World").await;
+    mock.assert_is_satisfied().await;
+}
+
+/// Port of `FileConsumerDirectoryNotMatchedTest`.
+#[tokio::test]
+async fn test_directory_not_matched() {
+    let dir = TestDirectory::new("FileConsumerDirectoryNotMatchedTest");
+    let uri = dir.file_uri("?initialDelay=0&delay=10&recursive=true&include=.*txt$");
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(from(&uri).convert_body_to("String").to("mock:result"));
+    })
+    .await;
+    send(&t, &dir, ".skipme", "This is a dot file").await;
+    send(&t, &dir, "index.html", "This is a web file").await;
+    send(&t, &dir, "2007/report2007.txt", "2007 report").await;
+    send(&t, &dir, "2008/report2008.txt", "2008 report").await;
+    let mock = t.mock("mock:result");
+    mock.expected_message_count(2);
+    mock.assert_is_satisfied().await;
+}
+
+/// Port of `FileConvertBodyToUTF8Test`.
+#[tokio::test]
+async fn test_convert_body_to_utf8() {
+    let dir = TestDirectory::new("FileConvertBodyToUTF8Test");
+    let body = "Hello Thai Elephant \u{0E08}".as_bytes().to_vec();
+    let t = ContextTestSupport::new();
+    t.context.start().await.unwrap();
+    t.template
+        .send_body_and_header(&dir.file_uri(""), body.clone(), FILE_NAME, "utf8.txt")
+        .await
+        .unwrap();
+    let uri = dir.file_uri("?initialDelay=0&delay=10");
+    t.context
+        .add_routes(move |r: &mut Routes| {
+            r.add(from(&uri).convert_body_to("String").to("mock:result"));
+        })
+        .await
+        .unwrap();
+    let mock = t.mock("mock:result");
+    mock.expected_message_count(1);
+    mock.assert_is_satisfied().await;
+    let received = mock.received_exchanges();
+    assert_eq!(
+        body,
+        received[0].message().body().to_string().into_bytes(),
+        "Should be same byte data"
+    );
+}

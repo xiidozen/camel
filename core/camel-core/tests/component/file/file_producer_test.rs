@@ -161,3 +161,23 @@ async fn test_generated_file_name() {
         "The generated file should exists: {id}"
     );
 }
+
+/// Port of `FilerProducerAbsoluteTest`.
+#[tokio::test]
+async fn test_produce_absolute_file() {
+    let dir = TestDirectory::new("FilerProducerAbsoluteTest");
+    let path = format!("{}/absolute", dir.path());
+    let uri = format!("file://{path}");
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(from("direct:report").to(&uri).to("mock:result"));
+    })
+    .await;
+    let mock = t.mock("mock:result");
+    mock.expected_message_count(1);
+    mock.expected_file_exists(format!("{path}/hello.txt"), None);
+    t.template
+        .send_body_and_header("direct:report", "Hello World", FILE_NAME, "hello.txt")
+        .await
+        .unwrap();
+    mock.assert_is_satisfied().await;
+}
