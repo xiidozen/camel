@@ -10,5 +10,6 @@ pub mod language;
 pub mod log_listener;
 pub mod properties;
 pub mod registry;
+pub mod simple_function;
 pub mod synchronization;
 pub mod uuid;

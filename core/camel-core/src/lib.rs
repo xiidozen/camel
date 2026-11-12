@@ -96,6 +96,8 @@ pub fn register_core_components(context: &DefaultCamelContext) {
         "bean",
         Arc::new(|| Arc::new(camel_bean::BeanComponent::new()) as SharedComponent),
     );
+    // the custom functions of the simple language
+    context.add_plugin(camel_api::spi::simple_function::SimpleFunctionRegistry::default());
     // the factory of the processors of the bean EIP (Java BeanProcessorFactory plugin)
     context.add_plugin::<Arc<dyn BeanProcessorFactory>>(Arc::new(
         camel_bean::DefaultBeanProcessorFactory,

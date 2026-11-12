@@ -740,6 +740,8 @@ impl CamelContext for DefaultCamelContext {
                     .map(|f| f())
             })
             .ok_or_else(|| CamelError::no_such_language(name))?;
+        let weak: Weak<dyn CamelContext> = self.this.clone();
+        created.set_camel_context(weak);
         let mut languages = self.languages.write().unwrap();
         Ok(languages.entry(name.to_string()).or_insert(created).clone())
     }

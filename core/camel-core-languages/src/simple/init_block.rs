@@ -269,7 +269,8 @@ fn rewrite_functions(text: &str, functions: &[&str]) -> String {
 }
 
 /// Creates the `${function(name)}` or `${function(name,value)}` function: calls the init
-/// function on the body, or on the value.
+/// function of the expression, else the custom function of the context
+/// (`SimpleFunctionRegistry`), on the body or on the value.
 ///
 /// # Errors
 ///
@@ -310,21 +311,27 @@ pub fn function_call(remainder: &str, index: usize) -> Result<SharedExpression, 
         description,
         move |e| {
             let key = format!("{FUNCTION_VARIABLE_PREFIX}{name}");
-            let function = match e.variable(&key) {
-                Some(Value::Object(o)) => o.downcast_ref::<SharedExpression>().cloned(),
-                _ => None,
+            let input = match &argument {
+                Some(a) => a.evaluate(e)?,
+                None => e.message().body().clone(),
+            };
+            // an init function of the expression, else a custom function of the context
+            if let Some(Value::Object(o)) = e.variable(&key) {
+                if let Some(function) = o.downcast_ref::<SharedExpression>().cloned() {
+                    let mut copy = e.clone();
+                    copy.message_mut().set_body(input);
+                    return function.evaluate_mut(&mut copy);
+                }
             }
-            .ok_or_else(|| {
-                camel_api::error::CamelError::illegal_argument(format!(
+            let registry = camel_api::context::context_plugin::<
+                camel_api::spi::simple_function::SimpleFunctionRegistry,
+            >(e.context().as_ref());
+            match registry.and_then(|r| r.function(&name)) {
+                Some(f) => f.apply(e, input),
+                None => Err(camel_api::error::CamelError::illegal_argument(format!(
                     "No custom simple function with name: {name}"
-                ))
-            })?;
-            let mut copy = e.clone();
-            if let Some(a) = &argument {
-                let v = a.evaluate(e)?;
-                copy.message_mut().set_body(v);
+                ))),
             }
-            function.evaluate_mut(&mut copy)
         },
     ))
 }

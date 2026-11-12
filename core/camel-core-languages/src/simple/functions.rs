@@ -12,6 +12,7 @@ use super::{ParseResult, ParserError};
 use camel_api::error::{CamelError, ErrorKind};
 use camel_api::exchange::Exchange;
 use camel_api::processor::SharedExpression;
+use camel_api::spi::simple_function::SimpleFunctionRegistry;
 use camel_support::builder::{constant_expression, named_expression};
 use camel_util::ognl_helper;
 use camel_util::string_helper::{remove_leading_and_ending_quotes, remove_quotes};
@@ -164,6 +165,47 @@ fn typed(exp: SharedExpression, type_name: &'static str) -> SharedExpression {
     })
 }
 
+thread_local! {
+    /// The custom functions of the context of the expression being parsed.
+    static CUSTOM_FUNCTIONS: std::cell::RefCell<Option<Arc<SimpleFunctionRegistry>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Runs the parsing with the custom functions of the registry known (Java: the parser looks
+/// up `SimpleFunctionRegistry` of its context).
+pub fn with_custom_functions<R>(
+    registry: Option<Arc<SimpleFunctionRegistry>>,
+    parse: impl FnOnce() -> R,
+) -> R {
+    let previous = CUSTOM_FUNCTIONS.with(|c| c.replace(registry));
+    let answer = parse();
+    CUSTOM_FUNCTIONS.with(|c| *c.borrow_mut() = previous);
+    answer
+}
+
+/// A call of a custom function without the `function(...)` wrapper: `name` or
+/// `name(arguments)` of a registered function.
+fn custom_function(function: &str, index: usize) -> ParseResult<Option<SharedExpression>> {
+    let (name, arguments) = match function.split_once('(') {
+        Some((n, a)) => (n, Some(a)),
+        None => (function, None),
+    };
+    let known = CUSTOM_FUNCTIONS.with(|c| {
+        c.borrow()
+            .as_ref()
+            .is_some_and(|r| r.function(name).is_some())
+    });
+    if !known {
+        return Ok(None);
+    }
+    let call = match arguments {
+        Some(a) if a.trim() == ")" => format!("{name})"),
+        Some(a) => format!("{name},{a}"),
+        None => format!("{name})"),
+    };
+    super::init_block::function_call(&call, index).map(Some)
+}
+
 /// Creates the expression of the function text (the text between `${` and `}`).
 ///
 /// # Errors
@@ -258,6 +300,9 @@ fn do_create(function: &str, index: usize) -> ParseResult<SharedExpression> {
         if let Some(e) = factory(function, index)? {
             return Ok(e);
         }
+    }
+    if let Some(e) = custom_function(function, index)? {
+        return Ok(e);
     }
     let hint = super::syntax_hints::unknown_function(function)
         .map(|h| format!(" ({h})"))

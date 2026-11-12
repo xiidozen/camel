@@ -55,6 +55,7 @@ macro_rules! kinds {
                     ErrorKind::NumberFormat => "java.lang.NumberFormatException".to_string(),
                     ErrorKind::UnsupportedOperation => "java.lang.UnsupportedOperationException".to_string(),
                     ErrorKind::Io => "java.io.IOException".to_string(),
+                    ErrorKind::FileNotFound => "java.io.FileNotFoundException".to_string(),
                     ErrorKind::RejectedExecution => "java.util.concurrent.RejectedExecutionException".to_string(),
                     other => format!("org.apache.camel.{}", other.java_name()),
                 }
@@ -95,6 +96,8 @@ kinds! {
     UnsupportedOperation => Some(K::Runtime),
     /// `java.io.IOException`.
     Io => Some(K::General),
+    /// `java.io.FileNotFoundException`: a missing file or resource.
+    FileNotFound => Some(K::Io),
     /// `java.util.concurrent.RejectedExecutionException`.
     RejectedExecution => Some(K::Runtime),
     /// `CamelException`: base of the checked Camel errors.

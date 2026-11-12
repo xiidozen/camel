@@ -41,7 +41,12 @@ impl Lazy {
         if let Some(x) = self.parsed.get() {
             return x.evaluate(e);
         }
-        let x = super::language::SimpleLanguage::new().parse_expression(&self.text)?;
+        let registry = camel_api::context::context_plugin::<
+            camel_api::spi::simple_function::SimpleFunctionRegistry,
+        >(e.context().as_ref());
+        let x = super::functions::with_custom_functions(registry, || {
+            super::language::SimpleLanguage::new().parse_expression(&self.text)
+        })?;
         self.parsed.get_or_init(|| x).evaluate(e)
     }
 
