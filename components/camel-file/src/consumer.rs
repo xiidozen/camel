@@ -2,7 +2,7 @@
 //! of `GenericFileOnCompletion`): polls the starting directory and routes each file.
 
 use crate::read_lock::{self, Outcome, ReadLock};
-use crate::{operation_failed, FileEndpoint, GenericFile, SortBy};
+use crate::{operation_failed, AntPathMatcherGenericFileFilter, FileEndpoint, GenericFile, SortBy};
 use camel_api::endpoint::{Consumer, Endpoint, SharedEndpoint};
 use camel_api::error::{CamelError, CamelResult, ErrorKind};
 use camel_api::exchange::Exchange;
@@ -135,7 +135,11 @@ fn list_files(
             continue;
         }
         if dir {
-            if c.recursive && depth < c.max_depth && filtered(endpoint, &path, false)? {
+            if c.recursive
+                && depth < c.max_depth
+                && bean_accepted(endpoint, &path)
+                && filtered(endpoint, &path, false)?
+            {
                 list_files(endpoint, &path, depth + 1, out)?;
             }
         } else if !name.ends_with(".camelLock") && depth >= c.min_depth && depth <= c.max_depth {
@@ -260,8 +264,15 @@ fn filtered(endpoint: &FileEndpoint, path: &Path, is_file: bool) -> CamelResult<
     endpoint.predicate(filter)?.matches(&e)
 }
 
-/// Whether the file matches the Ant filter (Java `AntPathMatcherFileFilter`): not excluded,
-/// and included (when only excludes are set, any file not excluded).
+/// Whether the file (or directory) is accepted by the `filter` bean.
+fn bean_accepted(endpoint: &FileEndpoint, path: &Path) -> bool {
+    let Some(filter) = &endpoint.filter else {
+        return true;
+    };
+    GenericFile::of(&endpoint.config.directory, path).is_ok_and(|f| filter.accept(&f))
+}
+
+/// Whether the file matches the Ant filter of the antInclude and antExclude options.
 fn ant_accepted(endpoint: &FileEndpoint, path: &Path) -> bool {
     let c = &endpoint.config;
     if c.ant_include.is_none() && c.ant_exclude.is_none() {
@@ -271,18 +282,13 @@ fn ant_accepted(endpoint: &FileEndpoint, path: &Path) -> bool {
         .strip_prefix(&c.directory)
         .unwrap_or(path)
         .to_string_lossy()
-        .replace('\\', "/");
-    let matcher = camel_util::ant_path_matcher::AntPathMatcher::new();
-    let cs = c.ant_filter_case_sensitive;
-    if let Some(excludes) = &c.ant_exclude {
-        if excludes.iter().any(|p| matcher.matches(p, &relative, cs)) {
-            return false;
-        }
+        .into_owned();
+    AntPathMatcherGenericFileFilter {
+        includes: c.ant_include.clone(),
+        excludes: c.ant_exclude.clone(),
+        case_insensitive: !c.ant_filter_case_sensitive,
     }
-    match &c.ant_include {
-        Some(includes) => includes.iter().any(|p| matcher.matches(p, &relative, cs)),
-        None => true,
-    }
+    .accept_path_name(&relative)
 }
 
 /// A file taken for routing: the file, the key in the idempotent repository.
@@ -593,11 +599,21 @@ pub(crate) fn candidates(endpoint: &FileEndpoint, filters: &Filters) -> CamelRes
             && done(endpoint, &path, &name)?
             && filtered(endpoint, &path, true)?
             && ant_accepted(endpoint, &path)
+            && bean_accepted(endpoint, &path)
         {
             answer.push(path);
         }
     }
     // the eager limit before sorting, else after (Java eagerMaxMessagesPerPoll)
+    // the sorter bean first, then sortBy (Java GenericFileConsumer.poll)
+    if let Some(sorter) = &endpoint.sorter {
+        let mut files: Vec<GenericFile> = answer
+            .iter()
+            .filter_map(|p| GenericFile::of(&c.directory, p).ok())
+            .collect();
+        files.sort_by(|a, b| sorter(a, b));
+        answer = files.into_iter().map(|f| f.file_path).collect();
+    }
     let limit = c.max_messages_per_poll;
     if limit > 0 && c.eager_max_messages_per_poll {
         answer.truncate(limit);

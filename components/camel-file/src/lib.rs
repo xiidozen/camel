@@ -45,6 +45,7 @@ use camel_api::processor::{SharedExpression, SharedProcessor};
 use camel_api::service::Service;
 use camel_support::component_support::get_and_remove_parameter;
 use camel_util::uri_support::Parameters;
+use camel_util::value::Value;
 use std::any::Any;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
@@ -578,11 +579,15 @@ impl Component for FileComponent {
         ] {
             let _: Option<String> = param(parameters, name)?;
         }
+        let filter = bean_option::<SharedFileFilter>(context, param(parameters, "filter")?)?;
+        let sorter = bean_option::<SharedFileSorter>(context, param(parameters, "sorter")?)?;
         Ok(Arc::new(FileEndpoint {
             uri: uri.to_string(),
             config: c,
             context: Arc::downgrade(context),
             idempotent,
+            filter,
+            sorter,
             in_progress: std::sync::Mutex::new(std::collections::HashSet::new()),
         }))
     }
@@ -603,6 +608,8 @@ pub struct FileEndpoint {
     context: Weak<dyn CamelContext>,
     idempotent: camel_api::spi::idempotent_repository::SharedIdempotentRepository,
     in_progress: std::sync::Mutex<std::collections::HashSet<String>>,
+    filter: Option<SharedFileFilter>,
+    sorter: Option<SharedFileSorter>,
 }
 
 impl FileEndpoint {
@@ -780,6 +787,108 @@ pub struct GenericFile {
     pub length: u64,
     /// The last modification time (millis since epoch).
     pub last_modified: i64,
+    /// Whether it is a directory.
+    pub directory: bool,
+}
+
+/// A filter of the polled files and directories (Java `GenericFileFilter`), a bean of the
+/// registry set with the `filter=#name` option (see [`filter_value`]).
+pub trait GenericFileFilter: Send + Sync {
+    /// Whether the file (or directory, to descend into it) is accepted.
+    fn accept(&self, file: &GenericFile) -> bool;
+}
+
+/// A shared [`GenericFileFilter`].
+pub type SharedFileFilter = Arc<dyn GenericFileFilter>;
+
+impl<F> GenericFileFilter for F
+where
+    F: Fn(&GenericFile) -> bool + Send + Sync,
+{
+    fn accept(&self, file: &GenericFile) -> bool {
+        self(file)
+    }
+}
+
+/// A filter of Ant patterns on the path relative to the starting directory (Java
+/// `AntPathMatcherGenericFileFilter`): a file is accepted when not excluded and included (any
+/// file not excluded when there are only excludes); directories are accepted.
+#[derive(Debug, Clone, Default)]
+pub struct AntPathMatcherGenericFileFilter {
+    /// The patterns of the included files.
+    pub includes: Option<Vec<String>>,
+    /// The patterns of the excluded files.
+    pub excludes: Option<Vec<String>>,
+    /// Whether the patterns are case insensitive (Java `caseSensitive=false`).
+    pub case_insensitive: bool,
+}
+
+impl AntPathMatcherGenericFileFilter {
+    /// The filter including the patterns.
+    pub fn including<S: AsRef<str>>(patterns: &[S]) -> Self {
+        AntPathMatcherGenericFileFilter {
+            includes: Some(patterns.iter().map(|p| p.as_ref().to_string()).collect()),
+            ..Default::default()
+        }
+    }
+
+    /// Whether the relative path is accepted (Java `AntPathMatcherFileFilter.acceptPathName`).
+    pub fn accept_path_name(&self, path: &str) -> bool {
+        let path = path.replace('\\', "/");
+        let matcher = camel_util::ant_path_matcher::AntPathMatcher::new();
+        let cs = !self.case_insensitive;
+        if let Some(excludes) = &self.excludes {
+            if excludes.iter().any(|p| matcher.matches(p, &path, cs)) {
+                return false;
+            }
+        }
+        match &self.includes {
+            Some(includes) => includes.iter().any(|p| matcher.matches(p, &path, cs)),
+            None => self.excludes.is_some(),
+        }
+    }
+}
+
+impl GenericFileFilter for AntPathMatcherGenericFileFilter {
+    fn accept(&self, file: &GenericFile) -> bool {
+        file.directory || self.accept_path_name(&file.relative_file_path)
+    }
+}
+
+/// The comparator of the polled files (Java `Comparator<GenericFile>`), a bean of the registry
+/// set with the `sorter=#name` option (see [`sorter_value`]).
+pub type SharedFileSorter =
+    Arc<dyn Fn(&GenericFile, &GenericFile) -> std::cmp::Ordering + Send + Sync>;
+
+/// The filter as a value, to bind it in the registry.
+pub fn filter_value(filter: SharedFileFilter) -> Value {
+    Value::Object(camel_util::value::ObjectRef::new(filter))
+}
+
+/// The sorter as a value, to bind it in the registry.
+pub fn sorter_value(sorter: SharedFileSorter) -> Value {
+    Value::Object(camel_util::value::ObjectRef::new(sorter))
+}
+
+/// The bean of the registry referred by the option (`#name`), of the type.
+fn bean_option<T: Clone + 'static>(
+    context: &Arc<dyn CamelContext>,
+    value: Option<String>,
+) -> CamelResult<Option<T>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let name = value.strip_prefix('#').unwrap_or(&value);
+    let name = name.strip_prefix("bean:").unwrap_or(name);
+    context
+        .registry()
+        .and_then(|r| r.lookup_by_name(name))
+        .and_then(|v| match v {
+            Value::Object(o) => o.downcast_ref::<T>().cloned(),
+            _ => None,
+        })
+        .map(Some)
+        .ok_or_else(|| CamelError::no_such_bean(name))
 }
 
 impl GenericFile {
@@ -801,6 +910,7 @@ impl GenericFile {
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d| d.as_millis() as i64)
                 .unwrap_or_default(),
+            directory: meta.is_dir(),
         })
     }
 

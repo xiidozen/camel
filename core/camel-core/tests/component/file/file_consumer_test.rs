@@ -3140,3 +3140,163 @@ async fn test_ant_filter() {
         .await;
     }
 }
+
+/// A context with the beans in the registry.
+fn with_file_beans(beans: Vec<(&str, Value)>) -> ContextTestSupport {
+    let t = ContextTestSupport::new();
+    let registry = t.context.registry().unwrap();
+    for (name, bean) in beans {
+        registry.bind(name, bean).unwrap();
+    }
+    t
+}
+
+/// Ports of `FileConsumerFileFilterTest` and `FileConsumerFileFilterOptimizedTest` (a filter
+/// bean on the name).
+#[tokio::test]
+async fn test_file_filter_bean() {
+    for with_regular in [false, true] {
+        let dir = TestDirectory::new("FileConsumerFileFilterTest");
+        let filter: camel_file::SharedFileFilter =
+            std::sync::Arc::new(|f: &camel_file::GenericFile| {
+                f.directory || !f.relative_file_path.starts_with("skip")
+            });
+        let t = with_file_beans(vec![("myFilter", camel_file::filter_value(filter))]);
+        let uri = dir.file_uri("?initialDelay=0&delay=10&filter=#myFilter");
+        t.context
+            .add_routes(move |r: &mut Routes| {
+                r.add(from(&uri).convert_body_to("String").to("mock:result"));
+            })
+            .await
+            .unwrap();
+        t.context.start().await.unwrap();
+        let mock = t.mock("mock:result");
+        send(&t, &dir, "skipme.txt", "This is a file to be filtered").await;
+        if with_regular {
+            mock.expected_bodies_received(["Hello World"]);
+            send(&t, &dir, "hello.txt", "Hello World").await;
+        } else {
+            mock.expected_message_count(0);
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        mock.assert_is_satisfied().await;
+    }
+}
+
+/// Port of `FileConsumerDirectoryFilterTest`: the filter is asked for the directories too.
+#[tokio::test]
+async fn test_directory_filter_bean() {
+    let dir = TestDirectory::new("FileConsumerDirectoryFilterTest");
+    let names = std::sync::Arc::new(std::sync::Mutex::new(std::collections::BTreeSet::new()));
+    let seen = names.clone();
+    let filter: camel_file::SharedFileFilter =
+        std::sync::Arc::new(move |f: &camel_file::GenericFile| {
+            seen.lock().unwrap().insert(f.relative_file_path.clone());
+            !(f.directory && f.relative_file_path.starts_with("skip"))
+        });
+    let t = with_file_beans(vec![("myFilter", camel_file::filter_value(filter))]);
+    let uri = dir.file_uri("?recursive=true&filter=#myFilter&initialDelay=0&delay=10");
+    t.context
+        .add_routes(move |r: &mut Routes| {
+            r.add(from(&uri).convert_body_to("String").to("mock:result"));
+        })
+        .await
+        .unwrap();
+    t.context.start().await.unwrap();
+    let mock = t.mock("mock:result");
+    mock.expected_bodies_received(["Hello World"]);
+    send(
+        &t,
+        &dir,
+        "skipDir/skipme.txt",
+        "This is a file to be filtered",
+    )
+    .await;
+    send(
+        &t,
+        &dir,
+        "skipDir2/skipme.txt",
+        "This is a file to be filtered",
+    )
+    .await;
+    send(&t, &dir, "okDir/hello.txt", "Hello World").await;
+    mock.assert_is_satisfied().await;
+    let names: Vec<String> = names.lock().unwrap().iter().cloned().collect();
+    assert_eq!(
+        vec!["okDir", "okDir/hello.txt", "skipDir", "skipDir2"],
+        names
+    );
+}
+
+/// Port of `FileSorterRefTest`.
+#[tokio::test]
+async fn test_sorter_bean() {
+    let dir = TestDirectory::new("FileSorterRefTest");
+    let sorter: camel_file::SharedFileSorter =
+        std::sync::Arc::new(|a: &camel_file::GenericFile, b: &camel_file::GenericFile| {
+            a.relative_file_path
+                .to_lowercase()
+                .cmp(&b.relative_file_path.to_lowercase())
+        });
+    let t = with_file_beans(vec![("mySorter", camel_file::sorter_value(sorter))]);
+    t.context.start().await.unwrap();
+    for (name, body) in [
+        ("paris.txt", "Hello Paris"),
+        ("london.txt", "Hello London"),
+        ("copenhagen.txt", "Hello Copenhagen"),
+    ] {
+        send(&t, &dir, name, body).await;
+    }
+    let mock = t.mock("mock:result");
+    mock.expected_bodies_received(["Hello Copenhagen", "Hello London", "Hello Paris"]);
+    let uri = dir.file_uri("?initialDelay=0&delay=10&sorter=#mySorter");
+    t.context
+        .add_routes(move |r: &mut Routes| {
+            r.add(from(&uri).convert_body_to("String").to("mock:result"));
+        })
+        .await
+        .unwrap();
+    mock.assert_is_satisfied().await;
+}
+
+/// The `AntPathMatcherGenericFileFilterTest` cases with filter beans.
+#[tokio::test]
+async fn test_ant_filter_beans() {
+    let files = [
+        ("x/y/z/a.txt", "Hello World 1"),
+        ("x/y/z/b.txt", "Hello World 2"),
+        ("x/y/z/c.txt", "Hello World 3"),
+        ("x/y/z/Cy.txt", "Hello World 4"),
+    ];
+    for (bean, expected) in [
+        (
+            camel_file::AntPathMatcherGenericFileFilter::including(&["**/c*"]),
+            vec!["Hello World 3"],
+        ),
+        (
+            camel_file::AntPathMatcherGenericFileFilter {
+                case_insensitive: true,
+                ..camel_file::AntPathMatcherGenericFileFilter::including(&["**/c*"])
+            },
+            vec!["Hello World 3", "Hello World 4"],
+        ),
+    ] {
+        let dir = TestDirectory::new("AntPathMatcherGenericFileFilterTest");
+        let filter: camel_file::SharedFileFilter = std::sync::Arc::new(bean);
+        let t = with_file_beans(vec![("filter", camel_file::filter_value(filter))]);
+        t.context.start().await.unwrap();
+        for (name, body) in files {
+            send(&t, &dir, name, body).await;
+        }
+        let mock = t.mock("mock:result");
+        mock.expected_bodies_received_in_any_order(expected);
+        let uri = dir.file_uri("?initialDelay=0&delay=10&recursive=true&antInclude=**/*.txt&antExclude=**/a*&filter=#filter");
+        t.context
+            .add_routes(move |r: &mut Routes| {
+                r.add(from(&uri).convert_body_to("String").to("mock:result"));
+            })
+            .await
+            .unwrap();
+        mock.assert_is_satisfied().await;
+    }
+}
