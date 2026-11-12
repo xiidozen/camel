@@ -4,7 +4,9 @@ use crate::{operation_failed, FileEndpoint, FileExist};
 use camel_api::endpoint::{Producer, SharedEndpoint};
 use camel_api::error::{CamelError, CamelResult};
 use camel_api::exchange::Exchange;
-use camel_api::exchange_constants::{FILE_NAME, FILE_NAME_PRODUCED, OVERRULE_FILE_NAME};
+use camel_api::exchange_constants::{
+    FILE_NAME, FILE_NAME_ONLY, FILE_NAME_PRODUCED, FILE_PARENT, OVERRULE_FILE_NAME,
+};
 use camel_api::processor::{BoxFuture, Processor};
 use camel_api::service::Service;
 use camel_util::value::Value;
@@ -168,31 +170,61 @@ impl FileProducer {
                 "You must configure the moveExisting option when fileExist=Move",
             )
         })?;
-        let had = exchange.message().header(FILE_NAME).cloned();
+        // a directory keeps the file name (Java configureMoveOrPreMoveExpression)
+        let expr = if !expr.contains("${") || expr.ends_with('/') || expr.ends_with('\\') {
+            format!("{}/${{file:onlyname}}", expr.trim_end_matches(['/', '\\']))
+        } else {
+            expr
+        };
         let only = target
             .rsplit(['/', '\\'])
             .next()
             .unwrap_or(target)
             .to_string();
+        let parent = Path::new(target)
+            .parent()
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_default();
+        // the expression sees the existing file: its name, its parent directory
+        let saved: Vec<(&str, Option<Value>)> = [FILE_NAME, FILE_NAME_ONLY, FILE_PARENT]
+            .iter()
+            .map(|k| (*k, exchange.message().header(k).cloned()))
+            .collect();
         exchange.message_mut().set_header(FILE_NAME, only.clone());
-        let name = self.evaluate(exchange, &expr)?.unwrap_or_default();
-        match had {
-            Some(v) => exchange.message_mut().set_header(FILE_NAME, v),
-            None => {
-                exchange.message_mut().remove_header(FILE_NAME);
+        exchange
+            .message_mut()
+            .set_header(FILE_NAME_ONLY, only.clone());
+        exchange.message_mut().set_header(FILE_PARENT, parent);
+        let name = self.evaluate(exchange, &expr);
+        for (k, v) in saved {
+            match v {
+                Some(v) => exchange.message_mut().set_header(k, v),
+                None => {
+                    exchange.message_mut().remove_header(k);
+                }
             }
+        }
+        let name = name?.unwrap_or_default();
+        if name.is_empty() {
+            return Err(operation_failed(format!(
+                "moveExisting evaluated as empty String, cannot move existing file: {target}"
+            )));
         }
         let mut to = PathBuf::from(&name);
         if !to.is_absolute() {
             to = Path::new(&c.directory).join(to);
         }
-        if name.ends_with('/') || to.is_dir() {
-            to = to.join(&only);
-        }
         if let Some(parent) = to.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
         if to.exists() {
+            if !c.eager_delete_target_file {
+                return Err(operation_failed(format!(
+                    "Cannot move existing file from: {target} to: {} as there already exists a file: {}",
+                    to.display(),
+                    to.display()
+                )));
+            }
             std::fs::remove_file(&to).map_err(|e| {
                 operation_failed(format!("Cannot delete file: {}: {e}", to.display()))
             })?;

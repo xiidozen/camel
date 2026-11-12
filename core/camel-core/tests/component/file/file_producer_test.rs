@@ -268,3 +268,144 @@ async fn test_file_exist_append_and_override_no_file() {
         mock.assert_is_satisfied().await;
     }
 }
+
+async fn put(
+    t: &ContextTestSupport,
+    dir: &TestDirectory,
+    option: &str,
+    body: &str,
+    name: &str,
+) -> CamelResult<()> {
+    t.template
+        .send_body_and_header(&dir.file_uri(option), body, FILE_NAME, name)
+        .await
+}
+
+/// Port of `FileProducerMoveExistingTest` (the date based cases check one moved file).
+#[tokio::test]
+async fn test_move_existing() {
+    let t = ContextTestSupport::new();
+    let renamed = "?fileExist=Move&moveExisting=${file:parent}/renamed-${file:onlyname}";
+    // no existing file
+    let dir = TestDirectory::new("FileProducerMoveExistingTest");
+    put(&t, &dir, renamed, "Hello World", "hello.txt")
+        .await
+        .unwrap();
+    assert!(dir.test_file("hello.txt").exists());
+    assert!(!dir.test_file("renamed-hello.txt").exists());
+    // existing file, with or without temp file name, to a file or a directory
+    for (option, moved) in [
+        (renamed.to_string(), "renamed-hello.txt"),
+        (
+            format!("?tempFileName=${{file:onlyname}}.temp&{}", &renamed[1..]),
+            "renamed-hello.txt",
+        ),
+        (
+            "?tempFileName=${file:onlyname}.temp&fileExist=Move&moveExisting=renamed".to_string(),
+            "renamed/hello.txt",
+        ),
+        (
+            "?fileExist=Move&moveExisting=backup".to_string(),
+            "backup/hello.txt",
+        ),
+        (
+            "?tempFileName=${file:onlyname}.temp&fileExist=Move&moveExisting=archive/".to_string(),
+            "archive/hello.txt",
+        ),
+    ] {
+        let dir = TestDirectory::new("FileProducerMoveExistingTest");
+        put(&t, &dir, &option, "Hello World", "hello.txt")
+            .await
+            .unwrap();
+        put(&t, &dir, &option, "Bye World", "hello.txt")
+            .await
+            .unwrap();
+        assert_eq!(
+            Some("Bye World".to_string()),
+            dir.read("hello.txt"),
+            "{option}"
+        );
+        assert_eq!(Some("Hello World".to_string()), dir.read(moved), "{option}");
+    }
+    // a dynamic name: one moved file
+    let dir = TestDirectory::new("FileProducerMoveExistingTest");
+    let option = "?tempFileName=${file:onlyname}.temp&fileExist=Move&moveExisting=${file:onlyname}.${date:now:yyyyMMddHHmmssSSS}";
+    put(&t, &dir, option, "Hello World1", "howdy.txt")
+        .await
+        .unwrap();
+    put(&t, &dir, option, "Hello World2", "howdy.txt")
+        .await
+        .unwrap();
+    let moved: Vec<String> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with("howdy.txt."))
+        .collect();
+    assert_eq!(1, moved.len(), "{moved:?}");
+    assert_eq!(Some("Hello World1".to_string()), dir.read(&moved[0]));
+    assert_eq!(Some("Hello World2".to_string()), dir.read("howdy.txt"));
+    // the moved name exists: eagerDeleteTargetFile replaces it, else fails
+    for eager in [true, false] {
+        let dir = TestDirectory::new("FileProducerMoveExistingTest");
+        let option = format!("{renamed}&eagerDeleteTargetFile={eager}");
+        put(&t, &dir, "", "Old file", "renamed-hello.txt")
+            .await
+            .unwrap();
+        put(&t, &dir, &option, "Hello World", "hello.txt")
+            .await
+            .unwrap();
+        let r = put(&t, &dir, &option, "Bye World", "hello.txt").await;
+        if eager {
+            r.unwrap();
+            assert_eq!(Some("Bye World".to_string()), dir.read("hello.txt"));
+            assert_eq!(
+                Some("Hello World".to_string()),
+                dir.read("renamed-hello.txt")
+            );
+        } else {
+            let e = r.unwrap_err();
+            let cause = crate::support::cause_of(&e);
+            assert!(cause.is(ErrorKind::GenericFileOperationFailed), "{e}");
+            assert!(cause
+                .message()
+                .unwrap_or_default()
+                .starts_with("Cannot move existing file"));
+            assert_eq!(Some("Hello World".to_string()), dir.read("hello.txt"));
+            assert_eq!(Some("Old file".to_string()), dir.read("renamed-hello.txt"));
+        }
+    }
+}
+
+/// The route cases of `FileProduceTempFileNameTest`.
+#[tokio::test]
+async fn test_temp_file_name() {
+    let dir = TestDirectory::new("FileProduceTempFileNameTest");
+    let (a, b, c) = (
+        dir.file_uri("tempandrename?tempFileName=inprogress-${file:name.noext}.tmp"),
+        dir.file_uri("tempandrename?tempFileName=../work/${file:name.noext}.tmp"),
+        dir.file_uri("tempandrename?tempFileName=work/${file:name.noext}.tmp"),
+    );
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(from("direct:a").to(&a));
+        r.add(from("direct:b").to(&b));
+        r.add(from("direct:c").to(&c));
+    })
+    .await;
+    t.template
+        .send_body_and_header("direct:a", "Hello World", FILE_NAME, "hello.txt")
+        .await
+        .unwrap();
+    assert!(dir.test_file("tempandrename/hello.txt").exists());
+    assert!(!dir.test_file("tempandrename/inprogress-hello.tmp").exists());
+    t.template
+        .send_body_and_header("direct:b", "Hello World", FILE_NAME, "hello2.txt")
+        .await
+        .unwrap();
+    assert!(dir.test_file("work").is_dir());
+    t.template
+        .send_body_and_header("direct:c", "Hello World", FILE_NAME, "hello3.txt")
+        .await
+        .unwrap();
+    assert!(dir.test_file("tempandrename/work").is_dir());
+}
