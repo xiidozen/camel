@@ -2736,3 +2736,322 @@ fn test_ternary_operator_with_strings() {
         "not found",
     );
 }
+
+#[test]
+fn test_constant_expression_and_null() {
+    let (_t, e) = exchange();
+    assert_expression(&e, "Hello World", "Hello World");
+    assert!(evaluate(&e, "${null}").is_null());
+}
+
+#[test]
+fn test_simple_thread_name_step_id_camel_id() {
+    let (t, mut e) = exchange();
+    let name = std::thread::current()
+        .name()
+        .unwrap_or_default()
+        .to_string();
+    assert_expression(&e, "${threadName}", name.clone());
+    assert_expression(
+        &e,
+        "The name is ${threadName}",
+        format!("The name is {name}"),
+    );
+    assert_expression(&e, "${stepId}", Value::Null);
+    e.set_property(camel_core::api::exchange_constants::STEP_ID, "foo");
+    assert_expression(&e, "${stepId}", "foo");
+    assert_expression(&e, "${camelId}", t.context.name());
+}
+
+#[test]
+fn test_exception_message() {
+    let (_t, mut e) = exchange();
+    e.set_exception(Some(CamelError::illegal_argument("Just testing")));
+    assert_expression(&e, "${exception.message}", "Just testing");
+    assert_expression(
+        &e,
+        "Hello ${exception.message} World",
+        "Hello Just testing World",
+    );
+}
+
+#[test]
+fn test_headers() {
+    let (_t, e) = exchange();
+    assert_eq!(2, e.message().headers().len());
+    let headers = evaluate(&e, "${headers}");
+    assert!(
+        matches!(&headers, Value::Map(m) if m.len() == 2),
+        "{headers:?}"
+    );
+    assert_eq!(headers, evaluate(&e, "${in.headers}"));
+    assert_expression(&e, "${headers.size}", 2);
+}
+
+#[test]
+fn test_header_key_with_space_and_header_as() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_header("some key", "Some Value");
+    for (text, expected) in [
+        ("${headerAs(foo,String)}", "abc"),
+        ("${headerAs(some key,String)}", "Some Value"),
+        ("${headerAs('some key',String)}", "Some Value"),
+        ("${header[foo]}", "abc"),
+        ("${header[some key]}", "Some Value"),
+        ("${header['some key']}", "Some Value"),
+        ("${headers[foo]}", "abc"),
+        ("${headers[some key]}", "Some Value"),
+        ("${headers['some key']}", "Some Value"),
+        ("${headerAs(bar,String)}", "123"),
+    ] {
+        assert_expression(&e, text, expected);
+    }
+    for text in [
+        "${headerAs(bar,int)}",
+        "${headerAs(bar, int)}",
+        "${headerAs('bar', int)}",
+        "${headerAs('bar','int')}",
+        "${headerAs('bar','Integer')}",
+        "${headerAs('bar',\"int\")}",
+    ] {
+        assert_expression(&e, text, 123);
+    }
+    assert_expression(&e, "${headerAs(unknown,String)}", Value::Null);
+    let simple = e.context().resolve_language("simple").unwrap();
+    let err = simple
+        .create_expression("${headerAs(unknown String)}")
+        .err()
+        .expect("illegal syntax");
+    assert!(
+        err.to_string()
+            .contains("Valid syntax: ${headerAs(key, type)} was: headerAs(unknown String)"),
+        "{err}"
+    );
+    let err = simple
+        .create_expression("${headerAs(fool,String).test}")
+        .err()
+        .expect("illegal syntax");
+    assert!(
+        err.to_string()
+            .contains("Valid syntax: ${headerAs(key, type)} was: headerAs(fool,String).test"),
+        "{err}"
+    );
+    let failed = simple
+        .create_expression("${headerAs(bar,XXX)}")
+        .and_then(|x| x.evaluate(&e));
+    assert!(failed.is_err(), "{failed:?}");
+}
+
+#[test]
+fn test_variables_key_with_space_and_variable_as() {
+    let (_t, mut e) = exchange();
+    for (k, v) in e.message().headers().clone().iter() {
+        e.set_variable(k, v.clone());
+    }
+    e.message_mut().remove_headers("*");
+    assert_expression(&e, "${variables.size}", 3);
+    assert!(matches!(evaluate(&e, "${variables}"), Value::Map(m) if m.len() == 3));
+    e.set_variable("some key", "Some Value");
+    for (text, expected) in [
+        ("${variableAs(foo,String)}", "abc"),
+        ("${variableAs(some key,String)}", "Some Value"),
+        ("${variableAs('some key',String)}", "Some Value"),
+        ("${variable[foo]}", "abc"),
+        ("${variable[cheese]}", "gauda"),
+        ("${variable[some key]}", "Some Value"),
+        ("${variable['some key']}", "Some Value"),
+        ("${variables[foo]}", "abc"),
+        ("${variables[cheese]}", "gauda"),
+        ("${variables[some key]}", "Some Value"),
+        ("${variables['some key']}", "Some Value"),
+        ("${variableAs(bar,String)}", "123"),
+    ] {
+        assert_expression(&e, text, expected);
+    }
+    for text in [
+        "${variableAs(bar,int)}",
+        "${variableAs(bar, int)}",
+        "${variableAs('bar', int)}",
+        "${variableAs('bar','int')}",
+        "${variableAs('bar','Integer')}",
+        "${variableAs('bar',\"int\")}",
+    ] {
+        assert_expression(&e, text, 123);
+    }
+    assert_expression(&e, "${variableAs(unknown,String)}", Value::Null);
+    let simple = e.context().resolve_language("simple").unwrap();
+    let err = simple
+        .create_expression("${variableAs(unknown String)}")
+        .err()
+        .expect("illegal syntax");
+    assert!(
+        err.to_string()
+            .contains("Valid syntax: ${variableAs(key, type)} was: variableAs(unknown String)"),
+        "{err}"
+    );
+    let err = simple
+        .create_expression("${variableAs(fool,String).test}")
+        .err()
+        .expect("illegal syntax");
+    assert!(
+        err.to_string()
+            .contains("Valid syntax: ${variableAs(key, type)} was: variableAs(fool,String).test"),
+        "{err}"
+    );
+}
+
+#[test]
+fn test_simple_file_dir_body_expressions_and_property() {
+    let (_t, mut e) = exchange();
+    assert_expression(&e, "file:mydir", "file:mydir");
+    let simple = e.context().resolve_language("simple").unwrap();
+    assert!(simple.create_expression("${body}").is_ok());
+    assert!(simple.create_expression("$simple{body}").is_ok());
+    e.set_property("medal", "gold");
+    assert_expression(&e, "${exchangeProperty.medal}", "gold");
+    assert_expression(&e, "${exchangeProperty:medal}", "gold");
+    // CAMEL-24651
+    assert!(evaluate(&e, "${exception.stacktrace}").is_null());
+}
+
+#[test]
+fn test_mandatory_body_as() {
+    let (_t, mut e) = exchange();
+    assert_expression(
+        &e,
+        "${mandatoryBodyAs(String)}",
+        "<hello id='m123'>world!</hello>",
+    );
+    assert_expression(
+        &e,
+        "${mandatoryBodyAs('String')}",
+        "<hello id='m123'>world!</hello>",
+    );
+    e.message_mut().set_body(Value::Null);
+    let simple = e.context().resolve_language("simple").unwrap();
+    let err = simple
+        .create_expression("${mandatoryBodyAs('String')}")
+        .unwrap()
+        .evaluate(&e)
+        .unwrap_err();
+    assert!(err.is(ErrorKind::InvalidPayload), "{err}");
+    e.message_mut().set_body(456);
+    for text in [
+        "${mandatoryBodyAs(Integer)}",
+        "${mandatoryBodyAs(int)}",
+        "${mandatoryBodyAs('int')}",
+    ] {
+        assert_expression(&e, text, 456);
+    }
+    assert!(simple
+        .create_expression("${mandatoryBodyAs(XXX)}")
+        .and_then(|x| x.evaluate(&e))
+        .is_err());
+}
+
+#[test]
+fn test_headers_with_bracket_and_ognl() {
+    let (_t, mut e) = exchange();
+    assert_expression(&e, "${headers[foo]}", "abc");
+    assert_expression(&e, "${in.headers[foo]}", "abc");
+    for key in ["order", "purchase.order", "foo.bar.qux", "purchase order"] {
+        let mut line = ValueMap::new();
+        line.insert("id".into(), Value::Int(123));
+        line.insert("name".into(), Value::from("Camel in Action"));
+        e.message_mut().set_header(key, Value::Map(line));
+        assert_expression(&e, &format!("${{headers[{key}].name}}"), "Camel in Action");
+        assert_expression(
+            &e,
+            &format!("${{in.headers[{key}].name}}"),
+            "Camel in Action",
+        );
+        assert_expression(
+            &e,
+            &format!("${{in.headers['{key}'].name}}"),
+            "Camel in Action",
+        );
+    }
+}
+
+#[test]
+fn test_message_timestamp_slash_json_like_function_ends() {
+    let (_t, mut e) = exchange();
+    e.message_mut()
+        .set_header(camel_core::api::exchange_constants::MESSAGE_TIMESTAMP, 1234);
+    assert_expression(&e, "${messageTimestamp}", 1234);
+    assert_expression(&e, "foo/${header.foo}", "foo/abc");
+    assert_expression(&e, "foo\\${header.foo}", "foo\\abc");
+    e.message_mut().set_body("Something");
+    assert_expression(
+        &e,
+        "{\n\"data\": \"${body}\"\n}",
+        "{\n\"data\": \"Something\"\n}",
+    );
+    for (text, expected) in [
+        ("{{", "{{"),
+        ("}}", "}}"),
+        ("{{}}", "{{}}"),
+        ("{{foo}}", "{{foo}}"),
+        ("{{${body}}}", "{{Something}}"),
+        ("{{${body}-${body}}}", "{{Something-Something}}"),
+    ] {
+        assert_expression(&e, text, expected);
+    }
+}
+
+#[test]
+fn test_complex_expressions_using_alternative_start_token() {
+    let (_t, e) = exchange();
+    for (text, expected) in [
+        ("hey $simple{in.header.foo}", "hey abc"),
+        ("hey $simple{in.header:foo}", "hey abc"),
+        ("hey $simple{in.header.foo}!", "hey abc!"),
+        ("hey $simple{in.header:foo}!", "hey abc!"),
+        (
+            "hey $simple{in.header.foo}-$simple{in.header.foo}!",
+            "hey abc-abc!",
+        ),
+        (
+            "hey $simple{in.header:foo}-$simple{in.header.foo}!",
+            "hey abc-abc!",
+        ),
+        (
+            "hey $simple{in.header.foo}$simple{in.header.foo}",
+            "hey abcabc",
+        ),
+        (
+            "hey $simple{in.header:foo}$simple{in.header.foo}",
+            "hey abcabc",
+        ),
+        ("$simple{in.header.foo}$simple{in.header.foo}", "abcabc"),
+        ("$simple{in.header:foo}$simple{in.header.foo}", "abcabc"),
+        ("$simple{in.header.foo}", "abc"),
+        ("$simple{in.header:foo}", "abc"),
+        ("$simple{in.header.foo}!", "abc!"),
+        ("$simple{in.header:foo}!", "abc!"),
+    ] {
+        assert_expression(&e, text, expected);
+    }
+}
+
+#[test]
+fn test_contains() {
+    let (_t, mut e) = exchange();
+    e.message_mut().set_body("Hello Camel");
+    assert_predicate(&e, "${contains(Camel)}", true);
+    assert_predicate(&e, "${contains(camel)}", true);
+    assert_predicate(&e, "${contains(world)}", false);
+    e.set_variable("myVar", "Cat");
+    assert_predicate(&e, "${contains(${variable.myVar})}", false);
+    e.set_variable("myVar", "Camel");
+    assert_predicate(&e, "${contains(${variable.myVar})}", true);
+    e.message_mut().set_body(Value::List(
+        ["Hello", "Dog", "Cat", "Camel", "Bye", "World"]
+            .iter()
+            .map(|s| Value::from(*s))
+            .collect(),
+    ));
+    assert_predicate(&e, "${contains(camel)}", true);
+    assert_predicate(&e, "${contains(world)}", true);
+    assert_predicate(&e, "${contains(fish)}", false);
+}
