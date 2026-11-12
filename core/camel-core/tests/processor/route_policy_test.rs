@@ -490,3 +490,169 @@ async fn test_throttling_exception_route_policy_keep_open() {
         }
     }
 }
+
+/// Port of `throttle.ThrottlingExceptionRoutePolicyHalfOpenHandlerTest`: the handler closes
+/// the circuit.
+#[tokio::test]
+async fn test_throttling_exception_route_policy_half_open_handler() {
+    use camel_core::support::throttling::{
+        ThrottlingExceptionHalfOpenHandler, ThrottlingExceptionRoutePolicy,
+    };
+    struct AlwaysCloseHandler;
+    impl ThrottlingExceptionHalfOpenHandler for AlwaysCloseHandler {
+        fn is_ready_to_be_closed(&self) -> bool {
+            true
+        }
+    }
+    let url = "direct:start?block=false";
+    let policy: SharedRoutePolicy = Arc::new(
+        ThrottlingExceptionRoutePolicy::new(2, 30, 250, Vec::new())
+            .with_half_open_handler(Arc::new(AlwaysCloseHandler)),
+    );
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(
+            from(url)
+                .route_id("foo")
+                .route_policy(policy.clone())
+                .log("${body}")
+                .to("mock:result"),
+        );
+    })
+    .await;
+    let result = t.mock("mock:result");
+    result.expected_bodies_received_in_any_order(["Message One", "Message Two"]);
+    result.when_any_exchange_received(failing());
+    let _ = t.template.send_body(url, "Message One").await;
+    let _ = t.template.send_body(url, "Message Two").await;
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let _ = t.template.send_body(url, "Message Three").await;
+    result.assert_is_satisfied().await;
+    assert_eq!(2, result.received_counter());
+    result.reset();
+    result.expected_bodies_received(["Message Four"]);
+    let mut delivered = false;
+    for _ in 0..40 {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        if t.template.send_body(url, "Message Four").await.is_ok() {
+            delivered = true;
+            break;
+        }
+    }
+    assert!(delivered, "the circuit should be closed");
+    result.assert_is_satisfied().await;
+}
+
+/// Port of `throttle.ThrottlingExceptionRoutePolicyOpenViaConfigTest`: keepOpen toggled.
+#[tokio::test]
+async fn test_throttling_exception_route_policy_open_via_config() {
+    use camel_core::support::throttling::ThrottlingExceptionRoutePolicy;
+    let url = "seda:foo?concurrentConsumers=20";
+    let policy = Arc::new(ThrottlingExceptionRoutePolicy::new(2, 30, 100, Vec::new()));
+    let p: SharedRoutePolicy = policy.clone();
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(
+            from(url)
+                .route_id("foo")
+                .route_policy(p.clone())
+                .log("${body}")
+                .to("mock:result"),
+        );
+    })
+    .await;
+    let result = t.mock("mock:result");
+    for i in 0..5 {
+        t.template
+            .send_body(url, format!("MessageRound1 {i}"))
+            .await
+            .unwrap();
+    }
+    t.template.send_body(url, "MessageTrigger").await.unwrap();
+    result.expected_message_count(6);
+    result.assert_is_satisfied().await;
+    policy.set_keep_open(true);
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    for i in 0..5 {
+        t.template
+            .send_body(url, format!("MessageRound2 {i}"))
+            .await
+            .unwrap();
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    assert_eq!(6, result.received_counter());
+    policy.set_keep_open(false);
+    result.expected_message_count(11);
+    result.set_result_wait_time(10000);
+    result.assert_is_satisfied().await;
+}
+
+/// Port of `throttle.ThrottlingExceptionRoutePolicyReopenTest`.
+#[tokio::test]
+async fn test_throttling_exception_route_policy_reopen() {
+    use camel_core::support::throttling::{
+        ThrottlingExceptionHalfOpenHandler, ThrottlingExceptionRoutePolicy,
+    };
+    use std::sync::atomic::AtomicUsize;
+    struct Handler {
+        calls: AtomicUsize,
+        ready: AtomicBool,
+    }
+    impl ThrottlingExceptionHalfOpenHandler for Handler {
+        fn is_ready_to_be_closed(&self) -> bool {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.ready.load(Ordering::SeqCst)
+        }
+    }
+    let handler = Arc::new(Handler {
+        calls: AtomicUsize::new(0),
+        ready: AtomicBool::new(false),
+    });
+    let handler_policy: SharedRoutePolicy = Arc::new(
+        ThrottlingExceptionRoutePolicy::new(1, 60000, 200, Vec::new())
+            .with_half_open_handler(handler.clone()),
+    );
+    let keep_open: SharedRoutePolicy = Arc::new(
+        ThrottlingExceptionRoutePolicy::new(1, 60000, 200, Vec::new()).with_keep_open(true),
+    );
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(
+            from("seda:handler")
+                .route_id("handler")
+                .route_policy(handler_policy.clone())
+                .to("mock:result"),
+        );
+        r.add(
+            from("seda:keepOpen")
+                .route_id("keepOpen")
+                .route_policy(keep_open.clone())
+                .to("mock:keepOpen"),
+        );
+    })
+    .await;
+    // the handler not ready keeps the circuit open, and is asked again
+    let result = t.mock("mock:result");
+    result.when_exchange_received(1, failing());
+    result.expected_bodies_received(["fail", "ok"]);
+    t.template.send_body("seda:handler", "fail").await.unwrap();
+    let h = handler.clone();
+    crate::support::await_until(std::time::Duration::from_secs(10), move || {
+        h.calls.load(Ordering::SeqCst) >= 2
+    })
+    .await;
+    handler.ready.store(true, Ordering::SeqCst);
+    // closed again once the handler is ready
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    t.template.send_body("seda:handler", "ok").await.unwrap();
+    result.assert_is_satisfied().await;
+    // kept open after a restart of the route
+    t.context.stop_route("keepOpen").await.unwrap();
+    t.context.start_route("keepOpen").await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let keep = t.mock("mock:keepOpen");
+    keep.expected_message_count(0);
+    t.template
+        .send_body("seda:keepOpen", "should not be consumed")
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    keep.assert_is_satisfied().await;
+}
