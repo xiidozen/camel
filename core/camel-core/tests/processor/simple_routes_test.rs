@@ -888,3 +888,111 @@ async fn test_create_route_with_non_existing_endpoint() {
         "{e}"
     );
 }
+
+/// Ports of `DeadLetterChannelCatchThrowableTest` and `DefaultErrorHandlerCatchThrowableTest`
+/// (a Java `Error` is any error here).
+#[tokio::test]
+async fn test_catch_throwable() {
+    for dlc in [true, false] {
+        let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+            if dlc {
+                r.error_handler(dead_letter_channel("mock:error"));
+            }
+            r.add(
+                from("direct:start")
+                    .process_fn(|_| Err(CamelError::runtime("This is an Error not an Exception"))),
+            );
+        })
+        .await;
+        if dlc {
+            t.mock("mock:error").expected_message_count(1);
+            t.template
+                .send_body("direct:start", "Hello World")
+                .await
+                .unwrap();
+            t.assert_mock_endpoints_satisfied().await;
+        } else {
+            let e = t
+                .template
+                .send_body("direct:start", "Hello World")
+                .await
+                .unwrap_err();
+            assert_eq!(
+                Some("This is an Error not an Exception"),
+                crate::support::cause_of(&e).message()
+            );
+        }
+    }
+}
+
+/// Port of `DeadLetterChannelOnPrepareTest`.
+#[tokio::test]
+async fn test_dead_letter_channel_on_prepare() {
+    use camel_core::api::exchange_constants::EXCEPTION_CAUGHT;
+    let prepare: camel_core::api::processor::SharedProcessor = std::sync::Arc::new(
+        camel_core::api::processor::processor_fn(|e: &mut Exchange| {
+            let cause = e
+                .property(EXCEPTION_CAUGHT)
+                .and_then(|v| {
+                    v.downcast_ref::<CamelError>()
+                        .and_then(|c| c.message().map(str::to_string))
+                })
+                .unwrap_or_default();
+            e.message_mut().set_header("FailedBecause", cause);
+            Ok(())
+        }),
+    );
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.error_handler(dead_letter_channel("mock:dead").on_prepare_failure(prepare.clone()));
+        r.add(
+            from("direct:start")
+                .log("Incoming ${body}")
+                .throw_exception(CamelError::illegal_argument("Forced")),
+        );
+    })
+    .await;
+    let dead = t.mock("mock:dead");
+    dead.expected_bodies_received(["Hello World"]);
+    dead.expected_header_received("FailedBecause", "Forced");
+    t.template
+        .send_body("direct:start", "Hello World")
+        .await
+        .unwrap();
+    dead.assert_is_satisfied().await;
+}
+
+/// Ports of `RoutingSlipNoErrorHandlerTest` and `SendToNoErrorHandlerTest`: the failure of a
+/// route without error handler is handled by the caller route.
+#[tokio::test]
+async fn test_no_error_handler_sub_route() {
+    use camel_core::api::exchange_constants::EXCEPTION_CAUGHT;
+    for slip in [true, false] {
+        let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+            r.error_handler(dead_letter_channel("mock:dead"));
+            let route = from("direct:start");
+            let route = if slip {
+                route.routing_slip(constant("direct:foo"))
+            } else {
+                route.to("direct:foo")
+            };
+            r.add(route.to("mock:result"));
+            r.add(
+                from("direct:foo")
+                    .error_handler(no_error_handler())
+                    .to("mock:foo")
+                    .process_fn(|_| Err(CamelError::illegal_argument("Forced"))),
+            );
+        })
+        .await;
+        t.mock("mock:foo").expected_message_count(1);
+        t.mock("mock:result").expected_message_count(0);
+        let dead = t.mock("mock:dead");
+        dead.expected_message_count(1);
+        dead.message_matches(0, exchange_property(EXCEPTION_CAUGHT).is_not_null());
+        t.template
+            .send_body("direct:start", "Hello World")
+            .await
+            .unwrap();
+        t.assert_mock_endpoints_satisfied().await;
+    }
+}
