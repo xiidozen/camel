@@ -89,6 +89,10 @@ pub fn register_core_components(context: &DefaultCamelContext) {
         Arc::new(|| Arc::new(camel_seda::SedaComponent::new()) as SharedComponent),
     );
     context.register_component_factory(
+        "stub",
+        Arc::new(|| Arc::new(camel_stub::StubComponent::new()) as SharedComponent),
+    );
+    context.register_component_factory(
         "timer",
         Arc::new(|| Arc::new(camel_timer::TimerComponent::new()) as SharedComponent),
     );

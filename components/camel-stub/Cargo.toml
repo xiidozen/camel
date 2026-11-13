@@ -1,0 +1,13 @@
+[package]
+name = "camel-stub"
+description = "Camel :: Stub — stub out any physical endpoint with an in-memory queue (port of components/camel-stub)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+camel-api = { workspace = true }
+camel-seda = { workspace = true }
+camel-util = { workspace = true }

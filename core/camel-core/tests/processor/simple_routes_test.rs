@@ -1235,3 +1235,112 @@ async fn test_set_body_language_placeholder() {
     t.template.send_body("direct:start", "World").await.unwrap();
     t.assert_mock_endpoints_satisfied().await;
 }
+
+/// Ports of `SendExchangePatternOptionTest` and `RecipientListExchangePatternOptionTest`: the
+/// `exchangePattern` endpoint option.
+#[tokio::test]
+async fn test_exchange_pattern_option() {
+    for recipient_list in [false, true] {
+        for in_out in [false, true] {
+            let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+                let route = from("direct:start");
+                let route = if recipient_list {
+                    route.recipient_list(constant("stub:foo?exchangePattern=InOnly"))
+                } else {
+                    route.to("stub:foo?exchangePattern=InOnly")
+                };
+                r.add(route.to("mock:result"));
+                r.add(from("stub:foo").to("mock:stub"));
+            })
+            .await;
+            let pattern = if in_out {
+                ExchangePattern::InOut
+            } else {
+                ExchangePattern::InOnly
+            };
+            let result = t.mock("mock:result");
+            result.expected_message_count(1);
+            result.message_matches(0, exchange_pattern().is_equal_to(pattern.to_string()));
+            let stub = t.mock("mock:stub");
+            stub.expected_message_count(1);
+            stub.message_matches(0, exchange_pattern().is_equal_to("InOnly"));
+            if in_out {
+                t.template
+                    .request_body("direct:start", "Hello World")
+                    .await
+                    .unwrap();
+            } else {
+                t.template
+                    .send_body("direct:start", "Hello World")
+                    .await
+                    .unwrap();
+            }
+            t.assert_mock_endpoints_satisfied().await;
+        }
+    }
+}
+
+/// Port of `RecipientListMEPWithRawTest`.
+#[tokio::test]
+async fn test_recipient_list_mep_with_raw() {
+    let t = ContextTestSupport::with_routes(|r: &mut Routes| {
+        r.add(
+            from("direct:start")
+                .recipient_list(constant(
+                    "seda:foo?exchangePattern=InOut&blockWhenFull=RAW(true)",
+                ))
+                .to("mock:result"),
+        );
+        r.add(
+            from("seda:foo")
+                .to("mock:foo")
+                .transform(constant("Bye World")),
+        );
+    })
+    .await;
+    t.mock("mock:foo")
+        .expected_bodies_received(["Hello World", "Hello Again"]);
+    t.mock("mock:result")
+        .expected_bodies_received(["Bye World", "Bye World"]);
+    t.template
+        .send_body("direct:start", "Hello World")
+        .await
+        .unwrap();
+    t.template
+        .send_body("direct:start", "Hello Again")
+        .await
+        .unwrap();
+    t.assert_mock_endpoints_satisfied().await;
+}
+
+/// Port of `DeadLetterChannelNewExceptionTest`: a failing dead letter bean is handled.
+#[tokio::test]
+async fn test_dead_letter_channel_new_exception() {
+    let t = ContextTestSupport::new();
+    let bad = camel_bean::processor_value(std::sync::Arc::new(
+        camel_core::api::processor::processor_fn(|_: &mut Exchange| {
+            Err(CamelError::runtime("error in errorhandler"))
+        }),
+    ));
+    t.context
+        .registry()
+        .unwrap()
+        .bind("badErrorHandler", bad)
+        .unwrap();
+    t.context
+        .add_routes(|r: &mut Routes| {
+            r.error_handler(dead_letter_channel("bean:badErrorHandler"));
+            r.add(
+                from("direct:start")
+                    .log("Incoming ${body}")
+                    .throw_exception(CamelError::illegal_argument("Forced")),
+            );
+        })
+        .await
+        .unwrap();
+    t.context.start().await.unwrap();
+    t.template
+        .send_body("direct:start", "Hello World")
+        .await
+        .unwrap();
+}

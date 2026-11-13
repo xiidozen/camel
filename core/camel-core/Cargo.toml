@@ -21,6 +21,7 @@ camel-direct = { workspace = true }
 camel-mock = { workspace = true }
 camel-log = { workspace = true }
 camel-seda = { workspace = true }
+camel-stub = { workspace = true }
 camel-bean = { workspace = true }
 camel-timer = { workspace = true }
 camel-file = { workspace = true }

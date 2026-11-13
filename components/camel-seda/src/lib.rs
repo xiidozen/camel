@@ -33,7 +33,7 @@ use camel_api::endpoint::{
     Component, Consumer, Endpoint, PollingConsumer, Producer, SharedConsumer, SharedEndpoint,
     SharedProducer,
 };
-use camel_api::enums::WaitForTaskToComplete;
+use camel_api::enums::{ExchangePattern, WaitForTaskToComplete};
 use camel_api::error::{CamelError, CamelResult, ErrorKind};
 use camel_api::exchange::Exchange;
 use camel_api::processor::{BoxFuture, Processor, SharedProcessor};
@@ -181,6 +181,7 @@ impl SedaQueue {
 /// The SEDA component (Java `SedaComponent`).
 pub struct SedaComponent {
     queues: Mutex<HashMap<String, Arc<SedaQueue>>>,
+    stub: bool,
 }
 
 impl Default for SedaComponent {
@@ -194,7 +195,24 @@ impl SedaComponent {
     pub fn new() -> Self {
         SedaComponent {
             queues: Mutex::new(HashMap::new()),
+            stub: false,
         }
+    }
+
+    /// Creates the component of the stub endpoints (Java `StubComponent`): any uri is
+    /// accepted, its endpoints are lenient, and only the options read by the seda component
+    /// itself (`size`, `concurrentConsumers`, `blockWhenFull`, `discardWhenFull`,
+    /// `offerTimeout`) are used.
+    pub fn stub() -> Self {
+        SedaComponent {
+            stub: true,
+            ..Self::new()
+        }
+    }
+
+    /// Whether this is the component of the stub endpoints.
+    pub fn is_stub(&self) -> bool {
+        self.stub
     }
 
     /// The queue of the key (the endpoint uri without options, such as `seda://foo`), if
@@ -222,6 +240,46 @@ impl SedaComponent {
     }
 }
 
+impl SedaComponent {
+    /// The stub endpoint: the endpoint properties are not configured (Java
+    /// `StubComponent.setProperties`), the other parameters are kept.
+    fn create_stub_endpoint(
+        &self,
+        context: &Arc<dyn CamelContext>,
+        uri: &str,
+        remaining: &str,
+        parameters: &mut Parameters,
+    ) -> CamelResult<SharedEndpoint> {
+        let size = get_and_remove_parameter::<i64>(parameters, "size")?.map(|s| s.max(1) as usize);
+        let key = camel_util::string_helper::before(uri, "?").unwrap_or_else(|| uri.to_string());
+        let queue = self.get_or_create_queue(&key, size)?;
+        Ok(Arc::new(SedaEndpoint {
+            uri: uri.to_string(),
+            name: remaining.trim_start_matches('/').to_string(),
+            context: Arc::downgrade(context),
+            queue,
+            concurrent_consumers: get_and_remove_parameter::<i64>(
+                parameters,
+                "concurrentConsumers",
+            )?
+            .unwrap_or(1)
+            .max(1) as usize,
+            wait: WaitForTaskToComplete::IfReplyExpected,
+            timeout: 30000,
+            block_when_full: get_and_remove_parameter(parameters, "blockWhenFull")?
+                .unwrap_or(false),
+            offer_timeout: get_and_remove_parameter::<u64>(parameters, "offerTimeout")?
+                .unwrap_or(0),
+            discard_when_full: get_and_remove_parameter(parameters, "discardWhenFull")?
+                .unwrap_or(false),
+            fail_if_no_consumers: false,
+            discard_if_no_consumers: false,
+            purge_when_stopping: false,
+            stub: true,
+        }))
+    }
+}
+
 impl Service for SedaComponent {}
 
 impl Component for SedaComponent {
@@ -239,6 +297,9 @@ impl Component for SedaComponent {
                 .map_err(|e| CamelError::illegal_argument(e.to_string()))?,
             None => WaitForTaskToComplete::IfReplyExpected,
         };
+        if self.stub {
+            return self.create_stub_endpoint(context, uri, remaining, parameters);
+        }
         if get_and_remove_parameter::<bool>(parameters, "multipleConsumers")?.unwrap_or(false) {
             return Err(CamelError::new(
                 ErrorKind::UnsupportedOperation,
@@ -274,11 +335,12 @@ impl Component for SedaComponent {
                 .unwrap_or(false),
             purge_when_stopping: get_and_remove_parameter(parameters, "purgeWhenStopping")?
                 .unwrap_or(false),
+            stub: false,
         }))
     }
 
     fn default_name(&self) -> Option<&str> {
-        Some("seda")
+        Some(if self.stub { "stub" } else { "seda" })
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -301,9 +363,15 @@ pub struct SedaEndpoint {
     fail_if_no_consumers: bool,
     discard_if_no_consumers: bool,
     purge_when_stopping: bool,
+    stub: bool,
 }
 
 impl SedaEndpoint {
+    /// Whether this is a stub endpoint (Java `StubEndpoint`).
+    pub fn is_stub(&self) -> bool {
+        self.stub
+    }
+
     /// The queue name.
     pub fn name(&self) -> &str {
         &self.name
@@ -325,6 +393,10 @@ impl Service for SedaEndpoint {}
 impl Endpoint for SedaEndpoint {
     fn endpoint_uri(&self) -> &str {
         &self.uri
+    }
+
+    fn is_lenient_properties(&self) -> bool {
+        self.stub
     }
 
     fn camel_context(&self) -> Arc<dyn CamelContext> {
@@ -419,6 +491,26 @@ impl Service for SedaProducer {}
 impl Processor for SedaProducer {
     fn process<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>> {
         Box::pin(async move {
+            let pattern = exchange.pattern();
+            // a stub without consumers sends InOnly, then restores the pattern (Java
+            // StubProducer)
+            if self.endpoint.stub
+                && self.endpoint.queue.consumer_count() == 0
+                && pattern != ExchangePattern::InOnly
+            {
+                exchange.set_pattern(ExchangePattern::InOnly);
+                let r = self.send(exchange).await;
+                exchange.set_pattern(pattern);
+                return r;
+            }
+            self.send(exchange).await
+        })
+    }
+}
+
+impl SedaProducer {
+    async fn send(&self, exchange: &mut Exchange) -> CamelResult<()> {
+        {
             let e = &self.endpoint;
             let wait = e.wait == WaitForTaskToComplete::Always
                 || e.wait == WaitForTaskToComplete::IfReplyExpected
@@ -478,7 +570,7 @@ impl Processor for SedaProducer {
                 ))),
             }
             Ok(())
-        })
+        }
     }
 }
 

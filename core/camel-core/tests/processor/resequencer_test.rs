@@ -259,3 +259,50 @@ async fn test_out_of_sequence_after_capacity_reached_complex() {
     send_seq(&t, &[("B", 2), ("C", 3), ("F", 6)]).await;
     t.assert_mock_endpoints_satisfied().await;
 }
+
+/// Ports of `ResequenceStreamIgnoreInvalidExchangesTest`,
+/// `ResequenceStreamNotIgnoreInvalidExchangesTest`,
+/// `ResequenceBatchIgnoreInvalidExchangesTest` and
+/// `ResequenceBatchNotIgnoreInvalidExchangesTest`: the invalid message `A` (without `seqno`)
+/// sent first to fourth is ignored, or fails without disturbing the others.
+#[tokio::test]
+async fn test_invalid_exchanges() {
+    for stream in [true, false] {
+        for ignore in [true, false] {
+            for bad in 0..4 {
+                let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+                    let route = from("direct:start")
+                        .resequence(header("seqno"), |s| s.to("mock:result"))
+                        .timeout(100);
+                    let route = if stream { route.stream() } else { route };
+                    r.add(if ignore {
+                        route.ignore_invalid_exchanges()
+                    } else {
+                        route
+                    });
+                })
+                .await;
+                t.mock("mock:result")
+                    .expected_bodies_received(["B", "C", "D"]);
+                let mut valid = vec![("D", 4), ("C", 3), ("B", 2)].into_iter();
+                for i in 0..4 {
+                    if i == bad {
+                        let r = t.template.send_body("direct:start", "A").await;
+                        assert_eq!(
+                            ignore,
+                            r.is_ok(),
+                            "stream={stream} ignore={ignore} bad={bad}"
+                        );
+                    } else {
+                        let (b, n) = valid.next().unwrap();
+                        t.template
+                            .send_body_and_header("direct:start", b, "seqno", n)
+                            .await
+                            .unwrap();
+                    }
+                }
+                t.assert_mock_endpoints_satisfied().await;
+            }
+        }
+    }
+}
