@@ -405,6 +405,9 @@ pub struct AggregateDefinition {
     pub discard_on_aggregation_failure: bool,
     /// Completes all groups when a new group starts.
     pub completion_on_new_correlation_group: bool,
+    /// Completes the groups of a batch of a batch consumer when it is complete
+    /// (`completionFromBatchConsumer`).
+    pub completion_from_batch_consumer: bool,
     /// Completes all groups when the route stops.
     pub force_completion_on_stop: bool,
     /// Completes all groups when the route stops.
@@ -437,6 +440,7 @@ impl AggregateDefinition {
             discard_on_completion_timeout: false,
             discard_on_aggregation_failure: false,
             completion_on_new_correlation_group: false,
+            completion_from_batch_consumer: false,
             force_completion_on_stop: false,
             complete_all_on_stop: false,
             repository: None,

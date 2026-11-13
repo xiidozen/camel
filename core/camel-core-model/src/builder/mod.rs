@@ -1340,6 +1340,15 @@ pub trait Dsl: Sized {
         self
     }
 
+    /// The last aggregate completes the groups of a batch of a batch consumer (such as the file
+    /// consumer) when all its exchanges arrived (Java `.completionFromBatchConsumer()`).
+    fn completion_from_batch_consumer(mut self) -> Self {
+        if let Some(Eip::Aggregate(a)) = self.last_mut().map(|l| &mut l.eip) {
+            a.completion_from_batch_consumer = true;
+        }
+        self
+    }
+
     /// Routes a copy of the exchange through the steps when the exchange is done (Java
     /// `.onCompletion()` in a route; it applies to the whole route wherever it is). The block
     /// sets the options, such as [`OnCompletionDsl::on_failure_only`], and the steps.

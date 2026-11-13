@@ -547,3 +547,197 @@ async fn test_zip_splitter_use_original_message() {
     entries.assert_is_satisfied().await;
     c.stop().await.unwrap();
 }
+
+/// The names of the entries of the only zip file of the directory.
+fn zip_in_dir(dir: &str) -> Vec<String> {
+    let files: Vec<_> = std::fs::read_dir(dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .collect();
+    assert!(!files.is_empty(), "Should be a file in {dir} directory");
+    camel_zipfile::entry_names(&std::fs::read(files[0].path()).unwrap()).unwrap()
+}
+
+/// `ZipAggregationStrategyTest` and `AggregationStrategyWithPreservationTest`: the files of a
+/// batch, aggregated in one zip file.
+#[tokio::test]
+async fn test_zip_aggregation_strategy_batch() {
+    for preserve in [false, true] {
+        let out = test_dir("aggregate");
+        let o = out.clone();
+        let c = context(move |r: &mut Routes| {
+            let recursive = if preserve { "&recursive=true" } else { "" };
+            r.add(
+                from(&format!("file:tests/resources/org/apache/camel/aggregate/zipfile/data?initialDelay=0&delay=1000&noop=true{recursive}"))
+                    .set_header("foo", constant("bar"))
+                    .aggregate(constant(true), Arc::new(camel_zipfile::ZipAggregationStrategy::new(preserve, preserve)), |a| {
+                        a.to(&format!("file:{o}")).to("mock:aggregateToZipEntry")
+                    })
+                    .completion_from_batch_consumer()
+                    .eager_check_completion(),
+            );
+        })
+        .await;
+        let mock = MockEndpoint::resolve(c.as_ref(), "mock:aggregateToZipEntry").unwrap();
+        mock.expected_message_count(1);
+        mock.expected_header_received("foo", "bar");
+        mock.assert_is_satisfied().await;
+        let mut names = zip_in_dir(&out);
+        names.sort();
+        if preserve {
+            assert_eq!(
+                vec![
+                    "another/hello.txt",
+                    "chiau.txt",
+                    "hi.txt",
+                    "hola.txt",
+                    "other/greetings.txt"
+                ],
+                names
+            );
+        } else {
+            assert_eq!(3, names.len(), "{names:?}");
+        }
+        c.stop().await.unwrap();
+        let _ = std::fs::remove_dir_all(&out);
+    }
+}
+
+/// `AggregationStrategyWithFilenameHeaderTest`: the entries named after the file name header.
+#[tokio::test]
+async fn test_zip_aggregation_strategy_with_filename_header() {
+    let out = test_dir("aggregate-filename");
+    let o = out.clone();
+    let c = context(move |r: &mut Routes| {
+        r.add(
+            from("direct:start")
+                .aggregate(
+                    constant(true),
+                    Arc::new(camel_zipfile::ZipAggregationStrategy::new(false, true)),
+                    |a| a.to(&format!("file:{o}")).to("mock:aggregateToZipEntry"),
+                )
+                .completion_timeout(50),
+        );
+    })
+    .await;
+    let t = c.create_producer_template();
+    t.send_body_and_header("direct:start", "foo", FILE_NAME, "foo")
+        .await
+        .unwrap();
+    t.send_body_and_header("direct:start", "bar", FILE_NAME, "bar")
+        .await
+        .unwrap();
+    let mock = MockEndpoint::resolve(c.as_ref(), "mock:aggregateToZipEntry").unwrap();
+    mock.expected_message_count(1);
+    mock.assert_is_satisfied().await;
+    assert_eq!(vec!["foo", "bar"], zip_in_dir(&out));
+    c.stop().await.unwrap();
+    let _ = std::fs::remove_dir_all(&out);
+}
+
+/// `ZipAggregationStrategyNullBodyTest`: the null bodies are skipped.
+#[tokio::test]
+async fn test_zip_aggregation_strategy_null_body() {
+    for (bodies, expected) in [
+        (["Hello", "Hello again", ""], 2),
+        (["", "Hello", "Hello again"], 2),
+        (["Hello", "", "Hello again"], 2),
+        (["", "", ""], 0),
+        (["", "", "Hello"], 1),
+    ] {
+        let out = test_dir("aggregate-null");
+        let o = out.clone();
+        let c = context(move |r: &mut Routes| {
+            r.add(
+                from("direct:start")
+                    .aggregate(
+                        constant(true),
+                        Arc::new(camel_zipfile::ZipAggregationStrategy::default()),
+                        |a| a.to(&format!("file:{o}")).to("mock:aggregateToZipEntry"),
+                    )
+                    .completion_size(3)
+                    .eager_check_completion(),
+            );
+        })
+        .await;
+        let t = c.create_producer_template();
+        for b in bodies {
+            let body = if b.is_empty() {
+                Value::Null
+            } else {
+                Value::from(b)
+            };
+            t.send_body("direct:start", body).await.unwrap();
+        }
+        let mock = MockEndpoint::resolve(c.as_ref(), "mock:aggregateToZipEntry").unwrap();
+        mock.expected_message_count(1);
+        mock.assert_is_satisfied().await;
+        assert_eq!(expected, zip_in_dir(&out).len(), "{bodies:?}");
+        c.stop().await.unwrap();
+        let _ = std::fs::remove_dir_all(&out);
+    }
+}
+
+/// `ZipAggregationStrategyEmptyFileTest`: the empty files are skipped unless allowed.
+#[tokio::test]
+async fn test_zip_aggregation_strategy_empty_file() {
+    for allow in [false, true] {
+        let (input, out) = (
+            test_dir("aggregate-empty-in"),
+            test_dir("aggregate-empty-out"),
+        );
+        let (i, o) = (input.clone(), out.clone());
+        let c = context(move |r: &mut Routes| {
+            r.add(
+                from(&format!("file:{i}?initialDelay=0&delay=10"))
+                    .aggregate(
+                        constant(true),
+                        Arc::new(
+                            camel_zipfile::ZipAggregationStrategy::default()
+                                .with_allow_empty_files(allow),
+                        ),
+                        |a| a.to(&format!("file:{o}")).to("mock:aggregateToZipEntry"),
+                    )
+                    .completion_size(4)
+                    .eager_check_completion(),
+            );
+        })
+        .await;
+        let t = c.create_producer_template();
+        for b in ["Hello", "", "Bye", "Howdy"] {
+            t.send_body(&format!("file:{input}"), b).await.unwrap();
+        }
+        let mock = MockEndpoint::resolve(c.as_ref(), "mock:aggregateToZipEntry").unwrap();
+        mock.expected_message_count(1);
+        mock.assert_is_satisfied().await;
+        assert_eq!(if allow { 4 } else { 3 }, zip_in_dir(&out).len());
+        c.stop().await.unwrap();
+        let _ = std::fs::remove_dir_all(&input);
+        let _ = std::fs::remove_dir_all(&out);
+    }
+}
+
+/// `ZipAggregationStrategySplitEmptyBodyTest`: splitting an empty body with the strategy.
+#[tokio::test]
+async fn test_zip_aggregation_strategy_split_empty_body() {
+    let c = context(|r: &mut Routes| {
+        r.add(
+            from("direct:start")
+                .set_body(constant(""))
+                .split(body(), |s| s.to("mock:split"))
+                .aggregation_strategy(Arc::new(camel_zipfile::ZipAggregationStrategy::default()))
+                .to("mock:result"),
+        );
+    })
+    .await;
+    let split = MockEndpoint::resolve(c.as_ref(), "mock:split").unwrap();
+    split.expected_message_count(0);
+    let result = MockEndpoint::resolve(c.as_ref(), "mock:result").unwrap();
+    result.expected_message_count(1);
+    c.create_producer_template()
+        .send_body("direct:start", Value::Null)
+        .await
+        .unwrap();
+    result.assert_is_satisfied().await;
+    split.assert_is_satisfied().await;
+}

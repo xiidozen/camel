@@ -7,7 +7,7 @@ use camel_api::exchange::Exchange;
 use camel_api::exchange_constants::{
     AGGREGATED_COMPLETED_BY, AGGREGATED_CORRELATION_KEY, AGGREGATED_SIZE,
     AGGREGATION_COMPLETE_ALL_GROUPS, AGGREGATION_COMPLETE_ALL_GROUPS_INCLUSIVE,
-    AGGREGATION_COMPLETE_CURRENT_GROUP, FAILURE_ENDPOINT, GROUPED_EXCHANGE,
+    AGGREGATION_COMPLETE_CURRENT_GROUP, BATCH_SIZE, FAILURE_ENDPOINT, GROUPED_EXCHANGE,
 };
 use camel_api::processor::{
     AggregationStrategy, BoxFuture, Processor, SharedAggregationStrategy, SharedExpression,
@@ -272,6 +272,9 @@ pub struct AggregateOptions {
     pub discard_on_aggregation_failure: bool,
     /// Completes all groups when a new correlation group starts.
     pub completion_on_new_correlation_group: bool,
+    /// Completes the groups of a batch of a batch consumer (such as the file consumer) when
+    /// its `CamelBatchSize` exchanges arrived.
+    pub completion_from_batch_consumer: bool,
     /// Completes all groups when the route stops.
     pub force_completion_on_stop: bool,
     /// Completes all groups when the route stops (Java: also waits for them to complete).
@@ -296,6 +299,7 @@ impl Default for AggregateOptions {
             discard_on_completion_timeout: false,
             discard_on_aggregation_failure: false,
             completion_on_new_correlation_group: false,
+            completion_from_batch_consumer: false,
             force_completion_on_stop: false,
             complete_all_on_stop: false,
             repository: None,
@@ -328,6 +332,10 @@ struct State {
     /// The deadline of each group with a timeout.
     timeouts: HashMap<String, Instant>,
     closed: Option<ClosedKeys>,
+    /// The groups of the current batch of a batch consumer, in order.
+    batch_keys: Vec<String>,
+    /// The number of exchanges of the current batch.
+    batch_counter: i64,
 }
 
 struct Inner {
@@ -376,6 +384,7 @@ impl AggregateProcessor {
             && options.completion_predicate.is_none()
             && options.completion_timeout_expression.is_none()
             && options.completion_size_expression.is_none()
+            && !options.completion_from_batch_consumer
         {
             return Err(CamelError::illegal_state(
                 "At least one of the completions options [completionTimeout, completionInterval, completionSize, completionPredicate, completionFromBatchConsumer] must be set",
@@ -402,6 +411,8 @@ impl AggregateProcessor {
                 state: Mutex::new(State {
                     timeouts: HashMap::new(),
                     closed,
+                    batch_keys: Vec::new(),
+                    batch_counter: 0,
                 }),
                 background: Mutex::new(None),
             }),
@@ -545,7 +556,27 @@ impl Inner {
     }
 
     /// The completion check (Java `isCompleted`).
-    fn is_completed(&self, exchange: &mut Exchange) -> Option<&'static str> {
+    fn is_completed(
+        &self,
+        state: &mut State,
+        key: &str,
+        exchange: &mut Exchange,
+    ) -> Option<&'static str> {
+        // the batch consumer completion first
+        if self.options.completion_from_batch_consumer {
+            if !state.batch_keys.iter().any(|k| k == key) {
+                state.batch_keys.push(key.to_string());
+            }
+            state.batch_counter += 1;
+            let size = exchange
+                .property(BATCH_SIZE)
+                .and_then(|v| convert_to::<i64>(v).ok().flatten())
+                .unwrap_or(0);
+            if size > 0 && state.batch_counter >= size {
+                state.batch_counter = 0;
+                return Some(completed_by::CONSUMER);
+            }
+        }
         if flag(exchange, false, AGGREGATION_COMPLETE_CURRENT_GROUP) {
             exchange.remove_property(AGGREGATION_COMPLETE_CURRENT_GROUP);
             return Some(completed_by::STRATEGY);
@@ -626,7 +657,7 @@ impl Inner {
         } else if self.options.eager_check_completion {
             new.set_property(AGGREGATED_SIZE, size);
             new.set_property(AGGREGATED_CORRELATION_KEY, key);
-            complete = self.is_completed(&mut new);
+            complete = self.is_completed(state, key, &mut new);
             if complete.is_none() {
                 self.track_timeout(state, key, &new);
             }
@@ -684,7 +715,7 @@ impl Inner {
         }
         answer.set_property(AGGREGATED_SIZE, size);
         if !pre_completion && !self.options.eager_check_completion {
-            complete = self.is_completed(&mut answer);
+            complete = self.is_completed(state, key, &mut answer);
             if complete.is_none() {
                 self.track_timeout(state, key, &new);
             }
@@ -717,6 +748,36 @@ impl Inner {
         mut answer: Exchange,
         aggregate_failed: bool,
     ) {
+        if by == completed_by::CONSUMER {
+            // all the groups of the batch (Java doAggregationComplete)
+            let keys = std::mem::take(&mut state.batch_keys);
+            let mut current = Some((original, answer));
+            for batch_key in keys {
+                let (batch_original, mut batch_answer) = if batch_key == key {
+                    match current.take() {
+                        Some(c) => c,
+                        None => continue,
+                    }
+                } else {
+                    match self.repository.get(&batch_key) {
+                        Some(a) => (Some(a.clone()), a),
+                        None => continue,
+                    }
+                };
+                batch_answer.set_property(AGGREGATED_COMPLETED_BY, by);
+                if let Some(a) = self.on_completion(
+                    state,
+                    &batch_key,
+                    batch_original.as_ref(),
+                    batch_answer,
+                    false,
+                    aggregate_failed,
+                ) {
+                    list.push((batch_key, a));
+                }
+            }
+            return;
+        }
         answer.set_property(AGGREGATED_COMPLETED_BY, by);
         if let Some(a) = self.on_completion(
             state,
