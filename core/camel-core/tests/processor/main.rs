@@ -5,6 +5,8 @@
 mod support;
 
 mod aggregator;
+mod async_endpoint_test;
+mod cbr_test;
 mod choice_misc_test;
 mod choice_no_otherwise_test;
 mod claim_check_test;

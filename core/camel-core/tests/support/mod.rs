@@ -3,6 +3,9 @@
 
 #![allow(dead_code)]
 
+#[allow(dead_code)]
+pub mod my_async;
+
 use camel_core::prelude::*;
 use std::sync::Arc;
 
