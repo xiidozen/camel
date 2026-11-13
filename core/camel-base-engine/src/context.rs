@@ -55,6 +55,7 @@ pub struct DefaultCamelContext {
     routes: RwLock<Vec<Arc<DefaultRoute>>>,
     route_counter: AtomicU32,
     log_listeners: RwLock<Vec<Arc<dyn LogListener>>>,
+    global_options: RwLock<HashMap<String, String>>,
     message_history: AtomicBool,
     plugins: RwLock<HashMap<TypeId, Arc<dyn Any + Send + Sync>>>,
     properties: Arc<DefaultPropertiesComponent>,
@@ -92,6 +93,7 @@ impl DefaultCamelContext {
             routes: RwLock::new(Vec::new()),
             route_counter: AtomicU32::new(0),
             log_listeners: RwLock::new(Vec::new()),
+            global_options: RwLock::new(HashMap::new()),
             message_history: AtomicBool::new(false),
             plugins: RwLock::new(HashMap::new()),
             properties: {
@@ -218,6 +220,19 @@ impl DefaultCamelContext {
             .write()
             .unwrap()
             .insert(name.to_string(), factory);
+    }
+
+    /// Sets a global option (Java `getGlobalOptions().put(key, value)`).
+    pub fn set_global_option(&self, key: &str, value: &str) {
+        self.global_options
+            .write()
+            .unwrap()
+            .insert(key.to_string(), value.to_string());
+    }
+
+    /// The global options (Java `getGlobalOptions`).
+    pub fn global_options(&self) -> HashMap<String, String> {
+        self.global_options.read().unwrap().clone()
     }
 
     /// Adds a listener of the log messages (Java `addLogListener`).
@@ -791,6 +806,10 @@ impl CamelContext for DefaultCamelContext {
 
     fn log_listeners(&self) -> Vec<Arc<dyn LogListener>> {
         self.log_listeners.read().unwrap().clone()
+    }
+
+    fn global_option(&self, key: &str) -> Option<String> {
+        self.global_options.read().unwrap().get(key).cloned()
     }
 
     fn resolve_language(&self, name: &str) -> CamelResult<Arc<dyn Language>> {

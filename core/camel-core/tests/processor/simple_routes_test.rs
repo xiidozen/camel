@@ -1469,3 +1469,131 @@ async fn test_unit_of_work() {
         }
     }
 }
+
+/// Ports of `LogProcessorTest` and `LogGlobalLogNameTest` (the slf4j marker of the `wombat`
+/// route has no Rust equivalent), with the logger names checked by a log listener.
+#[tokio::test]
+async fn test_log_processor() {
+    use camel_core::api::exchange_constants::LOG_EIP_NAME;
+    #[derive(Default)]
+    struct Names(std::sync::Mutex<Vec<String>>);
+    impl camel_core::api::spi::log_listener::LogListener for Names {
+        fn on_log(&self, _: &Exchange, logger_name: &str, message: &str) -> String {
+            self.0
+                .lock()
+                .unwrap()
+                .push(format!("{logger_name}: {message}"));
+            message.to_string()
+        }
+    }
+    for global in [false, true] {
+        let t = ContextTestSupport::new();
+        if global {
+            t.context.set_global_option(LOG_EIP_NAME, "com.foo.myapp");
+        }
+        let names = std::sync::Arc::new(Names::default());
+        t.context.add_log_listener(names.clone());
+        t.context
+            .add_routes(|r: &mut Routes| {
+                r.add(
+                    from("direct:foo")
+                        .route_id("foo")
+                        .log("Got ${body}")
+                        .to("mock:foo"),
+                );
+                r.add(
+                    from("direct:bar")
+                        .route_id("bar")
+                        .log_level(LoggingLevel::WARN, "Also got ${body}")
+                        .to("mock:bar"),
+                );
+                r.add(
+                    from("direct:baz")
+                        .route_id("baz")
+                        .log_with(LoggingLevel::ERROR, "cool", "Me got ${body}")
+                        .to("mock:baz"),
+                );
+                r.add(
+                    from("direct:wombat")
+                        .route_id("wombat")
+                        .log_with(LoggingLevel::INFO, "cool", "Me got ${body}")
+                        .to("mock:wombat"),
+                );
+                r.add(
+                    from("direct:nolog")
+                        .route_id("nolog")
+                        .log_level(LoggingLevel::TRACE, "Should not log ${body}")
+                        .to("mock:bar"),
+                );
+            })
+            .await
+            .unwrap();
+        t.context.start().await.unwrap();
+        for (uri, mock, body) in [
+            ("direct:foo", "mock:foo", "Hello World"),
+            ("direct:bar", "mock:bar", "Bye World"),
+            ("direct:baz", "mock:baz", "Hi World"),
+            ("direct:wombat", "mock:wombat", "Hi Wombat"),
+            ("direct:nolog", "mock:bar", "Hi World"),
+        ] {
+            let m = t.mock(mock);
+            m.reset();
+            m.expected_message_count(1);
+            t.template.send_body(uri, body).await.unwrap();
+            m.assert_is_satisfied().await;
+        }
+        let (foo, bar) = if global {
+            ("com.foo.myapp", "com.foo.myapp")
+        } else {
+            ("foo", "bar")
+        };
+        let names = names.0.lock().unwrap().clone();
+        assert_eq!(
+            vec![
+                format!("{foo}: Got Hello World"),
+                format!("{bar}: Also got Bye World"),
+                "cool: Me got Hi World".to_string(),
+                "cool: Me got Hi Wombat".to_string(),
+            ],
+            names[..4.min(names.len())].to_vec(),
+            "global={global}"
+        );
+    }
+}
+
+/// Port of `LogCustomLanguageTest`: the message in the constant language.
+#[tokio::test]
+async fn test_log_custom_language() {
+    #[derive(Default)]
+    struct Last(std::sync::Mutex<Option<String>>);
+    impl camel_core::api::spi::log_listener::LogListener for Last {
+        fn on_log(&self, _: &Exchange, _: &str, message: &str) -> String {
+            *self.0.lock().unwrap() = Some(message.to_string());
+            message.to_string()
+        }
+    }
+    let t = ContextTestSupport::new();
+    let last = std::sync::Arc::new(Last::default());
+    t.context.add_log_listener(last.clone());
+    t.context
+        .add_routes(|r: &mut Routes| {
+            r.add(
+                from("direct:start")
+                    .log_language("constant", "Hello ${body}")
+                    .to("mock:foo"),
+            );
+        })
+        .await
+        .unwrap();
+    t.context.start().await.unwrap();
+    t.mock("mock:foo").expected_message_count(1);
+    t.template
+        .send_body("direct:start", "Hello World")
+        .await
+        .unwrap();
+    t.assert_mock_endpoints_satisfied().await;
+    assert_eq!(
+        Some("Hello ${body}".to_string()),
+        last.0.lock().unwrap().clone()
+    );
+}

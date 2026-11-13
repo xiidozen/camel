@@ -1482,10 +1482,16 @@ pub trait Dsl: Sized {
 
     /// Logs the message (in the simple language) at `INFO` with the route id as logger name.
     fn log(self, message: &str) -> Self {
+        self.log_level(LoggingLevel::INFO, message)
+    }
+
+    /// Logs the message at the level (Java `.log(LoggingLevel, message)`).
+    fn log_level(self, level: LoggingLevel, message: &str) -> Self {
         self.eip(Eip::Log {
             message: message.to_string(),
-            level: LoggingLevel::INFO,
+            level,
             log_name: None,
+            log_language: None,
         })
     }
 
@@ -1495,6 +1501,18 @@ pub trait Dsl: Sized {
             message: message.to_string(),
             level,
             log_name: Some(log_name.to_string()),
+            log_language: None,
+        })
+    }
+
+    /// Logs the message, an expression of the language, at `INFO` (Java
+    /// `.log(logLanguage, message)`).
+    fn log_language(self, language: &str, message: &str) -> Self {
+        self.eip(Eip::Log {
+            message: message.to_string(),
+            level: LoggingLevel::INFO,
+            log_name: None,
+            log_language: Some(language.to_string()),
         })
     }
 

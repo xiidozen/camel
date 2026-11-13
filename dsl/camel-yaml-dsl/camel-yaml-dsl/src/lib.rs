@@ -69,7 +69,7 @@ use camel_api::error::{CamelError, CamelResult, ErrorKind, ErrorType};
 use camel_core_model::builder::*;
 use camel_core_model::errorhandler::{ErrorHandlerDefinition, OnExceptionDefinition};
 use camel_core_model::expression::ExpressionDefinition;
-use camel_core_model::processor::ProcessorDefinition;
+use camel_core_model::processor::{Eip, ProcessorDefinition};
 use camel_core_model::route::RouteDefinition;
 /// The YAML tree of the documents (`serde_yaml::Value`).
 pub use serde_yaml::Value as Yaml;
@@ -422,17 +422,22 @@ fn step(
             Some(m) => one(d.log(&m)),
             None => {
                 let message = node.required("message", eip)?;
-                match (node.text("loggingLevel"), node.text("logName")) {
-                    (None, None) => one(d.log(&message)),
-                    (level, name) => {
-                        let level: LoggingLevel = level
-                            .as_deref()
-                            .unwrap_or("INFO")
-                            .parse()
-                            .map_err(|_| error("log: unknown loggingLevel"))?;
-                        one(d.log_with(level, name.as_deref().unwrap_or(""), &message))
+                let level: LoggingLevel = node
+                    .text("loggingLevel")
+                    .as_deref()
+                    .unwrap_or("INFO")
+                    .parse()
+                    .map_err(|_| error("log: unknown loggingLevel"))?;
+                let mut d = match node.text("logName") {
+                    Some(name) => d.log_with(level, &name, &message),
+                    None => d.log_level(level, &message),
+                };
+                if let Some(language) = node.text("logLanguage") {
+                    if let Some(Eip::Log { log_language, .. }) = d.last_mut().map(|l| &mut l.eip) {
+                        *log_language = Some(language);
                     }
                 }
+                one(d)
             }
         },
         "setBody" => one(d.set_body(node.required_expression(eip)?)),

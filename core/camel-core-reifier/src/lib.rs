@@ -10,6 +10,7 @@
 use camel_api::bean_binding::BeanProcessorFactory;
 use camel_api::context::{context_plugin, CamelContext};
 use camel_api::error::{CamelError, CamelResult};
+use camel_api::exchange_constants;
 use camel_api::processor::{
     ExpressionPredicate, Processor, SharedAggregationStrategy, SharedExpression, SharedPredicate,
     SharedProcessor,
@@ -529,13 +530,31 @@ impl<'a> RouteReifier<'a> {
                 message,
                 level,
                 log_name,
+                log_language,
             } => {
-                let e = self.expr(&ExpressionDefinition::language("simple", message))?;
-                Arc::new(LogProcessor::new(
-                    e,
-                    log_name.as_deref().unwrap_or(self.route_id),
-                    *level,
-                ))
+                // Java LogReifier: the language and the logger name of the definition, else of
+                // the global options
+                let language = match log_language {
+                    Some(l) => Some(resolve_placeholders(self.context, l)?),
+                    None => self
+                        .context
+                        .global_option(exchange_constants::LOG_EIP_LANGUAGE),
+                };
+                let language = language.unwrap_or_else(|| "simple".to_string());
+                let e = self.expr(&ExpressionDefinition::language(&language, message))?;
+                let name = match log_name.as_deref().filter(|n| !n.is_empty()) {
+                    Some(n) => Some(resolve_placeholders(self.context, n)?),
+                    None => self.context.global_option(exchange_constants::LOG_EIP_NAME),
+                };
+                let name = match name {
+                    Some(n) => n
+                        .replacen("${class}", "org.apache.camel.processor.LogProcessor", 1)
+                        .replacen("${contextId}", &self.context.name(), 1)
+                        .replacen("${routeId}", self.route_id, 1)
+                        .replacen("${nodeId}", def.id.as_deref().unwrap_or_default(), 1),
+                    None => self.route_id.to_string(),
+                };
+                Arc::new(LogProcessor::new(e, &name, *level))
             }
             Eip::Stop => Arc::new(StopProcessor),
             Eip::Process(r) => resolve_process_ref(self.context, r)?,

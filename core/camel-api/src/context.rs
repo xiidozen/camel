@@ -56,6 +56,13 @@ pub trait CamelContext: Send + Sync {
         Err(CamelError::no_such_language(name))
     }
 
+    /// The global option of the key (Java `getGlobalOption`), such as
+    /// [`LOG_EIP_NAME`](crate::exchange_constants::LOG_EIP_NAME).
+    fn global_option(&self, key: &str) -> Option<String> {
+        let _ = key;
+        None
+    }
+
     /// The listeners of the log messages (Java `CamelContextExtension.getLogListeners`).
     fn log_listeners(&self) -> Vec<Arc<dyn LogListener>> {
         Vec::new()

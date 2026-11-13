@@ -524,8 +524,11 @@ pub enum Eip {
         message: String,
         /// The logging level (default `INFO`).
         level: LoggingLevel,
-        /// The logger name (default the route id).
+        /// The logger name (default the `CamelLogEipName` global option, else the route id).
         log_name: Option<String>,
+        /// The language of the message (default the `CamelLogEipLanguage` global option, else
+        /// simple).
+        log_language: Option<String>,
     },
     /// Stops routing the exchange (`stop`).
     Stop,
