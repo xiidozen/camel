@@ -1374,8 +1374,10 @@ async fn test_process_ref_hash() {
     t.assert_mock_endpoints_satisfied().await;
 }
 
-/// Ports of `UnitOfWorkTest` and `UnitOfWorkWithAsyncFlowTest`: a synchronization added by a
-/// processor is called on completion or failure, with the headers of the exchange.
+/// Ports of `UnitOfWorkTest`, `UnitOfWorkWithAsyncFlowTest` and
+/// `UnitOfWorkSynchronizationAdapterTest` (two synchronizations of one callback each): a
+/// synchronization added by a processor is called on completion or failure, with the headers
+/// of the exchange.
 #[tokio::test]
 async fn test_unit_of_work() {
     use camel_core::api::processor::BoxFuture;
@@ -1399,7 +1401,11 @@ async fn test_unit_of_work() {
             Box::pin(std::future::ready(()))
         }
     }
-    for uri in ["direct:foo", "seda:async"] {
+    for (uri, adapters) in [
+        ("direct:foo", false),
+        ("seda:async", false),
+        ("direct:foo", true),
+    ] {
         for fail in [false, true] {
             let sync = Arc::new(Sync::default());
             let s = sync.clone();
@@ -1407,7 +1413,31 @@ async fn test_unit_of_work() {
                 r.add(from("seda:async").to("direct:foo"));
                 let s = s.clone();
                 r.add(from("direct:foo").process_fn(move |e| {
-                    e.add_on_completion(s.clone());
+                    if adapters {
+                        let (c, f) = (s.clone(), s.clone());
+                        e.add_on_completion(Arc::new(
+                            camel_core::api::spi::synchronization::synchronization_fn(
+                                move |e: &mut Exchange| {
+                                    *c.foo.lock().unwrap() =
+                                        e.message().header("foo").map(|v| v.to_string());
+                                    c.done.notify_one();
+                                },
+                                |_: &mut Exchange| {},
+                            ),
+                        ));
+                        e.add_on_completion(Arc::new(
+                            camel_core::api::spi::synchronization::synchronization_fn(
+                                |_: &mut Exchange| {},
+                                move |e: &mut Exchange| {
+                                    *f.baz.lock().unwrap() =
+                                        e.message().header("baz").map(|v| v.to_string());
+                                    f.done.notify_one();
+                                },
+                            ),
+                        ));
+                    } else {
+                        e.add_on_completion(s.clone());
+                    }
                     if fail {
                         return Err(CamelError::runtime("Failing test!"));
                     }
