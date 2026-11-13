@@ -908,6 +908,21 @@ impl CamelContext for DefaultCamelContext {
                 return Ok(df);
             }
         }
+        // a factory of the registry (Java ResolverHelper.lookupDataFormatFactoryInRegistryWithFallback)
+        let suffixed = format!(
+            "{name}{}",
+            camel_api::spi::data_format::DATA_FORMAT_FACTORY_FALLBACK_SUFFIX
+        );
+        for bean in [name, suffixed.as_str()] {
+            if let Some(f) = self
+                .registry
+                .lookup_by_name(bean)
+                .as_ref()
+                .and_then(camel_api::spi::data_format::data_format_factory_of)
+            {
+                return f(options);
+            }
+        }
         let factory = self
             .data_format_factories
             .read()

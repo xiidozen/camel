@@ -27,6 +27,7 @@ members = [
     "components/camel-dataformat",
     "components/camel-dataset",
     "components/camel-zipfile",
+    "components/camel-csv",
     "components/camel-tarfile",
     "components/camel-jackson",
     "components/camel-jsonpath",
@@ -72,6 +73,7 @@ camel-zip-deflater = { path = "components/camel-zip-deflater" }
 camel-dataformat = { path = "components/camel-dataformat" }
 camel-dataset = { path = "components/camel-dataset" }
 camel-zipfile = { path = "components/camel-zipfile" }
+camel-csv = { path = "components/camel-csv" }
 camel-tarfile = { path = "components/camel-tarfile" }
 camel-jackson = { path = "components/camel-jackson" }
 camel-jsonpath = { path = "components/camel-jsonpath" }

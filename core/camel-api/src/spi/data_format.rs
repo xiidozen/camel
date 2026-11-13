@@ -82,6 +82,26 @@ pub fn data_format_of(value: &Value) -> Option<SharedDataFormat> {
     }
 }
 
+/// The suffix of the name of a data format factory bean (Java
+/// `ResolverHelper.DATA_FORMAT_FACTORY_FALLBACK_SUFFIX`).
+pub const DATA_FORMAT_FACTORY_FALLBACK_SUFFIX: &str = "-dataformat-factory";
+
+/// The data format factory as a value, to bind it in the registry under the name of the data
+/// format or the name with the [`DATA_FORMAT_FACTORY_FALLBACK_SUFFIX`] (Java
+/// `DataFormatFactory` beans); the context then creates the data format with it.
+pub fn data_format_factory_value(factory: DataFormatFactory) -> Value {
+    Value::Object(ObjectRef::new(factory))
+}
+
+/// The data format factory held by a value of the registry (see
+/// [`data_format_factory_value`]).
+pub fn data_format_factory_of(value: &Value) -> Option<DataFormatFactory> {
+    match value {
+        Value::Object(o) => o.downcast_ref::<DataFormatFactory>().cloned(),
+        _ => None,
+    }
+}
+
 /// The bytes of a body to unmarshal (Java converting the body to an `InputStream`): bytes,
 /// text, numbers and booleans as their text.
 ///
