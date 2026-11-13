@@ -516,7 +516,75 @@ impl JsonPathLanguage {
     }
 }
 
+/// The options of the expression from the language options (`suppressExceptions`,
+/// `allowSimple`, `allowEasyPredicate`, `writeAsString`, `unpackArray`, `option`, `source`,
+/// `headerName`).
+///
+/// # Errors
+///
+/// An unknown option or Jayway option.
+pub fn options_of(
+    defaults: &JsonPathOptions,
+    options: &[(String, String)],
+) -> CamelResult<JsonPathOptions> {
+    let mut o = defaults.clone();
+    let flag = |v: &str| v.trim().eq_ignore_ascii_case("true");
+    for (k, v) in options {
+        match k.as_str() {
+            "suppressExceptions" => o.suppress_exceptions = flag(v),
+            "allowSimple" => o.allow_simple = flag(v),
+            "allowEasyPredicate" => o.allow_easy_predicate = flag(v),
+            "writeAsString" => o.write_as_string = flag(v),
+            "unpackArray" => o.unpack_array = flag(v),
+            "source" => o.source = Source::parse(v),
+            "headerName" => o.source = Source::Header(v.to_string()),
+            "option" => {
+                for opt in v.split(',') {
+                    match opt.trim() {
+                        "DEFAULT_PATH_LEAF_TO_NULL" => {
+                            o.path_options.default_path_leaf_to_null = true
+                        }
+                        "ALWAYS_RETURN_LIST" => o.path_options.always_return_list = true,
+                        "SUPPRESS_EXCEPTIONS" => o.path_options.suppress_exceptions = true,
+                        "AS_PATH_LIST" => o.path_options.as_path_list = true,
+                        "REQUIRE_PROPERTIES" | "" => {}
+                        other => {
+                            return Err(CamelError::illegal_argument(format!(
+                                "Unknown jsonpath option: {other}"
+                            )))
+                        }
+                    }
+                }
+            }
+            _ => {
+                return Err(CamelError::illegal_argument(format!(
+                    "Unknown option {k} of the jsonpath language"
+                )))
+            }
+        }
+    }
+    Ok(o)
+}
+
 impl Language for JsonPathLanguage {
+    fn create_expression_with_options(
+        &self,
+        expression: &str,
+        options: &[(String, String)],
+    ) -> CamelResult<SharedExpression> {
+        let o = options_of(&self.options.lock().unwrap(), options)?;
+        Ok(Arc::new(JsonPathExpression::new(expression, false, o)?))
+    }
+
+    fn create_predicate_with_options(
+        &self,
+        expression: &str,
+        options: &[(String, String)],
+    ) -> CamelResult<SharedPredicate> {
+        let o = options_of(&self.options.lock().unwrap(), options)?;
+        Ok(Arc::new(JsonPathExpression::new(expression, true, o)?))
+    }
+
     fn create_predicate(&self, expression: &str) -> CamelResult<SharedPredicate> {
         let options = self.options.lock().unwrap().clone();
         Ok(Arc::new(JsonPathExpression::new(

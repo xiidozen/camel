@@ -288,6 +288,17 @@ fn language_expression(language: &str, value: &Yaml) -> CamelResult<ExpressionDe
     if node.bool("nested")? == Some(true) {
         def = def.nested(true);
     }
+    // the other options are the ones of the language (such as jsonpath suppressExceptions)
+    for (k, v) in &node.entries {
+        if !matches!(
+            k.as_str(),
+            "expression" | "resultType" | "trim" | "pretty" | "nested" | "id"
+        ) {
+            if let Some(v) = text(v) {
+                def = def.language_option(k, v);
+            }
+        }
+    }
     Ok(def)
 }
 

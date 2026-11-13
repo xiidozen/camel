@@ -42,6 +42,9 @@ pub struct ExpressionOptions {
     pub trim: bool,
     /// The JSON or XML text of the value is pretty printed.
     pub pretty: bool,
+    /// The options of the language (Java language properties, such as jsonpath
+    /// `suppressExceptions`).
+    pub language_options: Vec<(String, String)>,
 }
 
 impl ExpressionDefinition {
@@ -68,6 +71,12 @@ impl ExpressionDefinition {
             ExpressionDefinition::Configured { definition, .. } => definition.definition(),
             other => other,
         }
+    }
+
+    /// With an option of the language (such as the jsonpath `writeAsString`).
+    pub fn language_option(self, key: &str, value: impl ToString) -> Self {
+        let (key, value) = (key.to_string(), value.to_string());
+        self.with_options(move |o| o.language_options.push((key, value)))
     }
 
     fn with_options(self, f: impl FnOnce(&mut ExpressionOptions)) -> Self {

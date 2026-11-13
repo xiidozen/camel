@@ -1073,3 +1073,88 @@ async fn test_jsonpath_transform_header_name() {
     assert_eq!(Value::from("Nigel Rees"), l[0]);
     assert_eq!(Value::from("Evelyn Waugh"), l[1]);
 }
+
+/// The Spring XML tests in the XML DSL: `SpringJsonPathCBRTest`, `SpringJsonPathSuppressTest`,
+/// `SpringJsonPathSplitWriteAsStringTest`, `SpringJsonPathTransformHeaderNameTest`,
+/// `SpringJsonPathTransformResultTypeTest` and `SpringJsonPathTransformTest`.
+#[tokio::test]
+async fn test_spring_jsonpath() {
+    let xml = r#"<routes xmlns="http://camel.apache.org/schema/xml-io">
+  <route><from uri="direct:cbr"/><choice>
+    <when><jsonpath>$.store.book[?(@.price &lt; 10)]</jsonpath><to uri="mock:cheap"/></when>
+    <when><jsonpath>$.store.book[?(@.price &lt; 30)]</jsonpath><to uri="mock:average"/></when>
+    <otherwise><to uri="mock:expensive"/></otherwise></choice></route>
+  <route><from uri="direct:suppress"/><choice>
+    <when><jsonpath suppressExceptions="true">person.middlename</jsonpath><to uri="mock:middle"/></when>
+    <otherwise><to uri="mock:other"/></otherwise></choice></route>
+  <route><from uri="direct:split"/><split><jsonpath writeAsString="true">$.content</jsonpath><to uri="mock:line"/><to uri="log:line"/></split></route>
+  <route><from uri="direct:header"/><transform><jsonpath source="header:myHeader">$.store.book[*].author</jsonpath></transform><to uri="mock:authors"/></route>
+  <route><from uri="direct:price"/><transform><jsonpath resultType="Double">$.store.book[0].price</jsonpath></transform><to uri="mock:price"/></route>
+  <route><from uri="direct:transform"/><transform><jsonpath>$.store.book[*].author</jsonpath></transform><to uri="mock:transform"/></route>
+</routes>"#;
+    let c = camel_core::default_context();
+    camel_jsonpath::register(&c);
+    c.add_routes(camel_xml_io_dsl::XmlRoutes::parse(xml).unwrap())
+        .await
+        .unwrap();
+    c.start().await.unwrap();
+    let t = c.create_producer_template();
+    mock(&c, "mock:cheap").expected_message_count(1);
+    mock(&c, "mock:average").expected_message_count(1);
+    mock(&c, "mock:expensive").expected_message_count(1);
+    for f in ["cheap.json", "average.json", "expensive.json"] {
+        t.send_body("direct:cbr", file(f)).await.unwrap();
+    }
+    mock(&c, "mock:middle").expected_message_count(1);
+    mock(&c, "mock:other").expected_message_count(1);
+    t.send_body("direct:suppress", "{\"person\" : {\"firstname\" : \"foo\", \"middlename\" : \"foo2\", \"lastname\" : \"bar\"}}").await.unwrap();
+    t.send_body(
+        "direct:suppress",
+        "{\"person\" : {\"firstname\" : \"foo\", \"lastname\" : \"bar\"}}",
+    )
+    .await
+    .unwrap();
+    mock(&c, "mock:line").expected_bodies_received([
+        "{\"action\":\"CU\",\"id\":123,\"modifiedTime\":\"2015-07-28T11:40:09.520+02:00\"}",
+        "{\"action\":\"CU\",\"id\":456,\"modifiedTime\":\"2015-07-28T11:42:29.510+02:00\"}",
+    ]);
+    t.send_body("direct:split", file("content.json"))
+        .await
+        .unwrap();
+    t.send_body_and_header(
+        "direct:header",
+        "Hello World",
+        "myHeader",
+        file("books.json"),
+    )
+    .await
+    .unwrap();
+    t.send_body("direct:price", file("books.json"))
+        .await
+        .unwrap();
+    t.send_body("direct:transform", file("books.json"))
+        .await
+        .unwrap();
+    for m in [
+        "mock:cheap",
+        "mock:average",
+        "mock:expensive",
+        "mock:middle",
+        "mock:other",
+        "mock:line",
+    ] {
+        mock(&c, m).assert_is_satisfied().await;
+    }
+    for m in ["mock:authors", "mock:transform"] {
+        let Value::List(l) = mock(&c, m).received_exchanges()[0].message().body().clone() else {
+            panic!("a list")
+        };
+        assert_eq!(Value::from("Nigel Rees"), l[0], "{m}");
+    }
+    assert!(matches!(
+        mock(&c, "mock:price").received_exchanges()[0]
+            .message()
+            .body(),
+        Value::Float(_)
+    ));
+}

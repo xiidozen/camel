@@ -22,6 +22,36 @@ pub trait Language: Send + Sync {
     /// Returns an error (typically `ExpressionIllegalSyntaxException`) if the text is invalid.
     fn create_expression(&self, expression: &str) -> CamelResult<SharedExpression>;
 
+    /// Creates the expression with the options of the language (Java language properties,
+    /// such as the `suppressExceptions` of jsonpath); by default the options are ignored.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the expression or an option is invalid.
+    fn create_expression_with_options(
+        &self,
+        expression: &str,
+        options: &[(String, String)],
+    ) -> CamelResult<SharedExpression> {
+        let _ = options;
+        self.create_expression(expression)
+    }
+
+    /// Creates the predicate with the options of the language; by default the options are
+    /// ignored.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the predicate or an option is invalid.
+    fn create_predicate_with_options(
+        &self,
+        expression: &str,
+        options: &[(String, String)],
+    ) -> CamelResult<SharedPredicate> {
+        let _ = options;
+        self.create_predicate(expression)
+    }
+
     /// Gives the language its context when the context creates it (Java `CamelContextAware`);
     /// the default ignores it.
     fn set_camel_context(&self, context: Weak<dyn CamelContext>) {

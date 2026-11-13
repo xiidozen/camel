@@ -133,7 +133,24 @@ fn configured_expression(
             Ok(Value::Bool(p.matches(e)?))
         }));
     }
-    let mut exp = reify_expression(context, definition)?;
+    let mut exp = match definition {
+        // the options of the language
+        ExpressionDefinition::Language {
+            language,
+            expression,
+        } if !options.language_options.is_empty() => {
+            let expression = resolve_placeholders(context, expression)?
+                .trim()
+                .to_string();
+            let language = resolve_placeholders(context, language)?;
+            let e = context
+                .resolve_language(&language)?
+                .create_expression_with_options(&expression, &options.language_options)?;
+            e.init(context)?;
+            e
+        }
+        other => reify_expression(context, other)?,
+    };
     let name = definition.to_string();
     if options.nested {
         let language = context.resolve_language(definition.language_name().unwrap_or("simple"))?;
@@ -228,6 +245,33 @@ pub fn reify_predicate(
         ExpressionDefinition::Predicate(p) => {
             p.init(context)?;
             Ok(p.clone())
+        }
+        ExpressionDefinition::Configured {
+            definition,
+            options,
+        } if options.result_type.is_none()
+            && !options.nested
+            && !options.trim
+            && !options.pretty =>
+        {
+            // only the options of the language
+            match definition.as_ref() {
+                ExpressionDefinition::Language {
+                    language,
+                    expression,
+                } => {
+                    let expression = resolve_placeholders(context, expression)?
+                        .trim()
+                        .to_string();
+                    let language = resolve_placeholders(context, language)?;
+                    let p = context
+                        .resolve_language(&language)?
+                        .create_predicate_with_options(&expression, &options.language_options)?;
+                    p.init(context)?;
+                    Ok(p)
+                }
+                other => reify_predicate(context, other),
+            }
         }
         ExpressionDefinition::Configured { .. } => {
             let e = reify_expression(context, def)?;
