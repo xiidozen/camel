@@ -19,6 +19,7 @@ pub mod object_helper;
 pub mod pattern_helper;
 pub mod resource_helper;
 pub mod route_policy_support;
+pub mod scheduled_poll;
 pub mod simple_registry;
 pub mod throttling;
 pub mod tokenizer;

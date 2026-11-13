@@ -101,6 +101,7 @@ dependencies = [
  "camel-log",
  "camel-mock",
  "camel-ref",
+ "camel-scheduler",
  "camel-seda",
  "camel-stub",
  "camel-support",
@@ -251,6 +252,16 @@ version = "4.23.0"
 dependencies = [
  "camel-api",
  "camel-util",
+]
+
+[[package]]
+name = "camel-scheduler"
+version = "4.23.0"
+dependencies = [
+ "camel-api",
+ "camel-support",
+ "camel-util",
+ "log",
 ]
 
 [[package]]

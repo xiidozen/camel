@@ -20,6 +20,7 @@ members = [
     "components/camel-ref",
     "components/camel-browse",
     "components/camel-language",
+    "components/camel-scheduler",
     "components/camel-bean",
     "components/camel-timer",
     "dsl/camel-yaml-dsl/camel-yaml-dsl",
@@ -55,6 +56,7 @@ camel-stub = { path = "components/camel-stub" }
 camel-ref = { path = "components/camel-ref" }
 camel-browse = { path = "components/camel-browse" }
 camel-language = { path = "components/camel-language" }
+camel-scheduler = { path = "components/camel-scheduler" }
 camel-bean = { path = "components/camel-bean" }
 camel-timer = { path = "components/camel-timer" }
 camel-yaml-dsl = { path = "dsl/camel-yaml-dsl/camel-yaml-dsl" }

@@ -25,6 +25,7 @@ camel-stub = { workspace = true }
 camel-ref = { workspace = true }
 camel-browse = { workspace = true }
 camel-language = { workspace = true }
+camel-scheduler = { workspace = true }
 camel-bean = { workspace = true }
 camel-timer = { workspace = true }
 camel-file = { workspace = true }
