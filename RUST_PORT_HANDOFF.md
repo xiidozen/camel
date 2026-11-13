@@ -150,6 +150,12 @@ Crates live **in the directory of the Maven module they replace** (`core/camel-a
   Done: ThrottlingInflightRoutePolicy, ThrottlingExceptionRoutePolicy (camel-support `throttling`),
   DurationRoutePolicy (base engine). The inflight repository is a context plugin
   (`camel_api::spi::inflight`). Pending: scheduled route policies, FlipRoutePolicy-like tests, consumer status.
+- Engine semantics fixed while porting the small `processor` tests: the exchange route stack
+  (`Exchange::push_route`/`route_id`, `${routeId}` and the failure route id are the current route), a `doTry` is
+  not wrapped in the error handler, the routing slip/dynamic router send to each endpoint through the error handler,
+  `Exchange.FIELD` names resolve to constants (`exchange_constants::lookup`), `throw_exception_of(kind, message)`.
+  The small processor tests are ported into `tests/processor/simple_routes_test.rs` (continue with the next sizes,
+  `for f in *Test.java; do wc -l ...` in `src/test/java/.../processor`).
 - **Next:** continue the file component (`components/camel-file`, **in progress**, tests in
   `core/camel-core/tests/component/file`, `TestDirectory` in the test support, mock `expected_file_exists`). Done:
   producer (fileName/overrule, fileExist modes with moveExisting, temp names, done files, forceWrites,
