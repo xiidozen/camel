@@ -74,10 +74,14 @@ impl SimpleLanguage {
         })
     }
 
-    /// The custom functions of the context.
+    /// The custom functions of the context, else the ones of the parsing in progress (a
+    /// language without context parsing a nested expression).
     fn custom_functions(&self) -> Option<Arc<SimpleFunctionRegistry>> {
-        let context = self.context.read().unwrap().as_ref()?.upgrade()?;
-        context_plugin::<SimpleFunctionRegistry>(context.as_ref())
+        let of_context = || {
+            let context = self.context.read().unwrap().as_ref()?.upgrade()?;
+            context_plugin::<SimpleFunctionRegistry>(context.as_ref())
+        };
+        of_context().or_else(super::functions::current_custom_functions)
     }
 
     /// Parses the predicate (without the cache).

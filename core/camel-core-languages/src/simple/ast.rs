@@ -580,10 +580,18 @@ impl CompositeFunction {
             }
         }
         let syntax = |err: ParserError| super::illegal_syntax(&self.expression, &err);
-        if let Some(t) = try_parse_ternary(&sb, self.index).map_err(syntax)? {
-            return Ok(t);
-        }
-        create_function(&sb, self.index).map_err(syntax)
+        // the custom functions of the context of the exchange (parsed at runtime)
+        let registry = super::functions::current_custom_functions().or_else(|| {
+            camel_api::context::context_plugin::<
+                camel_api::spi::simple_function::SimpleFunctionRegistry,
+            >(e.context().as_ref())
+        });
+        super::functions::with_custom_functions(registry, || {
+            if let Some(t) = try_parse_ternary(&sb, self.index).map_err(syntax)? {
+                return Ok(t);
+            }
+            create_function(&sb, self.index).map_err(syntax)
+        })
     }
 }
 

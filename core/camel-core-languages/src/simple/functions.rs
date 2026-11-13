@@ -183,6 +183,11 @@ pub fn with_custom_functions<R>(
     answer
 }
 
+/// The registry of the custom functions of the parsing in progress, if any.
+pub fn current_custom_functions() -> Option<Arc<SimpleFunctionRegistry>> {
+    CUSTOM_FUNCTIONS.with(|c| c.borrow().clone())
+}
+
 /// A call of a custom function without the `function(...)` wrapper: `name` or
 /// `name(arguments)` of a registered function.
 fn custom_function(function: &str, index: usize) -> ParseResult<Option<SharedExpression>> {
