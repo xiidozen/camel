@@ -120,7 +120,18 @@ pub fn easy_predicate(predicate: &str) -> String {
 }
 
 /// The hint for a comparison written on a path (Java `JsonPathExpression.comparisonHint`).
-fn comparison_hint(exp: &str) -> Option<String> {
+///
+/// # Examples
+///
+/// ```
+/// use camel_jsonpath::comparison_hint;
+///
+/// let hint = comparison_hint("$.status == 'paid'").unwrap();
+/// assert!(hint.contains("$[?(@.status == 'paid')]"));
+/// assert!(hint.contains("${body[status]} == 'paid'"));
+/// assert!(comparison_hint("$.store.book[?(@.price < 10)]").is_none());
+/// ```
+pub fn comparison_hint(exp: &str) -> Option<String> {
     if exp.contains("[?(") || !has_operator(exp) {
         return None;
     }
@@ -307,6 +318,14 @@ impl JsonPathExpression {
 
     /// The JSON of the source.
     fn json(&self, e: &Exchange) -> CamelResult<Value> {
+        if let Source::Variable(v) = &self.options.source {
+            if e.variable(v).is_none() {
+                return Err(CamelError::camel_exchange(
+                    &format!("No '{v}' variable available"),
+                    e,
+                ));
+            }
+        }
         let input = self.options.source.value(e);
         let encoding = e
             .message()
@@ -316,7 +335,6 @@ impl JsonPathExpression {
             Value::Map(_) | Value::List(_) => input,
             Value::Text(t) => camel_support::json::parse(&t)?,
             Value::Bytes(b) => camel_support::json::parse(&decode_json(&b, encoding.as_deref()))?,
-            Value::Int(_) | Value::Float(_) | Value::Bool(_) => input,
             Value::Null => {
                 let message = if self.options.source == Source::Body {
                     "The jsonpath expression got no message body to evaluate (the body is null): a route reached with direct: has the body of its caller, so when the caller has none, read the data first - setBody with constant: resource:file:data.json for a known file, or poll:, pollEnrich or a from: consumer for one that is not".to_string()
@@ -334,11 +352,14 @@ impl JsonPathExpression {
                 } else {
                     (self.options.source.describe(), "it")
                 };
+                let type_name = match &other {
+                    Value::Int(_) => "java.lang.Integer",
+                    Value::Float(_) => "java.lang.Double",
+                    Value::Bool(_) => "java.lang.Boolean",
+                    o => o.type_name(),
+                };
                 return Err(CamelError::camel_exchange(
-                    &format!(
-                        "Cannot read {input} as supported JSON value ({what} has type: {})",
-                        other.type_name()
-                    ),
+                    &format!("Cannot read {input} as supported JSON value ({what} has type: {type_name})"),
                     e,
                 ));
             }

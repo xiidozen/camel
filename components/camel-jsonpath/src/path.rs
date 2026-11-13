@@ -574,15 +574,18 @@ impl JsonPath {
             }
             nodes = next;
         }
-        let result = if definite && !options.always_return_list {
+        // a function applies to each node reaching it (Jayway FunctionPathToken)
+        if let Some(f) = function {
+            nodes = nodes
+                .iter()
+                .map(|n| function_of(&f, n))
+                .collect::<CamelResult<_>>()?;
+        }
+        Ok(if definite && !options.always_return_list {
             nodes.into_iter().next().unwrap_or(Value::Null)
         } else {
             Value::List(nodes)
-        };
-        match function {
-            Some(f) => function_of(&f, &result),
-            None => Ok(result),
-        }
+        })
     }
 }
 
