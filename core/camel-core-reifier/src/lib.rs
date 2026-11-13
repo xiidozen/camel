@@ -84,8 +84,9 @@ pub fn reify_expression(
             expression,
         } => {
             let expression = resolve_placeholders(context, expression)?;
+            let language = resolve_placeholders(context, language)?;
             let e = context
-                .resolve_language(language)?
+                .resolve_language(&language)?
                 .create_expression(&expression)?;
             e.init(context)?;
             Ok(e)
@@ -206,8 +207,9 @@ pub fn reify_predicate(
             expression,
         } => {
             let expression = resolve_placeholders(context, expression)?;
+            let language = resolve_placeholders(context, language)?;
             let p = context
-                .resolve_language(language)?
+                .resolve_language(&language)?
                 .create_predicate(&expression)?;
             p.init(context)?;
             Ok(p)

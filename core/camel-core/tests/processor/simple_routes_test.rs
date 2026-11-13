@@ -1173,3 +1173,65 @@ async fn test_filter_status_property() {
         t.assert_mock_endpoints_satisfied().await;
     }
 }
+
+/// Ports of `SimpleMockTest` and `SimpleMockSampleTest`.
+#[tokio::test]
+async fn test_simple_mock() {
+    let t = ContextTestSupport::with_routes(|r: &mut Routes| {
+        r.add(
+            from("direct:start")
+                .to("log:foo")
+                .to("log:bar")
+                .to("mock:result"),
+        );
+    })
+    .await;
+    assert_eq!(1, t.context.routes().len());
+    let mock = t.mock("mock:result");
+    mock.expected_bodies_received(["Hello World", "Bye World"]);
+    t.template
+        .send_body("direct:start", "Hello World")
+        .await
+        .unwrap();
+    t.template
+        .send_body("direct:start", "Bye World")
+        .await
+        .unwrap();
+    mock.assert_is_satisfied().await;
+    mock.reset();
+    mock.expected_message_count(1000);
+    for _ in 0..1000 {
+        t.template
+            .send_body("direct:start", "Hello World")
+            .await
+            .unwrap();
+    }
+    mock.assert_is_satisfied().await;
+}
+
+/// Port of `SetBodyLanguagePlaceholderTest`: the language and its expression from properties.
+#[tokio::test]
+async fn test_set_body_language_placeholder() {
+    let t = ContextTestSupport::new();
+    t.context
+        .properties()
+        .add_initial_property("mylan", "simple");
+    t.context
+        .properties()
+        .add_initial_property("myexp", "Hello ${body}");
+    t.context
+        .add_routes(|r: &mut Routes| {
+            r.add(
+                from("direct:start")
+                    .set_body(ExpressionDefinition::language("{{mylan}}", "{{myexp}}"))
+                    .to("mock:result"),
+            );
+        })
+        .await
+        .unwrap();
+    t.context.start().await.unwrap();
+    t.mock("mock:result")
+        .expected_bodies_received(["Hello World"]);
+    t.template.send_body("direct:start", "World").await.unwrap();
+    t.assert_mock_endpoints_satisfied().await;
+}
