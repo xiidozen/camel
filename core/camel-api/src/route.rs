@@ -7,6 +7,34 @@ use crate::service::StatefulService;
 use camel_util::value::ValueMap;
 use std::sync::Arc;
 
+/// The phase of a route operation that failed (Java `RouteError.Phase`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RouteErrorPhase {
+    /// Starting the route.
+    Start,
+    /// Stopping the route.
+    Stop,
+    /// Suspending the route.
+    Suspend,
+    /// Resuming the route.
+    Resume,
+    /// Shutting down the route.
+    Shutdown,
+    /// Removing the route.
+    Remove,
+}
+
+/// The last error of a route (Java `RouteError`).
+#[derive(Debug, Clone)]
+pub struct RouteError {
+    /// The phase that failed.
+    pub phase: RouteErrorPhase,
+    /// The error.
+    pub exception: crate::error::CamelError,
+    /// Whether the route is unhealthy because of the error.
+    pub unhealthy: bool,
+}
+
 /// A running route.
 pub trait Route: StatefulService {
     /// The route id.

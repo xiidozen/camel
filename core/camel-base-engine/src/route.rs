@@ -163,9 +163,20 @@ pub struct DefaultRoute {
     properties: ValueMap,
     policies: Vec<SharedRoutePolicy>,
     this: Arc<OnceLock<Weak<DefaultRoute>>>,
+    last_error: Mutex<Option<camel_api::route::RouteError>>,
 }
 
 impl DefaultRoute {
+    /// The last error of the route, if any (Java `getLastError`).
+    pub fn last_error(&self) -> Option<camel_api::route::RouteError> {
+        self.last_error.lock().unwrap().clone()
+    }
+
+    /// Sets (or clears) the last error of the route (Java `setLastError`).
+    pub fn set_last_error(&self, error: Option<camel_api::route::RouteError>) {
+        *self.last_error.lock().unwrap() = error;
+    }
+
     /// Creates the route from the spec, with the resolved endpoint.
     pub fn new(id: String, custom_id: bool, endpoint: SharedEndpoint, spec: RouteSpec) -> Self {
         let this = Arc::new(OnceLock::new());
@@ -191,6 +202,7 @@ impl DefaultRoute {
             properties: spec.properties,
             policies: spec.route_policies,
             this,
+            last_error: Mutex::new(None),
         }
     }
 

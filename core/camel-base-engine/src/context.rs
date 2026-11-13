@@ -542,6 +542,24 @@ impl DefaultCamelContext {
         self.stop_route_with_events(&route).await
     }
 
+    /// Stops the route and marks it as failed with the cause (Java
+    /// `RouteController.stopRoute(id, cause)`): its last error is the cause, in the stop phase,
+    /// unhealthy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if there is no such route or it fails to stop.
+    pub async fn stop_route_with_cause(&self, id: &str, cause: CamelError) -> CamelResult<()> {
+        let route = self.mandatory_route(id)?;
+        let r = self.stop_route_with_events(&route).await;
+        route.set_last_error(Some(camel_api::route::RouteError {
+            phase: camel_api::route::RouteErrorPhase::Stop,
+            exception: cause,
+            unhealthy: true,
+        }));
+        r
+    }
+
     /// Suspends the route (Java `RouteController.suspendRoute`).
     ///
     /// # Errors
@@ -587,9 +605,13 @@ impl DefaultCamelContext {
         }
     }
 
-    /// The status of the route.
+    /// The status of the route; a route not started yet is `Stopped` (Java
+    /// `RouteController.getRouteStatus`).
     pub fn route_status(&self, id: &str) -> Option<ServiceStatus> {
-        self.route(id).map(|r| r.status())
+        self.route(id).map(|r| match r.status() {
+            ServiceStatus::Initializing | ServiceStatus::Initialized => ServiceStatus::Stopped,
+            s => s,
+        })
     }
 
     /// Starts the context: the components, then the auto started routes in startup order.

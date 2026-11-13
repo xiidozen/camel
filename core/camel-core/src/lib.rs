@@ -101,6 +101,10 @@ pub fn register_core_components(context: &DefaultCamelContext) {
         Arc::new(|| Arc::new(camel_scheduler::SchedulerComponent::new()) as SharedComponent),
     );
     context.register_component_factory(
+        "controlbus",
+        Arc::new(|| Arc::new(camel_controlbus::ControlBusComponent::new()) as SharedComponent),
+    );
+    context.register_component_factory(
         "ref",
         Arc::new(|| Arc::new(camel_ref::RefComponent::new()) as SharedComponent),
     );

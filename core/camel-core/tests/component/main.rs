@@ -6,6 +6,7 @@ mod support;
 
 mod bean;
 mod browse;
+mod controlbus;
 mod file;
 mod language;
 mod log;

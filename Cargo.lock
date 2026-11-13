@@ -83,6 +83,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "camel-controlbus"
+version = "4.23.0"
+dependencies = [
+ "camel-api",
+ "camel-base-engine",
+ "camel-support",
+ "camel-util",
+ "log",
+ "tokio",
+]
+
+[[package]]
 name = "camel-core"
 version = "4.23.0"
 dependencies = [
@@ -90,6 +102,7 @@ dependencies = [
  "camel-base-engine",
  "camel-bean",
  "camel-browse",
+ "camel-controlbus",
  "camel-core-engine",
  "camel-core-languages",
  "camel-core-model",

@@ -211,10 +211,8 @@ async fn routes_start_in_order_and_stop_in_reverse() {
     context.start().await.unwrap();
     assert_eq!(vec!["start b", "start a"], *log.lock().unwrap());
     assert_eq!(Some(ServiceStatus::Started), context.route_status("route1"));
-    assert_eq!(
-        Some(ServiceStatus::Initializing),
-        context.route_status("manual")
-    );
+    // a route not started yet is stopped (Java getRouteStatus)
+    assert_eq!(Some(ServiceStatus::Stopped), context.route_status("manual"));
     assert!(context.route("route1").unwrap().consumer().is_some());
     assert!(!context.route("route1").unwrap().is_custom_id());
     assert!(context.route("manual").unwrap().is_custom_id());
