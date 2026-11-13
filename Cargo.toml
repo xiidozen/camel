@@ -33,6 +33,7 @@ members = [
     "components/camel-gson",
     "components/camel-jsonb",
     "components/camel-fastjson",
+    "components/camel-jsoup",
     "components/camel-tarfile",
     "components/camel-jackson",
     "components/camel-jsonpath",
@@ -84,6 +85,7 @@ camel-toon = { path = "components/camel-toon" }
 camel-gson = { path = "components/camel-gson" }
 camel-jsonb = { path = "components/camel-jsonb" }
 camel-fastjson = { path = "components/camel-fastjson" }
+camel-jsoup = { path = "components/camel-jsoup" }
 camel-tarfile = { path = "components/camel-tarfile" }
 camel-jackson = { path = "components/camel-jackson" }
 camel-jsonpath = { path = "components/camel-jsonpath" }
