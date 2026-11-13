@@ -4,7 +4,8 @@
 //! `OnCompletionInvalidConfiguredTest`, `OnCompletionFailAndOkTest`, `OnCompletionMoreGlobalTest`,
 //! `OnCompletionMoreGlobalRouteCompletionTest`, `OnCompletionParallelProcessingTest`,
 //! `OnCompletionShouldBeLastTest`, `OnCompletionContainsTest`,
-//! `OnCompletionAfterChainedSedaRoutesTest` and `OnCompletionBeforeChainedSedaRoutesTest`.
+//! `OnCompletionAfterChainedSedaRoutesTest`, `OnCompletionBeforeChainedSedaRoutesTest` and
+//! `OnCompletionAndInterceptGlobalTest`.
 
 use crate::support::{caught_is, cause_of, ContextTestSupport};
 use camel_core::api::exchange_constants::ON_COMPLETION;
@@ -709,4 +710,38 @@ async fn test_on_completion_before_chained_seda_routes() {
     ]);
     t.template.send_body("direct:a", body).await.unwrap();
     t.assert_mock_endpoints_satisfied().await;
+}
+
+// OnCompletionAndInterceptGlobalTest
+#[tokio::test]
+async fn test_on_completion_and_intercept_global() {
+    for kaboom in [false, true] {
+        let t = ContextTestSupport::with_routes(|r: &mut Routes| {
+            r.intercept(|i| i.to("mock:intercept"));
+            r.on_completion(|c| c.to("log:global").to("mock:sync"));
+            r.add(
+                from("direct:start")
+                    .process_fn(my_processor)
+                    .to("mock:result"),
+            );
+        })
+        .await;
+        t.mock("mock:intercept").expected_minimum_message_count(4);
+        let sync = t.mock("mock:sync");
+        sync.expected_property_received(ON_COMPLETION, true);
+        if kaboom {
+            sync.expected_message_count(1);
+            t.mock("mock:result").expected_message_count(0);
+            assert_kaboom(&t).await;
+        } else {
+            sync.expected_bodies_received(["Bye World"]);
+            t.mock("mock:result")
+                .expected_bodies_received(["Bye World"]);
+            t.template
+                .send_body("direct:start", "Hello World")
+                .await
+                .unwrap();
+        }
+        t.assert_mock_endpoints_satisfied().await;
+    }
 }

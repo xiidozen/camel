@@ -1224,6 +1224,18 @@ pub fn reify_route(
                 e,
             )
         })?;
+        // the onCompletion is a step of the route that is intercepted too (Java)
+        let p: SharedProcessor = if reifier.intercepts.intercepts.is_empty() {
+            p
+        } else {
+            Arc::new(InterceptProcessor::new(
+                reifier.intercepts.intercepts.clone(),
+                route_id,
+                &reifier.intercepts.route_uri,
+                None,
+                p,
+            ))
+        };
         processors.push(p);
     }
     let steps: Vec<ProcessorDefinition> = def

@@ -1344,3 +1344,98 @@ async fn test_dead_letter_channel_new_exception() {
         .await
         .unwrap();
 }
+
+/// Port of `ProcessRefHashTest`: `#` refers to a processor bean.
+#[tokio::test]
+async fn test_process_ref_hash() {
+    let t = ContextTestSupport::new();
+    let echo = camel_bean::processor_value(std::sync::Arc::new(
+        camel_core::api::processor::processor_fn(|e: &mut Exchange| {
+            let body = e.message().body().to_string();
+            e.message_mut().set_body(format!("{body}{body}"));
+            Ok(())
+        }),
+    ));
+    t.context.registry().unwrap().bind("myEcho", echo).unwrap();
+    t.context
+        .add_routes(|r: &mut Routes| {
+            r.add(
+                from("direct:start")
+                    .process_ref("#myEcho")
+                    .to("mock:result"),
+            );
+        })
+        .await
+        .unwrap();
+    t.context.start().await.unwrap();
+    t.mock("mock:result")
+        .expected_bodies_received(["CamelCamel"]);
+    t.template.send_body("direct:start", "Camel").await.unwrap();
+    t.assert_mock_endpoints_satisfied().await;
+}
+
+/// Ports of `UnitOfWorkTest` and `UnitOfWorkWithAsyncFlowTest`: a synchronization added by a
+/// processor is called on completion or failure, with the headers of the exchange.
+#[tokio::test]
+async fn test_unit_of_work() {
+    use camel_core::api::processor::BoxFuture;
+    use camel_core::api::spi::synchronization::Synchronization;
+    use std::sync::{Arc, Mutex};
+    #[derive(Default)]
+    struct Sync {
+        foo: Mutex<Option<String>>,
+        baz: Mutex<Option<String>>,
+        done: tokio::sync::Notify,
+    }
+    impl Synchronization for Sync {
+        fn on_complete<'a>(&'a self, e: &'a mut Exchange) -> BoxFuture<'a, ()> {
+            *self.foo.lock().unwrap() = e.message().header("foo").map(|v| v.to_string());
+            self.done.notify_one();
+            Box::pin(std::future::ready(()))
+        }
+        fn on_failure<'a>(&'a self, e: &'a mut Exchange) -> BoxFuture<'a, ()> {
+            *self.baz.lock().unwrap() = e.message().header("baz").map(|v| v.to_string());
+            self.done.notify_one();
+            Box::pin(std::future::ready(()))
+        }
+    }
+    for uri in ["direct:foo", "seda:async"] {
+        for fail in [false, true] {
+            let sync = Arc::new(Sync::default());
+            let s = sync.clone();
+            let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+                r.add(from("seda:async").to("direct:foo"));
+                let s = s.clone();
+                r.add(from("direct:foo").process_fn(move |e| {
+                    e.add_on_completion(s.clone());
+                    if fail {
+                        return Err(CamelError::runtime("Failing test!"));
+                    }
+                    Ok(())
+                }));
+            })
+            .await;
+            let mut e = t
+                .template
+                .create_exchange(uri, ExchangePattern::InOnly)
+                .unwrap();
+            e.message_mut().set_header("foo", "bar");
+            e.message_mut().set_header("baz", "bat");
+            e.message_mut().set_body("<hello>world!</hello>");
+            let notified = sync.done.notified();
+            let _ = t.template.send(uri, e).await;
+            tokio::time::timeout(std::time::Duration::from_secs(5), notified)
+                .await
+                .expect("Exchange did not complete.");
+            let (foo, baz) = (
+                sync.foo.lock().unwrap().clone(),
+                sync.baz.lock().unwrap().clone(),
+            );
+            if fail {
+                assert_eq!((None, Some("bat".to_string())), (foo, baz), "{uri}");
+            } else {
+                assert_eq!((Some("bar".to_string()), None), (foo, baz), "{uri}");
+            }
+        }
+    }
+}
