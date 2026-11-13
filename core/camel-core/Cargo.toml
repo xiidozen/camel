@@ -23,6 +23,7 @@ camel-log = { workspace = true }
 camel-seda = { workspace = true }
 camel-stub = { workspace = true }
 camel-ref = { workspace = true }
+camel-browse = { workspace = true }
 camel-bean = { workspace = true }
 camel-timer = { workspace = true }
 camel-file = { workspace = true }

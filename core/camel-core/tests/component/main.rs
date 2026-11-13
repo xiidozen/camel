@@ -5,6 +5,7 @@
 mod support;
 
 mod bean;
+mod browse;
 mod file;
 mod log;
 mod properties;
