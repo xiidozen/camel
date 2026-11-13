@@ -1,0 +1,21 @@
+[package]
+name = "camel-tarfile"
+description = "Camel :: Tar File — tar archives (port of components/camel-tarfile)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+camel-api = { workspace = true }
+camel-base-engine = { workspace = true }
+camel-util = { workspace = true }
+log = "0.4"
+tar = "0.4"
+
+[dev-dependencies]
+camel-base64 = { workspace = true }
+camel-core = { workspace = true }
+camel-xml-io-dsl = { workspace = true }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }

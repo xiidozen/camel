@@ -589,7 +589,7 @@ progress and what is still to do. Update it in the same commit as each port.
 | `components/camel-swift` | 5 | 4 | todo | |
 | `components/camel-syslog` | 9 | 12 | todo | |
 | `components/camel-tahu` | 19 | 9 | todo | |
-| `components/camel-tarfile` | 5 | 16 | todo | |
+| `components/camel-tarfile` | 5 | 16 | done | Rust crate `camel-tarfile` (on the tar crate): `TarFileDataFormat` (as zipFile: one entry, preservePathElements, usingIterator messages with `CamelTarFileEntryName`, allowEmptyDirectory, maxDecompressedSize), `tar_splitter`, `TarAggregationStrategy` (in memory archive, appends the non empty bodies), `register(context)`. Tests: the data format, Spring XML (XML DSL), splitter, strip path, split and delete and aggregation tests (Java removed; the optimistic locking repository case is not ported). |
 | `components/camel-telegram` | 151 | 46 | todo | |
 | `components/camel-telemetry` | 113 | 94 | todo | |
 | `components/camel-telemetry-dev` | 5 | 15 | todo | |
