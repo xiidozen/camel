@@ -372,6 +372,7 @@ impl<'a> Task<'a> {
                     if let Err(e) = p.process(exchange).await {
                         exchange.set_exception(Some(e));
                     }
+                    Self::fatal_fallback(exchange, is_dlc);
                     self.prepare_after_failure(exchange, is_dlc, should_handle, should_continue);
                     let handled = exchange.error_handler_handled() == Some(true);
                     notify(
@@ -506,6 +507,44 @@ impl<'a> Task<'a> {
             }
             exchange.set_error_handler_handled(Some(false));
             self.restore_caught(exchange);
+        }
+    }
+
+    /// A new exception of the failure processor shadows the caught one; it is handled as
+    /// configured by a dead letter channel, else it fails the exchange (Java
+    /// `FatalFallbackErrorHandler`).
+    fn fatal_fallback(exchange: &mut Exchange, is_dlc: bool) {
+        let Some(new) = exchange.exception().cloned() else {
+            return;
+        };
+        let previous = crate::try_catch::exception_caught(exchange);
+        let msg = format!(
+            "Exception occurred while trying to handle previously thrown exception on exchangeId: {}.",
+            exchange.exchange_id()
+        );
+        let level = if is_dlc {
+            log::Level::Warn
+        } else {
+            log::Level::Error
+        };
+        match previous {
+            Some(p) => log::log!(
+                level,
+                "{msg} The previous and the new exception will be logged in the following.\n\\--> Previous exception on exchangeId: {}: {p}\n\\--> New exception on exchangeId: {}: {new}",
+                exchange.exchange_id(),
+                exchange.exchange_id()
+            ),
+            None => log::log!(
+                level,
+                "{msg}\n\\--> New exception on exchangeId: {}: {new}",
+                exchange.exchange_id()
+            ),
+        }
+        exchange.set_property(EXCEPTION_CAUGHT, caught_value(&new));
+        if is_dlc {
+            exchange.set_error_handler_handled(None);
+        } else {
+            exchange.set_error_handler_handled(Some(false));
         }
     }
 

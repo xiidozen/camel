@@ -1698,3 +1698,162 @@ async fn test_breadcrumb() {
         t.assert_mock_endpoints_satisfied().await;
     }
 }
+
+/// Port of `DoTryCatchWithSplitterTest`.
+#[tokio::test]
+async fn test_do_try_catch_with_splitter() {
+    let t = ContextTestSupport::with_routes(|r: &mut Routes| {
+        r.add(from("direct:start").do_try(|t| {
+            t.split(body().tokenize(","), |s| s.to("direct:line"))
+                .do_catch(ErrorKind::IllegalArgument, |c| c.to("mock:iae"))
+        }));
+        r.add(from("direct:line").choice(|c| {
+            c.when(body().contains("Donkey"), |w| {
+                w.throw_exception(CamelError::illegal_argument("Donkey not allowed"))
+            })
+            .otherwise(|o| o.to("mock:line"))
+        }));
+    })
+    .await;
+    t.mock("mock:line")
+        .expected_bodies_received(["Tiger", "Camel"]);
+    t.mock("mock:iae")
+        .expected_bodies_received(["Tiger,Camel,Donkey"]);
+    t.template
+        .send_body("direct:start", "Tiger,Camel,Donkey")
+        .await
+        .unwrap();
+    t.assert_mock_endpoints_satisfied().await;
+}
+
+/// Port of `FailOverLoadBalanceNotInheritedErrorHandlerTest`.
+#[tokio::test]
+async fn test_fail_over_not_inherited_error_handler() {
+    let t = ContextTestSupport::with_routes(|r: &mut Routes| {
+        r.error_handler(dead_letter_channel("mock:dead"));
+        let failover = LoadBalancerDefinition::Failover {
+            exceptions: Vec::new(),
+            round_robin: true,
+            sticky: false,
+            maximum_failover_attempts: 3,
+        };
+        r.add(
+            from("direct:start")
+                .load_balance(failover, |b| {
+                    b.throw_exception(CamelError::illegal_argument(""))
+                        .throw_exception(CamelError::new(ErrorKind::Io, ""))
+                        .throw_exception(CamelError::new(ErrorKind::Io, "Connection refused"))
+                })
+                .to("mock:result"),
+        );
+    })
+    .await;
+    t.mock("mock:result").expected_message_count(0);
+    t.mock("mock:dead").expected_message_count(1);
+    t.template
+        .send_body("direct:start", "Hello World")
+        .await
+        .unwrap();
+    t.assert_mock_endpoints_satisfied().await;
+}
+
+/// Port of `SplitterUseOriginalLoopTest`.
+#[tokio::test]
+async fn test_splitter_use_original_loop() {
+    use camel_core::api::exchange_constants::LOOP_INDEX;
+    use camel_core::processor::aggregate::UseOriginalAggregationStrategy;
+    let t = ContextTestSupport::with_routes(|r: &mut Routes| {
+        r.add(
+            from("direct:start")
+                .loop_count(constant(3), |l| {
+                    l.set_header("looping", exchange_property(LOOP_INDEX))
+                        .split(body(), |s| {
+                            s.set_header("myHeader", exchange_property(LOOP_INDEX))
+                                .to("mock:line")
+                        })
+                        .aggregation_strategy(std::sync::Arc::new(
+                            UseOriginalAggregationStrategy::new(false),
+                        ))
+                })
+                .log("${headers}")
+                .to("mock:result"),
+        );
+    })
+    .await;
+    t.mock("mock:line").expected_message_count(6);
+    let result = t.mock("mock:result");
+    result.expected_bodies_received(["Hello,World"]);
+    result.expected_header_received("looping", 2);
+    result.message_matches(0, header("myHeader").is_null());
+    t.template
+        .send_body("direct:start", "Hello,World")
+        .await
+        .unwrap();
+    t.assert_mock_endpoints_satisfied().await;
+}
+
+/// Port of `RouteWithConstantFieldFromExchangeFailTest`: an unknown `Exchange.XXX` constant
+/// fails the route creation.
+#[tokio::test]
+async fn test_route_with_constant_field_from_exchange_fail() {
+    let t = ContextTestSupport::new();
+    let r = t
+        .context
+        .add_routes(|r: &mut Routes| {
+            r.add(
+                from("direct:bar")
+                    .set_header("Exchange.XXX", constant("bar"))
+                    .to("mock:bar"),
+            );
+        })
+        .await;
+    let r = match r {
+        Err(e) => Err(e),
+        Ok(_) => t.context.start().await,
+    };
+    let e = r.unwrap_err();
+    assert_eq!(
+        Some("Constant field with name: XXX not found on Exchange.class"),
+        crate::support::cause_of(&e).message()
+    );
+}
+
+/// Port of `DeadLetterChannelNotHandleNewExceptionTest`: the failure of the dead letter bean
+/// is not handled.
+#[tokio::test]
+async fn test_dead_letter_channel_not_handle_new_exception() {
+    let t = ContextTestSupport::new();
+    let bad = camel_bean::processor_value(std::sync::Arc::new(
+        camel_core::api::processor::processor_fn(|_: &mut Exchange| {
+            Err(CamelError::runtime("error in errorhandler"))
+        }),
+    ));
+    t.context
+        .registry()
+        .unwrap()
+        .bind("badErrorHandler", bad)
+        .unwrap();
+    t.context
+        .add_routes(|r: &mut Routes| {
+            r.error_handler(
+                dead_letter_channel("bean:badErrorHandler").dead_letter_handle_new_exception(false),
+            );
+            r.add(
+                from("direct:start")
+                    .log("Incoming ${body}")
+                    .throw_exception(CamelError::illegal_argument("Forced")),
+            );
+        })
+        .await
+        .unwrap();
+    t.context.start().await.unwrap();
+    let e = t
+        .template
+        .send_body("direct:start", "Hello World")
+        .await
+        .unwrap_err();
+    assert_eq!(
+        Some("error in errorhandler"),
+        crate::support::cause_of(&e).message()
+    );
+}
