@@ -278,6 +278,69 @@ impl fmt::Debug for ProcessRef {
     }
 }
 
+/// The data format of a `marshal` or `unmarshal` (Java `DataFormatDefinition`).
+#[derive(Clone)]
+pub enum DataFormatDefinition {
+    /// A data format by name (such as `base64`), with its options, created by the factory of
+    /// the context (or a bean of the registry without options).
+    Named {
+        /// The name of the data format.
+        name: String,
+        /// The options of the data format, such as `lineLength=76`.
+        options: Vec<(String, String)>,
+    },
+    /// A data format bean of the registry (Java `custom("name")`).
+    Custom(String),
+    /// A data format given in Rust code.
+    DataFormat(camel_api::spi::data_format::SharedDataFormat),
+}
+
+impl DataFormatDefinition {
+    /// The data format by name, without options.
+    pub fn named(name: &str) -> Self {
+        DataFormatDefinition::Named {
+            name: name.to_string(),
+            options: Vec::new(),
+        }
+    }
+
+    /// With the option (of a named data format).
+    pub fn option(mut self, key: &str, value: impl ToString) -> Self {
+        if let DataFormatDefinition::Named { options, .. } = &mut self {
+            options.push((key.to_string(), value.to_string()));
+        }
+        self
+    }
+}
+
+impl From<camel_api::spi::data_format::SharedDataFormat> for DataFormatDefinition {
+    fn from(df: camel_api::spi::data_format::SharedDataFormat) -> Self {
+        DataFormatDefinition::DataFormat(df)
+    }
+}
+
+impl From<&str> for DataFormatDefinition {
+    fn from(name: &str) -> Self {
+        DataFormatDefinition::named(name)
+    }
+}
+
+impl fmt::Debug for DataFormatDefinition {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
+
+impl fmt::Display for DataFormatDefinition {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DataFormatDefinition::Named { name, .. } => f.write_str(name),
+            DataFormatDefinition::Custom(r) => write!(f, "custom[{r}]"),
+            DataFormatDefinition::DataFormat(d) => f.write_str(d.name()),
+        }
+    }
+}
+
 /// How an EIP gets its aggregation strategy.
 #[derive(Clone)]
 pub enum AggregationRef {
@@ -732,6 +795,28 @@ pub enum Eip {
         /// (`variableReceive`).
         variable_receive: Option<String>,
     },
+    /// Marshals the body with the data format (`marshal`).
+    Marshal {
+        /// The data format.
+        data_format: DataFormatDefinition,
+        /// The variable marshalled instead of the body (`variableSend`).
+        variable_send: Option<String>,
+        /// The variable receiving the result instead of the body (`variableReceive`).
+        variable_receive: Option<String>,
+        /// Whether a null body is left as is (`allowNullBody`).
+        allow_null_body: bool,
+    },
+    /// Unmarshals the body with the data format (`unmarshal`).
+    Unmarshal {
+        /// The data format.
+        data_format: DataFormatDefinition,
+        /// The variable unmarshalled instead of the body (`variableSend`).
+        variable_send: Option<String>,
+        /// The variable receiving the result instead of the body (`variableReceive`).
+        variable_receive: Option<String>,
+        /// Whether a null body is left as is (`allowNullBody`).
+        allow_null_body: bool,
+    },
     /// Polls a message from the endpoint as the new message (`poll`, Java `PollDefinition`).
     Poll {
         /// The uri (an expression).
@@ -859,6 +944,8 @@ impl Eip {
             Eip::Enrich { .. } => "enrich",
             Eip::PollEnrich { .. } => "pollEnrich",
             Eip::Poll { .. } => "poll",
+            Eip::Marshal { .. } => "marshal",
+            Eip::Unmarshal { .. } => "unmarshal",
             Eip::Sample { .. } => "sample",
             Eip::IdempotentConsumer(_) => "idempotentConsumer",
             Eip::LoadBalance { .. } => "loadBalance",
@@ -1043,6 +1130,8 @@ impl fmt::Display for ProcessorDefinition {
             Eip::Enrich { uri, .. } => write!(f, "Enrich[{uri}]"),
             Eip::PollEnrich { uri, .. } => write!(f, "PollEnrich[{uri}]"),
             Eip::Poll { uri, .. } => write!(f, "Poll[{uri}]"),
+            Eip::Marshal { data_format, .. } => write!(f, "Marshal[{data_format}]"),
+            Eip::Unmarshal { data_format, .. } => write!(f, "Unmarshal[{data_format}]"),
             Eip::Sample {
                 message_frequency,
                 period_millis,

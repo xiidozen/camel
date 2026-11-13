@@ -69,6 +69,23 @@ pub trait CamelContext: Send + Sync {
         None
     }
 
+    /// Resolves the data format by name (Java `resolveDataFormat`): a bean of the registry,
+    /// else a new instance of the registered factory, with the options.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if there is no such data format, or its options are invalid.
+    fn resolve_data_format(
+        &self,
+        name: &str,
+        options: &[(String, String)],
+    ) -> CamelResult<crate::spi::data_format::SharedDataFormat> {
+        let _ = options;
+        Err(CamelError::illegal_argument(format!(
+            "Cannot find data format with name: {name}"
+        )))
+    }
+
     /// The listeners of the log messages (Java `CamelContextExtension.getLogListeners`).
     fn log_listeners(&self) -> Vec<Arc<dyn LogListener>> {
         Vec::new()

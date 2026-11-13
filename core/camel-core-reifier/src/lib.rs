@@ -832,6 +832,35 @@ impl<'a> RouteReifier<'a> {
                     .with_variable_receive(variable_receive.clone()),
                 )
             }
+            Eip::Marshal {
+                data_format,
+                variable_send,
+                variable_receive,
+                allow_null_body,
+            }
+            | Eip::Unmarshal {
+                data_format,
+                variable_send,
+                variable_receive,
+                allow_null_body,
+            } => {
+                let df = resolve_data_format(self.context, data_format)?;
+                df.set_camel_context(Arc::downgrade(self.context));
+                let options = camel_core_processor::data_format::DataFormatOptions {
+                    variable_send: variable_send.clone(),
+                    variable_receive: variable_receive.clone(),
+                    allow_null_body: *allow_null_body,
+                };
+                if matches!(def.eip, Eip::Marshal { .. }) {
+                    Arc::new(camel_core_processor::data_format::MarshalProcessor::new(
+                        df, options,
+                    ))
+                } else {
+                    Arc::new(camel_core_processor::data_format::UnmarshalProcessor::new(
+                        df, options,
+                    ))
+                }
+            }
             Eip::Poll { uri, timeout } => Arc::new(PollEnrichProcessor::new(
                 self.uri_expr(uri)?,
                 *timeout,
@@ -1303,6 +1332,45 @@ fn interceptor(
         on_when,
         processor: reifier.steps(steps)?,
     })
+}
+
+/// Resolves the data format of a marshal or unmarshal (Java `DataFormatReifier`): by name
+/// with its options (the property placeholders resolved), a bean of the registry, or the data
+/// format itself.
+///
+/// # Errors
+///
+/// Returns an error if there is no such data format.
+pub fn resolve_data_format(
+    context: &Arc<dyn CamelContext>,
+    def: &camel_core_model::processor::DataFormatDefinition,
+) -> CamelResult<camel_api::spi::data_format::SharedDataFormat> {
+    use camel_core_model::processor::DataFormatDefinition as D;
+    match def {
+        D::DataFormat(d) => Ok(d.clone()),
+        D::Custom(name) => {
+            let name = resolve_placeholders(context, name)?;
+            let name = name.strip_prefix('#').unwrap_or(&name);
+            context
+                .registry()
+                .and_then(|r| r.lookup_by_name(name))
+                .as_ref()
+                .and_then(camel_api::spi::data_format::data_format_of)
+                .ok_or_else(|| {
+                    CamelError::illegal_argument(format!(
+                        "Cannot find data format in registry with name: {name}"
+                    ))
+                })
+        }
+        D::Named { name, options } => {
+            let name = resolve_placeholders(context, name)?;
+            let options = options
+                .iter()
+                .map(|(k, v)| Ok((k.clone(), resolve_placeholders(context, v)?)))
+                .collect::<CamelResult<Vec<_>>>()?;
+            context.resolve_data_format(&name, &options)
+        }
+    }
 }
 
 /// The processor of a `process` reference: the processor itself, or a bean from the registry.

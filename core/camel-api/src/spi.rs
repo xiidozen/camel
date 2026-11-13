@@ -2,6 +2,7 @@
 //! routing engine and components plug into.
 
 pub mod aggregation_repository;
+pub mod data_format;
 pub mod event;
 pub mod exchange_formatter;
 pub mod header_filter;

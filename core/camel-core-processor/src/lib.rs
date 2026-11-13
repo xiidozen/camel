@@ -15,6 +15,7 @@
 pub mod aggregate;
 pub mod choice;
 pub mod claim_check;
+pub mod data_format;
 pub mod dynamic;
 pub mod enricher;
 pub mod errorhandler;

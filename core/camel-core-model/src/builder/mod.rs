@@ -92,6 +92,17 @@ pub fn tokenize_xml(tag: &str, inherit_namespace_tag: Option<&str>) -> TokenizeE
     TokenizeExpression::xml(tag, inherit_namespace_tag)
 }
 
+/// A data format bean of the registry, for `marshal`/`unmarshal` (Java `.custom("name")`).
+pub fn custom_data_format(name: &str) -> crate::processor::DataFormatDefinition {
+    crate::processor::DataFormatDefinition::Custom(name.to_string())
+}
+
+/// A data format by name, with options added by
+/// [`DataFormatDefinition::option`](crate::processor::DataFormatDefinition::option).
+pub fn data_format(name: &str) -> crate::processor::DataFormatDefinition {
+    crate::processor::DataFormatDefinition::named(name)
+}
+
 /// An expression in the simple language (Java `simple("${body}")`).
 pub fn simple(expression: &str) -> ExpressionDefinition {
     ExpressionDefinition::language("simple", expression)
@@ -586,10 +597,56 @@ pub trait Dsl: Sized {
         })
     }
 
-    /// The last enrich sends the variable as the body instead of the message body (Java
-    /// `variableSend`).
+    /// Marshals the body with the data format (Java `.marshal(..)`): a name (such as
+    /// `"base64"`), a [`DataFormatDefinition`](crate::processor::DataFormatDefinition) with
+    /// options, or a data format; see [`custom_data_format`],
+    /// [`variable_send`](Self::variable_send), [`variable_receive`](Self::variable_receive) and
+    /// [`allow_null_body`](Self::allow_null_body).
+    fn marshal(self, data_format: impl Into<crate::processor::DataFormatDefinition>) -> Self {
+        self.eip(Eip::Marshal {
+            data_format: data_format.into(),
+            variable_send: None,
+            variable_receive: None,
+            allow_null_body: false,
+        })
+    }
+
+    /// Unmarshals the body with the data format (Java `.unmarshal(..)`); see
+    /// [`marshal`](Self::marshal).
+    fn unmarshal(self, data_format: impl Into<crate::processor::DataFormatDefinition>) -> Self {
+        self.eip(Eip::Unmarshal {
+            data_format: data_format.into(),
+            variable_send: None,
+            variable_receive: None,
+            allow_null_body: false,
+        })
+    }
+
+    /// Whether the last marshal or unmarshal leaves a null body as is (Java `allowNullBody`).
+    fn allow_null_body(mut self) -> Self {
+        if let Some(
+            Eip::Marshal {
+                allow_null_body, ..
+            }
+            | Eip::Unmarshal {
+                allow_null_body, ..
+            },
+        ) = self.last_mut().map(|l| &mut l.eip)
+        {
+            *allow_null_body = true;
+        }
+        self
+    }
+
+    /// The last enrich, marshal or unmarshal sends the variable as the body instead of the
+    /// message body (Java `variableSend`).
     fn variable_send(mut self, name: &str) -> Self {
-        if let Some(Eip::Enrich { variable_send, .. }) = self.last_mut().map(|l| &mut l.eip) {
+        if let Some(
+            Eip::Enrich { variable_send, .. }
+            | Eip::Marshal { variable_send, .. }
+            | Eip::Unmarshal { variable_send, .. },
+        ) = self.last_mut().map(|l| &mut l.eip)
+        {
             *variable_send = Some(name.to_string());
         }
         self
@@ -604,6 +661,12 @@ pub trait Dsl: Sized {
                 variable_receive, ..
             }
             | Eip::PollEnrich {
+                variable_receive, ..
+            }
+            | Eip::Marshal {
+                variable_receive, ..
+            }
+            | Eip::Unmarshal {
                 variable_receive, ..
             },
         ) = self.last_mut().map(|l| &mut l.eip)

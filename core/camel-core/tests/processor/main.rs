@@ -9,6 +9,7 @@ mod choice_misc_test;
 mod choice_no_otherwise_test;
 mod claim_check_test;
 mod converter;
+mod data_format_test;
 mod dead_letter_channel_redelivery_test;
 mod dead_letter_channel_use_original_in_body_test;
 mod default_error_handler_redelivery_test;

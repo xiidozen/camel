@@ -51,6 +51,7 @@ pub struct DefaultCamelContext {
     component_factories: RwLock<HashMap<String, ComponentFactory>>,
     languages: RwLock<HashMap<String, Arc<dyn Language>>>,
     language_factories: RwLock<HashMap<String, LanguageFactory>>,
+    data_format_factories: RwLock<HashMap<String, camel_api::spi::data_format::DataFormatFactory>>,
     endpoints: RwLock<IndexMap<String, SharedEndpoint>>,
     routes: RwLock<Vec<Arc<DefaultRoute>>>,
     route_counter: AtomicU32,
@@ -90,6 +91,7 @@ impl DefaultCamelContext {
             component_factories: RwLock::new(HashMap::new()),
             languages: RwLock::new(HashMap::new()),
             language_factories: RwLock::new(HashMap::new()),
+            data_format_factories: RwLock::new(HashMap::new()),
             endpoints: RwLock::new(IndexMap::new()),
             routes: RwLock::new(Vec::new()),
             route_counter: AtomicU32::new(0),
@@ -268,6 +270,32 @@ impl DefaultCamelContext {
             .write()
             .unwrap()
             .insert(name.to_string(), language);
+    }
+
+    /// Registers a factory creating the data format (with its options) on each use (Java
+    /// `DataFormatResolver`).
+    pub fn register_data_format_factory(
+        &self,
+        name: &str,
+        factory: camel_api::spi::data_format::DataFormatFactory,
+    ) {
+        self.data_format_factories
+            .write()
+            .unwrap()
+            .insert(name.to_string(), factory);
+    }
+
+    /// The names of the data formats with a factory.
+    pub fn data_format_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .data_format_factories
+            .read()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect();
+        names.sort();
+        names
     }
 
     /// Registers a factory creating the language on first use.
@@ -844,6 +872,36 @@ impl CamelContext for DefaultCamelContext {
 
     fn global_option(&self, key: &str) -> Option<String> {
         self.global_options.read().unwrap().get(key).cloned()
+    }
+
+    fn resolve_data_format(
+        &self,
+        name: &str,
+        options: &[(String, String)],
+    ) -> CamelResult<camel_api::spi::data_format::SharedDataFormat> {
+        // a bean of the registry first (Java DefaultDataFormatResolver)
+        if options.is_empty() {
+            if let Some(df) = self
+                .registry
+                .lookup_by_name(name)
+                .as_ref()
+                .and_then(camel_api::spi::data_format::data_format_of)
+            {
+                return Ok(df);
+            }
+        }
+        let factory = self
+            .data_format_factories
+            .read()
+            .unwrap()
+            .get(name)
+            .cloned();
+        match factory {
+            Some(f) => f(options),
+            None => Err(CamelError::illegal_argument(format!(
+                "Cannot find data format with name: {name}"
+            ))),
+        }
     }
 
     fn resolve_language(&self, name: &str) -> CamelResult<Arc<dyn Language>> {
