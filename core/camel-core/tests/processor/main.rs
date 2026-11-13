@@ -5,6 +5,7 @@
 mod support;
 
 mod aggregator;
+mod async_endpoint_eip_test;
 mod async_endpoint_test;
 mod cbr_test;
 mod choice_misc_test;
