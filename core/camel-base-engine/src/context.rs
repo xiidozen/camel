@@ -560,6 +560,24 @@ impl DefaultCamelContext {
         self.start_route_with_events(&route).await
     }
 
+    /// Starts the routes not started yet, such as the ones without auto startup (Java
+    /// `RouteController.startAllRoutes`), in startup order.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first failure.
+    pub async fn start_all_routes(&self) -> CamelResult<()> {
+        self.start_components().await?;
+        let mut routes = self.routes.read().unwrap().clone();
+        routes.sort_by_key(|r| r.startup_order().unwrap_or(i32::MAX));
+        for r in routes {
+            if !r.status().is_started() {
+                self.start_route_with_events(&r).await?;
+            }
+        }
+        Ok(())
+    }
+
     /// Stops the route (Java `RouteController.stopRoute`).
     ///
     /// # Errors

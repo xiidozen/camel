@@ -88,8 +88,14 @@ impl Service for SendProcessor {
 }
 
 impl Processor for SendProcessor {
+    /// Creates and starts the producer with the route (Java `SendProcessor.doStart`).
     fn start_processor(&self) -> BoxFuture<'_, CamelResult<()>> {
-        Box::pin(async move { Ok(()) })
+        Box::pin(async move {
+            if self.endpoint.is_singleton_producer() {
+                self.producer().await?;
+            }
+            Ok(())
+        })
     }
 
     fn stop_processor(&self) -> BoxFuture<'_, CamelResult<()>> {

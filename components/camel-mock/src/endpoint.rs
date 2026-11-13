@@ -210,6 +210,58 @@ struct Inner {
     context: Weak<dyn CamelContext>,
     state: Mutex<State>,
     changed: Notify,
+    extension: Option<Arc<dyn MockExtension>>,
+}
+
+/// The behaviour added to a mock endpoint by an endpoint built on it (the Java subclasses of
+/// `MockEndpoint`, such as `DataSetEndpoint`); every hook does nothing by default.
+pub trait MockExtension: Send + Sync {
+    /// Called when a producer of the endpoint is created (Java `createProducer`).
+    fn on_create_producer(&self, endpoint: &MockEndpoint) {
+        let _ = endpoint;
+    }
+
+    /// Creates the consumer of the endpoint, if it can be consumed from (Java
+    /// `createConsumer`).
+    fn create_consumer(
+        &self,
+        endpoint: &MockEndpoint,
+        processor: SharedProcessor,
+    ) -> Option<CamelResult<SharedConsumer>> {
+        let _ = (endpoint, processor);
+        None
+    }
+
+    /// Called before the endpoint records a received exchange.
+    fn before_exchange<'a>(
+        &'a self,
+        endpoint: &'a MockEndpoint,
+        exchange: &'a mut Exchange,
+    ) -> BoxFuture<'a, ()> {
+        let _ = (endpoint, exchange);
+        Box::pin(std::future::ready(()))
+    }
+
+    /// The assertions on a received exchange (Java `performAssertions`): an error is a
+    /// failure of the endpoint.
+    ///
+    /// # Errors
+    ///
+    /// The exchange is not the expected one.
+    fn perform_assertions(
+        &self,
+        endpoint: &MockEndpoint,
+        exchange: &mut Exchange,
+    ) -> CamelResult<()> {
+        let _ = (endpoint, exchange);
+        Ok(())
+    }
+
+    /// Called when the endpoint is reset.
+    fn on_reset(&self) {}
+
+    /// The extension as `Any`, to access the concrete type.
+    fn as_any(&self) -> &dyn Any;
 }
 
 /// A mock endpoint. Cloning gives another handle to the same endpoint.
@@ -238,8 +290,38 @@ impl MockEndpoint {
                 context,
                 state: Mutex::new(State::new()),
                 changed: Notify::new(),
+                extension: None,
             }),
         }
+    }
+
+    /// Creates a mock endpoint with the extension (an endpoint built on a mock endpoint).
+    pub fn with_extension(
+        uri: &str,
+        name: &str,
+        context: Weak<dyn CamelContext>,
+        extension: Arc<dyn MockExtension>,
+    ) -> Self {
+        MockEndpoint {
+            inner: Arc::new(Inner {
+                uri: uri.to_string(),
+                name: name.to_string(),
+                context,
+                state: Mutex::new(State::new()),
+                changed: Notify::new(),
+                extension: Some(extension),
+            }),
+        }
+    }
+
+    /// The extension of the endpoint, if any.
+    pub fn extension(&self) -> Option<&Arc<dyn MockExtension>> {
+        self.inner.extension.as_ref()
+    }
+
+    /// Records a failure of the endpoint (an assertion failed on a received exchange).
+    pub fn add_failure(&self, failure: impl Into<String>) {
+        self.state().failures.push(failure.into());
     }
 
     /// Resolves the mock endpoint for the uri in the context (Java `MockEndpoint.resolve`).
@@ -297,6 +379,9 @@ impl MockEndpoint {
     /// Resets the endpoint: forgets the received exchanges and the expectations.
     pub fn reset(&self) {
         *self.state() = State::new();
+        if let Some(e) = &self.inner.extension {
+            e.on_reset();
+        }
         self.inner.changed.notify_waiters();
     }
 
@@ -835,6 +920,9 @@ impl MockEndpoint {
     }
 
     async fn on_exchange(&self, exchange: &mut Exchange) {
+        if let Some(e) = &self.inner.extension {
+            e.before_exchange(self, exchange).await;
+        }
         let reporter = self.state().reporter.clone();
         if let Some(r) = reporter {
             if let Err(e) = r.process(exchange).await {
@@ -877,6 +965,11 @@ impl MockEndpoint {
         if let Some(p) = processor {
             if let Err(e) = p.process(exchange).await {
                 exchange.set_exception(Some(e));
+            }
+        }
+        if let Some(ext) = &self.inner.extension {
+            if let Err(e) = ext.perform_assertions(self, exchange) {
+                self.add_failure(e.message().unwrap_or_default().to_string());
             }
         }
         {
@@ -1132,15 +1225,23 @@ impl Endpoint for MockEndpoint {
     }
 
     fn create_producer(self: Arc<Self>) -> CamelResult<SharedProducer> {
+        if let Some(e) = &self.inner.extension {
+            e.on_create_producer(&self);
+        }
         Ok(Arc::new(MockProducer {
             endpoint: (*self).clone(),
         }))
     }
 
-    fn create_consumer(
-        self: Arc<Self>,
-        _processor: SharedProcessor,
-    ) -> CamelResult<SharedConsumer> {
+    fn create_consumer(self: Arc<Self>, processor: SharedProcessor) -> CamelResult<SharedConsumer> {
+        if let Some(c) = self
+            .inner
+            .extension
+            .as_ref()
+            .and_then(|e| e.create_consumer(&self, processor))
+        {
+            return c;
+        }
         Err(CamelError::new(
             ErrorKind::UnsupportedOperation,
             format!("You cannot consume from this endpoint: {}", self.inner.uri),

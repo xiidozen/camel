@@ -48,7 +48,7 @@
 
 mod endpoint;
 
-pub use endpoint::{MockAssertionError, MockEndpoint};
+pub use endpoint::{MockAssertionError, MockEndpoint, MockExtension};
 
 use camel_api::context::CamelContext;
 use camel_api::endpoint::{Component, SharedEndpoint};

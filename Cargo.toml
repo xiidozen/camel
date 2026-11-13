@@ -25,6 +25,7 @@ members = [
     "components/camel-base64",
     "components/camel-zip-deflater",
     "components/camel-dataformat",
+    "components/camel-dataset",
     "components/camel-bean",
     "components/camel-timer",
     "dsl/camel-yaml-dsl/camel-yaml-dsl",
@@ -65,6 +66,7 @@ camel-controlbus = { path = "components/camel-controlbus" }
 camel-base64 = { path = "components/camel-base64" }
 camel-zip-deflater = { path = "components/camel-zip-deflater" }
 camel-dataformat = { path = "components/camel-dataformat" }
+camel-dataset = { path = "components/camel-dataset" }
 camel-bean = { path = "components/camel-bean" }
 camel-timer = { path = "components/camel-timer" }
 camel-yaml-dsl = { path = "dsl/camel-yaml-dsl/camel-yaml-dsl" }

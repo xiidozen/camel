@@ -127,6 +127,7 @@ dependencies = [
  "camel-core-processor",
  "camel-core-reifier",
  "camel-dataformat",
+ "camel-dataset",
  "camel-direct",
  "camel-file",
  "camel-language",
@@ -212,6 +213,19 @@ dependencies = [
  "camel-core-processor",
  "camel-util",
  "camel-zip-deflater",
+ "tokio",
+]
+
+[[package]]
+name = "camel-dataset"
+version = "4.23.0"
+dependencies = [
+ "camel-api",
+ "camel-mock",
+ "camel-support",
+ "camel-util",
+ "log",
+ "regex",
  "tokio",
 ]
 

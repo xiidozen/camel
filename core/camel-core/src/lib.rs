@@ -109,6 +109,14 @@ pub fn register_core_components(context: &DefaultCamelContext) {
         Arc::new(|| Arc::new(camel_dataformat::DataFormatComponent::new()) as SharedComponent),
     );
     context.register_component_factory(
+        "dataset",
+        Arc::new(|| Arc::new(camel_dataset::DataSetComponent::new()) as SharedComponent),
+    );
+    context.register_component_factory(
+        "dataset-test",
+        Arc::new(|| Arc::new(camel_dataset::DataSetTestComponent::new()) as SharedComponent),
+    );
+    context.register_component_factory(
         "ref",
         Arc::new(|| Arc::new(camel_ref::RefComponent::new()) as SharedComponent),
     );
