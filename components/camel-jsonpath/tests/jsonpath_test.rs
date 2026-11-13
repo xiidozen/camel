@@ -1158,3 +1158,129 @@ async fn test_spring_jsonpath() {
         Value::Float(_)
     ));
 }
+
+/// `JsonPathMapTransformTest`: the JSON already parsed into a map.
+#[tokio::test]
+async fn test_jsonpath_map_transform() {
+    let c = context(|r: &mut Routes| {
+        r.add(
+            from("direct:start")
+                .transform(jp("$.store.book[*].author"))
+                .to("mock:authors"),
+        );
+    })
+    .await;
+    let document = camel_support_parse(
+        &String::from_utf8(std::fs::read("tests/resources/books.json").unwrap()).unwrap(),
+    );
+    assert!(matches!(document, Value::Map(_)));
+    let m = mock(&c, "mock:authors");
+    m.expected_message_count(1);
+    c.create_producer_template()
+        .send_body("direct:start", document)
+        .await
+        .unwrap();
+    m.assert_is_satisfied().await;
+    let Value::List(l) = m.received_exchanges()[0].message().body().clone() else {
+        panic!("a list")
+    };
+    assert_eq!(Value::from("Nigel Rees"), l[0]);
+    assert_eq!(Value::from("Evelyn Waugh"), l[1]);
+}
+
+/// `JsonPathPredicateJsonSmartTest`: a negated existence filter.
+#[tokio::test]
+async fn test_jsonpath_predicate_negated_filter() {
+    let c = context(|_: &mut Routes| {}).await;
+    let p = c
+        .resolve_language("jsonpath")
+        .unwrap()
+        .create_predicate("$.messages[?(!@.bot_id)]")
+        .unwrap();
+    assert!(
+        p.matches(&exchange(&c, file("messages.json"))).unwrap(),
+        "Should have message from bot"
+    );
+}
+
+/// `JsonPathChoiceReaderTest` and `JsonPathStreamCachingCBRTest` (readers and streams are
+/// texts and bytes in Rust; the bean parameter case has no Rust equivalent).
+#[tokio::test]
+async fn test_jsonpath_choice_text_and_bytes() {
+    let c = context(|r: &mut Routes| {
+        r.add(from("direct:start").choice(|ch| {
+            ch.when(jsonpath("$[?(@.counter>0)]").predicate(), |w| {
+                w.to("mock:positive")
+            })
+            .otherwise(|o| o.to("mock:zero"))
+        }));
+        r.add(from("direct:cbr").choice(|ch| {
+            ch.when(jsonpath("$.store.book[?(@.price < 10)]").predicate(), |w| {
+                w.to("mock:cheap")
+            })
+            .when(jsonpath("$.store.book[?(@.price < 30)]").predicate(), |w| {
+                w.to("mock:average")
+            })
+            .otherwise(|o| o.to("mock:expensive"))
+        }));
+    })
+    .await;
+    let t = c.create_producer_template();
+    mock(&c, "mock:positive").expected_bodies_received(["{\"counter\": 1}", "{\"counter\": 2}"]);
+    mock(&c, "mock:zero").expected_bodies_received(["{\"counter\": 0}"]);
+    for b in ["{\"counter\": 1}", "{\"counter\": 0}", "{\"counter\": 2}"] {
+        t.send_body("direct:start", Value::Bytes(b.as_bytes().to_vec()))
+            .await
+            .unwrap();
+    }
+    mock(&c, "mock:positive").assert_is_satisfied().await;
+    mock(&c, "mock:zero").assert_is_satisfied().await;
+    for m in ["mock:cheap", "mock:average", "mock:expensive"] {
+        mock(&c, m).expected_message_count(1);
+    }
+    for f in ["cheap.json", "average.json", "expensive.json"] {
+        t.send_body("direct:cbr", file(f)).await.unwrap();
+    }
+    for m in ["mock:cheap", "mock:average", "mock:expensive"] {
+        mock(&c, m).assert_is_satisfied().await;
+    }
+}
+
+/// `JsonPathEngineWriteAsStringTest`.
+#[tokio::test]
+async fn test_jsonpath_engine_write_as_string() {
+    let json = "{\n  \"args\": {\n    \"age\": 30,\n    \"name\": \"Alice\"\n  },\n  \"content\": [\n    {\"id\": 1, \"value\": \"first\"},\n    {\"id\": 2, \"value\": \"second\"}\n  ]\n}\n";
+    let c = context(|_: &mut Routes| {}).await;
+    let e = exchange(&c, Value::from(json));
+    let eval = |b: camel_jsonpath::JsonPathBuilder| {
+        let ExpressionDefinition::Expression(x) = b.expression() else {
+            unreachable!()
+        };
+        x.evaluate(&e).unwrap()
+    };
+    let as_string = eval(jsonpath("$.args").write_as_string(true));
+    let Value::Text(t) = &as_string else {
+        panic!("a text: {as_string}")
+    };
+    assert_eq!(
+        camel_support_parse("{\"age\":30,\"name\":\"Alice\"}"),
+        camel_support_parse(t)
+    );
+    let Value::Map(m) = eval(jsonpath("$.args")) else {
+        panic!("a map")
+    };
+    assert_eq!(Some(&Value::Int(30)), m.get("age"));
+    assert_eq!(Some(&Value::from("Alice")), m.get("name"));
+    let Value::List(rows) = eval(jsonpath("$.content[*]").write_as_string(true)) else {
+        panic!("a list")
+    };
+    assert_eq!(2, rows.len());
+    assert_eq!(
+        camel_support_parse("{\"id\":1,\"value\":\"first\"}"),
+        camel_support_parse(&rows[0].to_string())
+    );
+    assert_eq!(
+        camel_support_parse("{\"id\":2,\"value\":\"second\"}"),
+        camel_support_parse(&rows[1].to_string())
+    );
+}
