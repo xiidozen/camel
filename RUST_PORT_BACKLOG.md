@@ -278,7 +278,7 @@ progress and what is still to do. Update it in the same commit as each port.
 | `components/camel-cxf/camel-cxf-transport` | 11 | 7 | todo | |
 | `components/camel-cyberark-vault` | 10 | 4 | todo | |
 | `components/camel-dapr` | 26 | 14 | todo | |
-| `components/camel-dataformat` | 2 | 0 | todo | |
+| `components/camel-dataformat` | 2 | 0 | done | Rust crate `camel-dataformat`: `DataFormatComponent`/`DataFormatEndpoint` (`dataformat:name:marshal|unmarshal`, the endpoint options as the data format options, lenient), registered as `dataformat` by camel-core. Test with base64 and zipDeflater (Java has no tests of its own). |
 | `components/camel-dataset` | 11 | 0 | todo | |
 | `components/camel-datasonnet` | 6 | 14 | todo | |
 | `components/camel-dataweave` | 5 | 3 | todo | |

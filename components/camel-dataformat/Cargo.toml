@@ -1,0 +1,19 @@
+[package]
+name = "camel-dataformat"
+description = "Camel :: DataFormat — use a data format as a regular endpoint (port of components/camel-dataformat)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+camel-api = { workspace = true }
+camel-core-processor = { workspace = true }
+camel-util = { workspace = true }
+
+[dev-dependencies]
+camel-base64 = { workspace = true }
+camel-core = { workspace = true }
+camel-zip-deflater = { workspace = true }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }

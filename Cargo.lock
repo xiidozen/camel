@@ -126,6 +126,7 @@ dependencies = [
  "camel-core-model",
  "camel-core-processor",
  "camel-core-reifier",
+ "camel-dataformat",
  "camel-direct",
  "camel-file",
  "camel-language",
@@ -199,6 +200,19 @@ dependencies = [
  "camel-core-processor",
  "camel-support",
  "camel-util",
+]
+
+[[package]]
+name = "camel-dataformat"
+version = "4.23.0"
+dependencies = [
+ "camel-api",
+ "camel-base64",
+ "camel-core",
+ "camel-core-processor",
+ "camel-util",
+ "camel-zip-deflater",
+ "tokio",
 ]
 
 [[package]]

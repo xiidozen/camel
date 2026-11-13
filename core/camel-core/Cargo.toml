@@ -27,6 +27,7 @@ camel-browse = { workspace = true }
 camel-language = { workspace = true }
 camel-scheduler = { workspace = true }
 camel-controlbus = { workspace = true }
+camel-dataformat = { workspace = true }
 camel-bean = { workspace = true }
 camel-timer = { workspace = true }
 camel-file = { workspace = true }
