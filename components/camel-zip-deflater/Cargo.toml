@@ -1,0 +1,18 @@
+[package]
+name = "camel-zip-deflater"
+description = "Camel :: Zip Deflater — compress and decompress streams using java.util.zip deflater and gzip (port of components/camel-zip-deflater)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+camel-api = { workspace = true }
+camel-base-engine = { workspace = true }
+camel-util = { workspace = true }
+flate2 = "1"
+
+[dev-dependencies]
+camel-core = { workspace = true }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }

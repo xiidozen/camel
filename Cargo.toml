@@ -23,6 +23,7 @@ members = [
     "components/camel-scheduler",
     "components/camel-controlbus",
     "components/camel-base64",
+    "components/camel-zip-deflater",
     "components/camel-bean",
     "components/camel-timer",
     "dsl/camel-yaml-dsl/camel-yaml-dsl",
@@ -61,6 +62,7 @@ camel-language = { path = "components/camel-language" }
 camel-scheduler = { path = "components/camel-scheduler" }
 camel-controlbus = { path = "components/camel-controlbus" }
 camel-base64 = { path = "components/camel-base64" }
+camel-zip-deflater = { path = "components/camel-zip-deflater" }
 camel-bean = { path = "components/camel-bean" }
 camel-timer = { path = "components/camel-timer" }
 camel-yaml-dsl = { path = "dsl/camel-yaml-dsl/camel-yaml-dsl" }

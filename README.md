@@ -31,8 +31,8 @@
 >
 > | Language | Lines | Share of lines | Files |
 > |---|---:|---:|---:|
-> | Rust | 101,370 | 2.7% | 338 |
-> | Java | 3,684,621 | 97.3% | 27,150 |
+> | Rust | 101,753 | 2.7% | 340 |
+> | Java | 3,683,874 | 97.3% | 27,140 |
 >
 > Last updated: 2026-11-13. The Java lines include generated code and the Java tests not
 > ported yet (ported Java code and tests are removed as they are ported).

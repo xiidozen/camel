@@ -634,7 +634,7 @@ progress and what is still to do. Update it in the same commit as each port.
 | `components/camel-xslt` | 25 | 0 | todo | |
 | `components/camel-xslt-saxon` | 6 | 27 | todo | |
 | `components/camel-zendesk` | 8 | 2 | todo | |
-| `components/camel-zip-deflater` | 2 | 6 | todo | |
+| `components/camel-zip-deflater` | 2 | 6 | done | Rust crate `camel-zip-deflater` (on flate2): `ZipDeflaterDataFormat` (zlib as `java.util.zip.Deflater`, `compressionLevel`), `GzipDeflaterDataFormat` (concatenated members), factories, `register(context)`. Tests: the six Java tests (Java removed; the stream cache case of ZipDeflaterDataFormatTest has no Rust equivalent). |
 | `components/camel-zipfile` | 5 | 22 | todo | |
 | `components/camel-zookeeper` | 30 | 23 | todo | |
 | `components/camel-zookeeper-master` | 32 | 8 | todo | |
