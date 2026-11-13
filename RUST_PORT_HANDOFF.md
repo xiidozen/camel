@@ -156,6 +156,12 @@ Crates live **in the directory of the Maven module they replace** (`core/camel-a
   `Exchange.FIELD` names resolve to constants (`exchange_constants::lookup`), `throw_exception_of(kind, message)`.
   The small processor tests are ported into `tests/processor/simple_routes_test.rs` (continue with the next sizes,
   `for f in *Test.java; do wc -l ...` in `src/test/java/.../processor`).
+  Later additions: enrich/pollEnrich `variable_send`/`variable_receive` (`tests/processor/enrich_variable_test.rs`),
+  the `camel-stub` crate (seda in stub mode), `SedaQueue::add`, context global options (`set_global_option`, used by
+  the log EIP for `CamelLogEipName`/`CamelLogEipLanguage`), `log_level`/`log_language`, the log EIP firing the log
+  listeners, the onCompletion step intercepted. Orphaned Java subclasses whose parent test is ported (find them with
+  a loop over `extends XxxTest` where `XxxTest.java` is gone) are good next targets; the remaining ones need
+  stream caching (`*SSEnabled*`), thread pool profiles, route controller logging level or `toD` options.
 - **Next:** continue the file component (`components/camel-file`, **in progress**, tests in
   `core/camel-core/tests/component/file`, `TestDirectory` in the test support, mock `expected_file_exists`). Done:
   producer (fileName/overrule, fileExist modes with moveExisting, temp names, done files, forceWrites,
