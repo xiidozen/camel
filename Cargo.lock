@@ -337,6 +337,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "camel-lzf"
+version = "4.23.0"
+dependencies = [
+ "camel-api",
+ "camel-base-engine",
+ "camel-core",
+ "camel-util",
+ "tokio",
+]
+
+[[package]]
 name = "camel-main"
 version = "4.23.0"
 dependencies = [

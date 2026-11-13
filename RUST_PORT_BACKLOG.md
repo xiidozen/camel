@@ -442,7 +442,7 @@ progress and what is still to do. Update it in the same commit as each port.
 | `components/camel-lra` | 7 | 13 | todo | |
 | `components/camel-lucene` | 12 | 5 | todo | |
 | `components/camel-lumberjack` | 13 | 7 | todo | |
-| `components/camel-lzf` | 1 | 1 | todo | |
+| `components/camel-lzf` | 1 | 1 | done | Rust crate `camel-lzf`: the LZF block codec (`compress_block`/`decompress_block`) and the compress-lzf chunk format (`ZV` compressed or uncompressed chunks of up to 65535 bytes: `compress`/`decompress`), `LzfDataFormat` (usingParallelCompression: the same format), `register(context)`. Tests: LZFDataFormatTest (Java removed). |
 | `components/camel-mail` | 27 | 99 | todo | |
 | `components/camel-mail-microsoft-oauth` | 1 | 0 | todo | |
 | `components/camel-mapstruct` | 5 | 8 | todo | |
