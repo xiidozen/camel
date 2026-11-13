@@ -171,6 +171,15 @@ Crates live **in the directory of the Maven module they replace** (`core/camel-a
   shareUnitOfWork, ThrottlingInflightRoutePolicy and the other policies (see the
   `components/camel-file` backlog row). Then the rest of the simple tests (`SimpleTest` cases, messageAs), the xpath
   language, camel-main component options.
+- Building blocks added later (reuse them): data formats (`camel_api::spi::data_format`, `marshal`/`unmarshal`
+  EIPs, `DefaultCamelContext::register_data_format_factory`, a `register(context)` fn per data format crate as Rust
+  has no classpath scanning; YAML/XML `marshal`/`unmarshal`/`dataFormats`), `camel_support::scheduled_poll`
+  (scheduled poll consumers), `camel_support::polling_consumer` (event driven polling consumer of any endpoint),
+  `camel_mock::MockExtension` (endpoints built on a mock endpoint, as `dataset`), `camel_support::json` (JSON to and
+  from `Value`), registry value helpers (`endpoint_value`, `expression_value`, `predicate_value`, `data_format_value`),
+  the `ref` language. Finished component crates: ref, browse, language, scheduler, controlbus, dataformat, dataset,
+  stub, base64, zip-deflater, zipfile, tarfile; jackson is partial (no POJOs in Rust). A done module keeps its
+  `pom.xml`, `src/main/docs` and catalog json; test resources move to `tests/resources`.
 - Commit only when `etc/rust/check.sh` passes (chain the commit on its exit status).
 - Before each push run `./etc/rust/port-stats.sh` and commit `README.md` with it: the README shows the Rust/Java
   share of the code until the conversion is done (user request).
