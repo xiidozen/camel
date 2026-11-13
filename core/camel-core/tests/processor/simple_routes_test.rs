@@ -729,3 +729,162 @@ async fn test_simple_try_throw_exception_finally() {
     assert_eq!(Some("Damn"), crate::support::cause_of(&e).message());
     t.assert_mock_endpoints_satisfied().await;
 }
+
+/// Port of `ExchangeCreatedTimestampTest`.
+#[tokio::test]
+async fn test_exchange_created_timestamp() {
+    let t = ContextTestSupport::with_routes(|r: &mut Routes| {
+        r.add(from("seda:start").delay(constant(500)).to("direct:foo"));
+        r.add(from("direct:foo").to("log:foo").to("mock:result"));
+    })
+    .await;
+    let mock = t.mock("mock:result");
+    mock.expected_bodies_received(["Hello World"]);
+    t.template
+        .send_body("seda:start", "Hello World")
+        .await
+        .unwrap();
+    mock.assert_is_satisfied().await;
+    assert!(mock.received_exchanges()[0].created() > 0);
+}
+
+/// The `SimpleSingleOutputMockTest` case (not `hasOut`: the result is the in message).
+#[tokio::test]
+async fn test_simple_single_output_mock() {
+    let t = ContextTestSupport::with_routes(|r: &mut Routes| {
+        r.add(from("direct:start").to("mock:result"));
+    })
+    .await;
+    t.mock("mock:result")
+        .expected_bodies_received(["Hello World"]);
+    let mut e = t
+        .template
+        .create_exchange("direct:start", ExchangePattern::InOut)
+        .unwrap();
+    e.message_mut().set_body("Hello World");
+    let out = t.template.send("direct:start", e).await.unwrap();
+    assert_eq!(ExchangePattern::InOut, out.pattern());
+    t.assert_mock_endpoints_satisfied().await;
+}
+
+/// Port of `DisabledProcessorTest`.
+#[tokio::test]
+async fn test_disabled_processor() {
+    let route = || {
+        from("direct:start")
+            .to("mock:foo")
+            .disabled()
+            .to("mock:bar")
+            .set_disabled(false)
+            .to("mock:baz")
+            .set_disabled(true)
+            .to("mock:result")
+    };
+    assert_eq!(4, route().build().steps.len());
+    let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+        r.add(route());
+    })
+    .await;
+    t.mock("mock:foo").expected_message_count(0);
+    t.mock("mock:bar").expected_message_count(1);
+    t.mock("mock:baz").expected_message_count(0);
+    t.mock("mock:result").expected_message_count(1);
+    t.template
+        .send_body("direct:start", "Hello World")
+        .await
+        .unwrap();
+    t.assert_mock_endpoints_satisfied().await;
+}
+
+/// Ports of `TryCatchContinueToRouteTest` and `OnExceptionContinueToRouteTest`: the caught
+/// exception stays on the exchange in the next routes.
+#[tokio::test]
+async fn test_continue_to_route() {
+    use camel_core::api::exchange_constants::EXCEPTION_CAUGHT;
+    for on_exception in [false, true] {
+        let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+            r.add(from("direct:a").to("mock:a").to("direct:b").to("direct:c"));
+            if on_exception {
+                r.on_exception(
+                    on_exception_kind(ErrorKind::IllegalArgument)
+                        .continued(true)
+                        .to("mock:catch"),
+                );
+                r.add(
+                    from("direct:b")
+                        .to("mock:b")
+                        .throw_exception(CamelError::illegal_argument("Damn")),
+                );
+            } else {
+                r.add(from("direct:b").do_try(|t| {
+                    t.to("mock:b")
+                        .throw_exception(CamelError::illegal_argument("Damn"))
+                        .do_catch(ErrorType::Any, |c| c.to("mock:catch"))
+                }));
+            }
+            r.add(from("direct:c").to("mock:c"));
+        })
+        .await;
+        for m in ["mock:a", "mock:b", "mock:catch", "mock:c"] {
+            t.mock(m).expected_bodies_received(["Hello World"]);
+        }
+        for m in ["mock:catch", "mock:c"] {
+            t.mock(m)
+                .message_matches(0, exchange_property(EXCEPTION_CAUGHT).is_not_null());
+        }
+        t.template
+            .send_body("direct:a", "Hello World")
+            .await
+            .unwrap();
+        t.assert_mock_endpoints_satisfied().await;
+    }
+}
+
+/// Port of `FromToInOutTest`.
+#[tokio::test]
+async fn test_from_to_in_out() {
+    let t = ContextTestSupport::with_routes(|r: &mut Routes| {
+        r.add(
+            from("direct:start")
+                .to_with_pattern(ExchangePattern::InOut, "direct:foo")
+                .to("mock:result"),
+        );
+        r.add(
+            from("direct:foo")
+                .process_fn(|e| {
+                    assert_eq!(ExchangePattern::InOut, e.pattern());
+                    Ok(())
+                })
+                .to("mock:foo"),
+        );
+    })
+    .await;
+    t.mock("mock:foo").expected_message_count(1);
+    t.mock("mock:result").expected_message_count(1);
+    t.template
+        .send_body("direct:start", "Hello World")
+        .await
+        .unwrap();
+    t.assert_mock_endpoints_satisfied().await;
+}
+
+/// Port of `CreateRouteWithNonExistingEndpointTest`.
+#[tokio::test]
+async fn test_create_route_with_non_existing_endpoint() {
+    let t = ContextTestSupport::new();
+    let r = t
+        .context
+        .add_routes(|r: &mut Routes| {
+            r.add(from("direct:start").to("thisUriDoesNotExist"));
+        })
+        .await;
+    let e = match r {
+        Err(e) => e,
+        Ok(_) => t.context.start().await.unwrap_err(),
+    };
+    assert!(
+        e.to_string()
+            .contains("No endpoint could be found for: thisUriDoesNotExist"),
+        "{e}"
+    );
+}

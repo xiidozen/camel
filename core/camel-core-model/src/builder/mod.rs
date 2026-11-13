@@ -168,6 +168,14 @@ pub trait Dsl: Sized {
         self
     }
 
+    /// Sets whether the last step is disabled (Java `.disabled(boolean)`).
+    fn set_disabled(mut self, disabled: bool) -> Self {
+        if let Some(s) = self.last_mut() {
+            s.disabled = disabled;
+        }
+        self
+    }
+
     /// Sends to the endpoint.
     fn to(self, uri: &str) -> Self {
         self.eip(Eip::To {
