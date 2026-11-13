@@ -452,6 +452,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "camel-toon"
+version = "4.23.0"
+dependencies = [
+ "camel-api",
+ "camel-base-engine",
+ "camel-core",
+ "camel-support",
+ "camel-util",
+ "tokio",
+]
+
+[[package]]
 name = "camel-util"
 version = "4.23.0"
 dependencies = [

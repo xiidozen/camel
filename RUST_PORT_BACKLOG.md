@@ -604,7 +604,7 @@ progress and what is still to do. Update it in the same commit as each port.
 | `components/camel-thymeleaf` | 4 | 24 | todo | |
 | `components/camel-tika` | 6 | 3 | todo | |
 | `components/camel-timer` | 4 | 0 | wip | Rust crate `camel-timer` on a tokio task: period/delay (millis or duration text), repeatCount, fixedRate, negative delay, includeMetadata, time (default patterns), timerName, runLoggingLevel; graceful stop waits for the message in flight. Pending: `pattern`, context suspend, `exceptionHandler`. Tests: 14 camel-core timer tests (`tests/component/timer`). |
-| `components/camel-toon` | 1 | 1 | todo | |
+| `components/camel-toon` | 1 | 1 | done | Rust crate `camel-toon`: `codec` (a TOON encoder and decoder as JToon: indented objects, `[N]` array headers with the delimiter and the `#` length marker, inline primitive arrays, tabular arrays of uniform objects, `- ` list items, minimal quoting and escapes, strict and best-effort decoding), `ToonDataFormat` (indent, delimiter, lengthMarker, strict, contentTypeHeader; text bodies are JSON documents), `register(context)`. Tests: ToonDataFormatTest except the POJO case (Java removed). |
 | `components/camel-tracing` | 63 | 27 | todo | |
 | `components/camel-twilio` | 8 | 3 | todo | |
 | `components/camel-twitter` | 32 | 16 | todo | |

@@ -29,6 +29,7 @@ members = [
     "components/camel-zipfile",
     "components/camel-csv",
     "components/camel-lzf",
+    "components/camel-toon",
     "components/camel-tarfile",
     "components/camel-jackson",
     "components/camel-jsonpath",
@@ -76,6 +77,7 @@ camel-dataset = { path = "components/camel-dataset" }
 camel-zipfile = { path = "components/camel-zipfile" }
 camel-csv = { path = "components/camel-csv" }
 camel-lzf = { path = "components/camel-lzf" }
+camel-toon = { path = "components/camel-toon" }
 camel-tarfile = { path = "components/camel-tarfile" }
 camel-jackson = { path = "components/camel-jackson" }
 camel-jsonpath = { path = "components/camel-jsonpath" }
