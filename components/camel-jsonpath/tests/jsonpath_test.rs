@@ -575,3 +575,152 @@ async fn test_jsonpath_null_header_and_primitive_choice() {
     mock(&c, "mock:positive").assert_is_satisfied().await;
     mock(&c, "mock:zero").assert_is_satisfied().await;
 }
+
+/// `JsonPathMockMatchesTest`: jsonpath predicates on the messages of a mock.
+#[tokio::test]
+async fn test_jsonpath_mock_matches() {
+    for (order, satisfied) in [([0, 2, 1], true), ([0, 1, 2], false)] {
+        let c = context(|r: &mut Routes| {
+            r.add(from("direct:start").to("mock:result"));
+        })
+        .await;
+        let m = mock(&c, "mock:result");
+        m.expected_message_count(3);
+        let predicates = [
+            "$.store.book[?(@.price < 10)]",
+            "$.store.book[?(@.price < 30)]",
+            "$.store.book[?(@.price > 30)]",
+        ];
+        for (i, p) in order.iter().zip(predicates) {
+            let camel_core::model::expression::ExpressionDefinition::Predicate(p) =
+                jsonpath(p).predicate()
+            else {
+                unreachable!()
+            };
+            m.message_matches(*i, p);
+        }
+        let t = c.create_producer_template();
+        for f in ["cheap.json", "expensive.json", "average.json"] {
+            t.send_body("direct:start", file(f)).await.unwrap();
+        }
+        assert_eq!(satisfied, m.try_assert_is_satisfied().await.is_ok());
+    }
+}
+
+/// `JsonPathTransformONielTest`, `JsonPathTransformONielEscapedTest` and
+/// `JsonPathTransformONielPlaceholderTest`: quotes in the filter.
+#[tokio::test]
+async fn test_jsonpath_transform_oniel() {
+    for (exp, expected) in [
+        (
+            "$.store.book[?(@.author == \"John O'Niel\")].title",
+            vec!["Camels in Space"],
+        ),
+        (
+            "$.store.book[?(@.author == 'John O\\'Niel')].title",
+            vec!["Camels in Space"],
+        ),
+        (
+            "$.store.book[?(@.author == '{{who}}' || @.title == '{{search}}')].title",
+            vec!["Sword's of Honour", "Camels in Space"],
+        ),
+    ] {
+        let context = camel_core::default_context();
+        camel_jsonpath::register(&context);
+        context
+            .properties()
+            .add_initial_property("who", "John O'Niel");
+        context
+            .properties()
+            .add_initial_property("search", "Sword's of Honour");
+        context
+            .add_routes(move |r: &mut Routes| {
+                r.add(from("direct:start").transform(jp(exp)).to("mock:authors"));
+            })
+            .await
+            .unwrap();
+        context.start().await.unwrap();
+        let m = mock(&context, "mock:authors");
+        m.expected_message_count(1);
+        context
+            .create_producer_template()
+            .send_body("direct:start", file("books.json"))
+            .await
+            .unwrap();
+        m.assert_is_satisfied().await;
+        let expected = Value::List(expected.into_iter().map(Value::from).collect());
+        assert_eq!(
+            expected,
+            m.received_exchanges()[0].message().body().clone(),
+            "{exp}"
+        );
+    }
+}
+
+/// `JsonPathSimpleTransformTest`, `JsonPathSimpleSetVariableTest` and
+/// `JsonPathSimpleResultTypeTest`: jsonpath in simple templates.
+#[tokio::test]
+async fn test_jsonpath_simple() {
+    let mapping = "{\n  \"id\": \"${jsonpath($.id)}\",\n  \"type\": \"${header.type}\",\n  \"amount\": ${jsonpath($.amount)},\n  \"status\": \"${iif(${jsonpath($.amount)} > 100,HIGH,LOW)}\"\n}\n";
+    let mapping2 = "${setVariable(myVar,${jsonpath($.amount)})}\n{\n  \"id\": \"${jsonpath($.id)}\",\n  \"type\": \"${header.type}\",\n  \"amount\": ${jsonpath($.amount)},\n  \"status\": \"${iif(${variable.myVar} > 100,HIGH,LOW)}\"\n}\n";
+    let c = context(move |r: &mut Routes| {
+        r.add(
+            from("direct:transform")
+                .transform(simple("{\n  \"roll\": ${jsonpath($.id)},\n  \"years\": ${jsonpath($.age)},\n  \"fullname\": \"${jsonpath($.name)}\"\n}"))
+                .to("mock:result"),
+        );
+        r.add(from("direct:start").transform(simple(mapping)).log("${body}").to("mock:order"));
+        r.add(from("direct:start2").transform(simple(mapping2)).transform(simple("${trim()}")).log("${body}").to("mock:order"));
+        r.add(
+            from("direct:types")
+                .set_header("age", simple("${int:jsonpath($.age)}"))
+                .set_header("id", simple("${long:jsonpath($.id)}"))
+                .set_header("name", simple("${string:jsonpath($.name)}"))
+                .set_header("vip", simple("${boolean:jsonpath($.vip)}"))
+                .to("mock:types"),
+        );
+    })
+    .await;
+    let t = c.create_producer_template();
+    let result = mock(&c, "mock:result");
+    result.expected_bodies_received([
+        "{\n  \"roll\": 123,\n  \"years\": 42,\n  \"fullname\": \"scott\"\n}",
+    ]);
+    t.send_body(
+        "direct:transform",
+        "{\"id\": 123, \"age\": 42, \"name\": \"scott\"}",
+    )
+    .await
+    .unwrap();
+    result.assert_is_satisfied().await;
+    let expected = "{\n  \"id\": \"123\",\n  \"type\": \"silver\",\n  \"amount\": 444,\n  \"status\": \"HIGH\"\n}";
+    for uri in ["direct:start", "direct:start2"] {
+        let order = mock(&c, "mock:order");
+        order.reset();
+        order.expected_bodies_received([expected]);
+        t.send_body_and_header(
+            uri,
+            "{\n  \"id\": 123,\n  \"amount\": 444\n}\n",
+            "type",
+            "silver",
+        )
+        .await
+        .unwrap();
+        order.assert_is_satisfied().await;
+    }
+    let types = mock(&c, "mock:types");
+    types.expected_header_received("age", 42);
+    types.expected_header_received("id", 1234567890i64);
+    types.expected_header_received("name", "scott");
+    types.expected_header_received("vip", true);
+    t.send_body(
+        "direct:types",
+        "{\"id\": \"1234567890\", \"age\": \"42\", \"name\": \"scott\", \"vip\": \"true\"}",
+    )
+    .await
+    .unwrap();
+    types.assert_is_satisfied().await;
+    let h = types.received_exchanges()[0].message().headers().clone();
+    assert!(matches!(h.get("vip"), Some(Value::Bool(true))));
+    assert!(matches!(h.get("age"), Some(Value::Int(42))));
+}

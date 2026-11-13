@@ -84,7 +84,10 @@ pub fn reify_expression(
             language,
             expression,
         } => {
-            let expression = resolve_placeholders(context, expression)?;
+            // the expression text is trimmed (Java ExpressionReifier, trim true by default)
+            let expression = resolve_placeholders(context, expression)?
+                .trim()
+                .to_string();
             let language = resolve_placeholders(context, language)?;
             let e = context
                 .resolve_language(&language)?
@@ -207,7 +210,10 @@ pub fn reify_predicate(
             language,
             expression,
         } => {
-            let expression = resolve_placeholders(context, expression)?;
+            // the expression text is trimmed (Java ExpressionReifier, trim true by default)
+            let expression = resolve_placeholders(context, expression)?
+                .trim()
+                .to_string();
             let language = resolve_placeholders(context, language)?;
             let p = context
                 .resolve_language(&language)?

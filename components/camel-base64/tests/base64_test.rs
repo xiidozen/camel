@@ -189,7 +189,7 @@ async fn test_properties_function() {
     for (exp, expected) in [
         ("${body} {{base64:fooKey}}", "Hello Camel"),
         ("${body} {{base64:decode:Q2FtZWw==}}", "Hello Camel"),
-        ("${body} {{base64:?missingKey}}", "Hello "),
+        ("${body} {{base64:?missingKey}}", "Hello"),
     ] {
         let context = camel_core::default_context();
         camel_base64::register(&context);

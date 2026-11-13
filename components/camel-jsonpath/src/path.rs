@@ -240,7 +240,7 @@ impl<'a> Parser<'a> {
                     });
                     self.pos += 1;
                 }
-                Some(c) if c == quote => {
+                Some(c) if c == quote && self.closes_string() => {
                     self.pos += 1;
                     return Ok(out);
                 }
@@ -251,6 +251,20 @@ impl<'a> Parser<'a> {
                 }
             }
         }
+    }
+
+    /// Whether the quote at the position closes the string: the end, a closing bracket or
+    /// parenthesis, a comma or an operator follows (so `'John O'Niel'` is one string).
+    fn closes_string(&self) -> bool {
+        let rest = self.text[self.pos + 1..].trim_start();
+        rest.is_empty()
+            || matches!(
+                rest.as_bytes()[0],
+                b')' | b']' | b',' | b'&' | b'|' | b'=' | b'!' | b'<' | b'>'
+            )
+            || ["in ", "nin ", "contains ", "size ", "empty "]
+                .iter()
+                .any(|w| rest.starts_with(w))
     }
 
     fn number(&mut self) -> CamelResult<i64> {
