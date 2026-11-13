@@ -287,6 +287,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "camel-jsonpath"
+version = "4.23.0"
+dependencies = [
+ "camel-api",
+ "camel-base-engine",
+ "camel-core",
+ "camel-core-model",
+ "camel-support",
+ "camel-util",
+ "camel-xml-io-dsl",
+ "regex",
+ "tokio",
+]
+
+[[package]]
 name = "camel-language"
 version = "4.23.0"
 dependencies = [

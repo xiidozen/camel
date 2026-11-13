@@ -29,6 +29,7 @@ members = [
     "components/camel-zipfile",
     "components/camel-tarfile",
     "components/camel-jackson",
+    "components/camel-jsonpath",
     "components/camel-bean",
     "components/camel-timer",
     "dsl/camel-yaml-dsl/camel-yaml-dsl",
@@ -73,6 +74,7 @@ camel-dataset = { path = "components/camel-dataset" }
 camel-zipfile = { path = "components/camel-zipfile" }
 camel-tarfile = { path = "components/camel-tarfile" }
 camel-jackson = { path = "components/camel-jackson" }
+camel-jsonpath = { path = "components/camel-jsonpath" }
 camel-bean = { path = "components/camel-bean" }
 camel-timer = { path = "components/camel-timer" }
 camel-yaml-dsl = { path = "dsl/camel-yaml-dsl/camel-yaml-dsl" }

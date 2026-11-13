@@ -256,7 +256,72 @@ fn predicate_expression(function: &str) -> ParseResult<Option<SharedExpression>>
     })))
 }
 
+/// `${jsonpath(exp)}`, `${jq(exp)}` and `${xpath(exp)}`: the expression of the language,
+/// optionally on the input `header:name`, `exchangeProperty:name` or `variable:name` (Java
+/// `QueryLanguageFunctionFactory`); the language is resolved from the context of the exchange.
+fn query_language_function(function: &str, index: usize) -> ParseResult<Option<SharedExpression>> {
+    let Some((name, remainder)) = ["jsonpath", "jq", "xpath"]
+        .iter()
+        .find_map(|n| function.strip_prefix(&format!("{n}(")).map(|r| (*n, r)))
+    else {
+        return Ok(None);
+    };
+    let Some(exp) = remainder.rfind(')').map(|i| &remainder[..i]) else {
+        return Err(ParserError::new(
+            format!("Valid syntax: ${{{name}(exp)}} was: {function}"),
+            index,
+        ));
+    };
+    let exp = remove_leading_and_ending_quotes(exp);
+    let has_input = ["header:", "property:", "exchangeProperty:", "variable:"]
+        .iter()
+        .any(|p| exp.starts_with(p));
+    let (input, exp) = match exp.split_once(',') {
+        Some((i, e)) if has_input => (Some(i.trim().to_string()), e.trim().to_string()),
+        _ => (None, exp),
+    };
+    let exp = remove_leading_and_ending_quotes(&exp);
+    let description = format!("{name}({exp})");
+    let language = name.to_string();
+    let compiled: Arc<OnceLock<SharedExpression>> = Arc::new(OnceLock::new());
+    Ok(Some(named_expression(description, move |e| {
+        let x = match compiled.get() {
+            Some(x) => x.clone(),
+            None => {
+                let x = e
+                    .context()
+                    .resolve_language(&language)?
+                    .create_expression(&exp)?;
+                compiled.get_or_init(|| x).clone()
+            }
+        };
+        match &input {
+            None => x.evaluate(e),
+            Some(i) => {
+                // the input as the body of a copy of the exchange
+                let value = if let Some(h) = i.strip_prefix("header:") {
+                    e.message().header(h).cloned()
+                } else if let Some(v) = i.strip_prefix("variable:") {
+                    e.variable(v).cloned()
+                } else {
+                    let p = i
+                        .strip_prefix("exchangeProperty:")
+                        .or_else(|| i.strip_prefix("property:"))
+                        .unwrap_or(i);
+                    e.property(p).cloned()
+                };
+                let mut copy = e.clone();
+                copy.message_mut().set_body(value.unwrap_or_default());
+                x.evaluate(&copy)
+            }
+        }
+    })))
+}
+
 fn do_create(function: &str, index: usize) -> ParseResult<SharedExpression> {
+    if let Some(q) = query_language_function(function, index)? {
+        return Ok(q);
+    }
     // ${body != null && body.size() > 0}: the braces hold a predicate, which is what they hold
     // in EL, Groovy and a JavaScript template, so read it as one (CAMEL-24921)
     if let Some(p) = predicate_expression(function)? {
