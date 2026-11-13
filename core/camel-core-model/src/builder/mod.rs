@@ -221,6 +221,19 @@ pub trait Dsl: Sized {
         })
     }
 
+    /// The last filter stores whether its predicate matched in the exchange property (Java
+    /// `.statusPropertyName(name)`).
+    fn status_property_name(mut self, name: &str) -> Self {
+        if let Some(Eip::Filter {
+            status_property_name,
+            ..
+        }) = self.last_mut().map(|l| &mut l.eip)
+        {
+            *status_property_name = Some(name.to_string());
+        }
+        self
+    }
+
     /// The content based router: the first matching `when`, else the `otherwise`.
     fn choice<F>(self, clauses: F) -> Self
     where

@@ -996,3 +996,180 @@ async fn test_no_error_handler_sub_route() {
         t.assert_mock_endpoints_satisfied().await;
     }
 }
+
+/// The `DynamicRouter3Test` and `DynamicRouter4Test` slip: two endpoints, then one after
+/// `mock://b`.
+fn slip_after_b() -> camel_core::api::processor::SharedExpression {
+    use camel_core::api::exchange_constants::SLIP_ENDPOINT;
+    std::sync::Arc::new(camel_core::api::processor::expression_fn(|e: &Exchange| {
+        let previous = e
+            .message()
+            .header(SLIP_ENDPOINT)
+            .or_else(|| e.property(SLIP_ENDPOINT))
+            .map(|v| v.to_string());
+        Ok(match previous.as_deref() {
+            None => Value::from("mock:a,mock:b"),
+            Some("mock://b") => Value::from("mock:c"),
+            Some(_) => Value::Null,
+        })
+    }))
+}
+
+/// Ports of `DynamicRouter3Test` and `DynamicRouter4Test`.
+#[tokio::test]
+async fn test_dynamic_router_slip_endpoint() {
+    let t = ContextTestSupport::with_routes(|r: &mut Routes| {
+        r.add(
+            from("direct:start").dynamic_router(ExpressionDefinition::Expression(slip_after_b())),
+        );
+    })
+    .await;
+    for m in ["mock:a", "mock:b", "mock:c"] {
+        t.mock(m).expected_message_count(1);
+    }
+    t.template
+        .send_body("direct:start", "Hello World")
+        .await
+        .unwrap();
+    t.assert_mock_endpoints_satisfied().await;
+}
+
+/// Ports of `DynamicRouterThrowExceptionFromExpressionTest` and
+/// `RoutingSlipThrowExceptionFromExpressionTest`.
+#[tokio::test]
+async fn test_throw_exception_from_expression() {
+    for slip in [false, true] {
+        let t = ContextTestSupport::with_routes(move |r: &mut Routes| {
+            r.on_exception(
+                on_exception_kind(ErrorKind::ExpressionEvaluation)
+                    .handled(true)
+                    .to("mock://error"),
+            );
+            let failing: camel_core::api::processor::SharedExpression =
+                std::sync::Arc::new(camel_core::api::processor::expression_fn(|_| {
+                    Err(CamelError::new(ErrorKind::ExpressionEvaluation, "Forced"))
+                }));
+            let route = from("direct://start").to("log:foo");
+            let route = if slip {
+                route.routing_slip(ExpressionDefinition::Expression(failing))
+            } else {
+                route.dynamic_router(ExpressionDefinition::Expression(failing))
+            };
+            r.add(route.to("mock://result"));
+        })
+        .await;
+        t.mock("mock:error").expected_message_count(1);
+        t.mock("mock:result").expected_message_count(0);
+        t.template
+            .send_body("direct:start", "Hello World")
+            .await
+            .unwrap();
+        t.assert_mock_endpoints_satisfied().await;
+    }
+}
+
+/// Port of `FailOverLoadBalanceNoProcessorsTest`.
+#[tokio::test]
+async fn test_fail_over_load_balance_no_processors() {
+    let t = ContextTestSupport::with_routes(|r: &mut Routes| {
+        for (uri, round_robin, sticky) in [
+            ("direct:default", false, false),
+            ("direct:roundRobin", true, false),
+            ("direct:sticky", false, true),
+            ("direct:roundRobinSticky", true, true),
+        ] {
+            let failover = LoadBalancerDefinition::Failover {
+                exceptions: Vec::new(),
+                round_robin,
+                sticky,
+                maximum_failover_attempts: -1,
+            };
+            r.add(from(uri).load_balance(failover, |b| b).to("mock:result"));
+        }
+    })
+    .await;
+    for uri in [
+        "direct:default",
+        "direct:roundRobin",
+        "direct:sticky",
+        "direct:roundRobinSticky",
+    ] {
+        let mock = t.mock("mock:result");
+        mock.reset();
+        mock.expected_bodies_received(["Hello World"]);
+        let reply = t.template.request_body(uri, "Hello World").await.unwrap();
+        assert_eq!("Hello World", reply.to_string(), "{uri}");
+        mock.assert_is_satisfied().await;
+    }
+}
+
+/// Port of `LogEipBodyWithSimpleTest`.
+#[tokio::test]
+async fn test_log_eip_body_with_simple() {
+    #[derive(Default)]
+    struct Listener(std::sync::Mutex<Option<String>>);
+    impl camel_core::api::spi::log_listener::LogListener for Listener {
+        fn on_log(&self, _: &Exchange, _: &str, message: &str) -> String {
+            *self.0.lock().unwrap() = Some(message.to_string());
+            message.to_string()
+        }
+    }
+    let t = ContextTestSupport::new();
+    let listener = std::sync::Arc::new(Listener::default());
+    t.context.add_log_listener(listener.clone());
+    t.context
+        .add_routes(|r: &mut Routes| {
+            r.add(
+                from("direct:start")
+                    .set_body(constant("REAL DATA"))
+                    .set_property("body", constant("hello"))
+                    .log("Response from API is ==> ${body}"),
+            );
+        })
+        .await
+        .unwrap();
+    t.context.start().await.unwrap();
+    t.template
+        .send_body("direct:start", Value::Null)
+        .await
+        .unwrap();
+    assert_eq!(
+        Some("Response from API is ==> REAL DATA".to_string()),
+        listener.0.lock().unwrap().clone()
+    );
+}
+
+/// Port of `FilterStatusPropertyTest`.
+#[tokio::test]
+async fn test_filter_status_property() {
+    for matching in [true, false] {
+        let t = ContextTestSupport::with_routes(|r: &mut Routes| {
+            r.add(
+                from("direct:start")
+                    .filter(header("foo").is_equal_to("bar"), |f| f.to("mock:bar"))
+                    .status_property_name("myBar")
+                    .to("mock:result"),
+            );
+        })
+        .await;
+        t.mock("mock:bar")
+            .expected_message_count(i32::from(matching));
+        if matching {
+            t.mock("mock:bar")
+                .message_matches(0, exchange_property("myBar").is_equal_to(true));
+        }
+        t.mock("mock:result").expected_message_count(1);
+        t.mock("mock:result")
+            .message_matches(0, exchange_property("myBar").is_equal_to(matching));
+        let (body, foo) = if matching {
+            ("<matched/>", "bar")
+        } else {
+            ("<notMatched/>", "notMatchedHeaderValue")
+        };
+        t.template
+            .send_body_and_header("direct:start", body, "foo", foo)
+            .await
+            .unwrap();
+        t.assert_mock_endpoints_satisfied().await;
+    }
+}

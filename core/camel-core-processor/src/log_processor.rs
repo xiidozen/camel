@@ -46,8 +46,16 @@ impl Processor for LogProcessor {
     fn process<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>> {
         let r = (|| {
             if let Some(level) = to_log_level(self.level) {
-                if log::log_enabled!(target: "camel", level) || log::max_level() >= level {
-                    let msg = self.expression.evaluate_mut(exchange)?;
+                let listeners = exchange.context().log_listeners();
+                if !listeners.is_empty()
+                    || log::log_enabled!(target: "camel", level)
+                    || log::max_level() >= level
+                {
+                    let mut msg = self.expression.evaluate_mut(exchange)?.to_string();
+                    // the log listeners of the context (Java LogProcessor.fireListeners)
+                    for l in &listeners {
+                        msg = l.on_log(exchange, &self.log_name, &msg);
+                    }
                     log::log!(target: &self.log_name, level, "{msg}");
                 }
             }
