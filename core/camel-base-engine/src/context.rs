@@ -57,6 +57,7 @@ pub struct DefaultCamelContext {
     log_listeners: RwLock<Vec<Arc<dyn LogListener>>>,
     global_options: RwLock<HashMap<String, String>>,
     message_history: AtomicBool,
+    use_breadcrumb: AtomicBool,
     plugins: RwLock<HashMap<TypeId, Arc<dyn Any + Send + Sync>>>,
     properties: Arc<DefaultPropertiesComponent>,
     event_notifiers: RwLock<Vec<SharedEventNotifier>>,
@@ -95,6 +96,7 @@ impl DefaultCamelContext {
             log_listeners: RwLock::new(Vec::new()),
             global_options: RwLock::new(HashMap::new()),
             message_history: AtomicBool::new(false),
+            use_breadcrumb: AtomicBool::new(false),
             plugins: RwLock::new(HashMap::new()),
             properties: {
                 let pc = Arc::new(DefaultPropertiesComponent::new());
@@ -190,6 +192,11 @@ impl DefaultCamelContext {
     /// Sets whether message history is enabled.
     pub fn set_message_history(&self, enabled: bool) {
         self.message_history.store(enabled, Ordering::Relaxed);
+    }
+
+    /// Sets whether the exchanges get a `breadcrumbId` header (Java `setUseBreadcrumb`).
+    pub fn set_use_breadcrumb(&self, enabled: bool) {
+        self.use_breadcrumb.store(enabled, Ordering::Relaxed);
     }
 
     /// The lifecycle status of the context.
@@ -786,6 +793,10 @@ impl CamelContext for DefaultCamelContext {
 
     fn is_message_history(&self) -> bool {
         self.message_history.load(Ordering::Relaxed)
+    }
+
+    fn is_use_breadcrumb(&self) -> bool {
+        self.use_breadcrumb.load(Ordering::Relaxed)
     }
 
     fn endpoint(&self, uri: &str) -> CamelResult<SharedEndpoint> {

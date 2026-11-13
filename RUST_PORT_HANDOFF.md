@@ -172,6 +172,8 @@ Crates live **in the directory of the Maven module they replace** (`core/camel-a
   `components/camel-file` backlog row). Then the rest of the simple tests (`SimpleTest` cases, messageAs), the xpath
   language, camel-main component options.
 - Commit only when `etc/rust/check.sh` passes (chain the commit on its exit status).
+- Before each push run `./etc/rust/port-stats.sh` and commit `README.md` with it: the README shows the Rust/Java
+  share of the code until the conversion is done (user request).
 - Java files still present in `core/camel-api/src/main/java` are the ones not ported yet.
 - Everything else in the repository: **not started** (status `todo` in the backlog).
 

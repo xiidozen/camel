@@ -24,6 +24,19 @@
 >     context.start().await
 > }
 > ```
+>
+<!-- rust-port-stats:start -->
+> **Port progress** (non-blank lines of the `.java` and `.rs` files, updated with each push;
+> `./etc/rust/port-stats.sh`):
+>
+> | Language | Lines | Share of lines | Files |
+> |---|---:|---:|---:|
+> | Rust | 97,048 | 2.6% | 322 |
+> | Java | 3,691,072 | 97.4% | 27,245 |
+>
+> Last updated: 2026-11-13. The Java lines include generated code and the Java tests not
+> ported yet (ported Java code and tests are removed as they are ported).
+<!-- rust-port-stats:end -->
 
 [![Maven Central](https://img.shields.io/maven-central/v/org.apache.camel/apache-camel.svg?label=Maven%20Central)](https://central.sonatype.com/artifact/org.apache.camel/apache-camel)
 [![Javadocs](https://www.javadoc.io/badge/org.apache.camel/apache-camel.svg?color=brightgreen)](https://www.javadoc.io/doc/org.apache.camel/camel-api)

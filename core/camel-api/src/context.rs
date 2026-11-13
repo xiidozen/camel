@@ -27,6 +27,12 @@ pub trait CamelContext: Send + Sync {
         false
     }
 
+    /// Whether the exchanges get a `breadcrumbId` header (their exchange id, unless they have
+    /// one) when their unit of work is created (Java `isUseBreadcrumb`, default `false`).
+    fn is_use_breadcrumb(&self) -> bool {
+        false
+    }
+
     /// The notifiers of the events (Java `getManagementStrategy().getEventNotifiers()`);
     /// send events with [`notify`](crate::spi::event::notify).
     fn event_notifiers(&self) -> Vec<crate::spi::event::SharedEventNotifier> {

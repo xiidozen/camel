@@ -3,6 +3,7 @@
 
 use camel_api::error::CamelResult;
 use camel_api::exchange::Exchange;
+use camel_api::exchange_constants::BREADCRUMB_ID;
 use camel_api::processor::{
     start_processors, stop_processors, BoxFuture, Processor, SharedProcessor,
 };
@@ -55,6 +56,13 @@ impl Processor for UnitOfWorkProcessor {
             }
             if created {
                 exchange.begin_unit_of_work();
+                // inject the breadcrumb header if enabled (Java DefaultUnitOfWork.doOnPrepare)
+                if exchange.context().is_use_breadcrumb()
+                    && exchange.message().header(BREADCRUMB_ID).is_none()
+                {
+                    let id = exchange.exchange_id().to_string();
+                    exchange.message_mut().set_header(BREADCRUMB_ID, id);
+                }
                 notify(
                     exchange.context().clone().as_ref(),
                     CamelEvent::ExchangeCreated(exchange),

@@ -1649,3 +1649,52 @@ async fn test_language_builder() {
         .unwrap();
     t.assert_mock_endpoints_satisfied().await;
 }
+
+/// Ports of `BreadcrumbTest` and `BreadcrumbDisabledTest` (the `MDCTest` routes without MDC):
+/// the `breadcrumbId` header is the exchange id when enabled, absent otherwise.
+#[tokio::test]
+async fn test_breadcrumb() {
+    use camel_core::api::exchange_constants::BREADCRUMB_ID;
+    for enabled in [true, false] {
+        let t = ContextTestSupport::new();
+        t.context.set_use_breadcrumb(enabled);
+        let check = move |e: &mut Exchange| {
+            let id = e.message().header(BREADCRUMB_ID).map(|v| v.to_string());
+            let expected = enabled.then(|| e.exchange_id().to_string());
+            if id != expected {
+                return Err(CamelError::illegal_state(format!(
+                    "breadcrumbId {id:?}, expected {expected:?}"
+                )));
+            }
+            Ok(())
+        };
+        t.context
+            .add_routes(move |r: &mut Routes| {
+                r.add(
+                    from("direct:a")
+                        .route_id("route-a")
+                        .process_fn(check)
+                        .to("log:foo")
+                        .to("direct:b"),
+                );
+                r.add(
+                    from("direct:b")
+                        .route_id("route-b")
+                        .process_fn(check)
+                        .to("log:bar")
+                        .to("mock:result"),
+                );
+            })
+            .await
+            .unwrap();
+        t.context.start().await.unwrap();
+        t.mock("mock:result")
+            .expected_bodies_received(["Hello World", "Bye World"]);
+        t.template
+            .send_body("direct:a", "Hello World")
+            .await
+            .unwrap();
+        t.template.send_body("direct:a", "Bye World").await.unwrap();
+        t.assert_mock_endpoints_satisfied().await;
+    }
+}
