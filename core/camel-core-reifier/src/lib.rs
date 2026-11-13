@@ -779,14 +779,19 @@ impl<'a> RouteReifier<'a> {
                 strategy,
                 aggregate_on_exception,
                 ignore_invalid_endpoint,
+                variable_send,
+                variable_receive,
             } => {
                 let strategy = resolve_aggregation(self.context, strategy)?;
-                Arc::new(EnrichProcessor::new(
-                    self.uri_expr(uri)?,
-                    strategy,
-                    *aggregate_on_exception,
-                    *ignore_invalid_endpoint,
-                ))
+                Arc::new(
+                    EnrichProcessor::new(
+                        self.uri_expr(uri)?,
+                        strategy,
+                        *aggregate_on_exception,
+                        *ignore_invalid_endpoint,
+                    )
+                    .with_variables(variable_send.clone(), variable_receive.clone()),
+                )
             }
             Eip::PollEnrich {
                 uri,
@@ -794,15 +799,19 @@ impl<'a> RouteReifier<'a> {
                 strategy,
                 aggregate_on_exception,
                 ignore_invalid_endpoint,
+                variable_receive,
             } => {
                 let strategy = resolve_aggregation(self.context, strategy)?;
-                Arc::new(PollEnrichProcessor::new(
-                    self.uri_expr(uri)?,
-                    *timeout,
-                    strategy,
-                    *aggregate_on_exception,
-                    *ignore_invalid_endpoint,
-                ))
+                Arc::new(
+                    PollEnrichProcessor::new(
+                        self.uri_expr(uri)?,
+                        *timeout,
+                        strategy,
+                        *aggregate_on_exception,
+                        *ignore_invalid_endpoint,
+                    )
+                    .with_variable_receive(variable_receive.clone()),
+                )
             }
             Eip::Poll { uri, timeout } => Arc::new(PollEnrichProcessor::new(
                 self.uri_expr(uri)?,

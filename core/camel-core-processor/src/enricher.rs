@@ -36,6 +36,27 @@ pub struct EnrichProcessor {
     aggregate_on_exception: bool,
     ignore_invalid_endpoint: bool,
     cache: Arc<ProducerCache>,
+    variable_send: Option<String>,
+    variable_receive: Option<String>,
+}
+
+/// The message of the exchange is restored, the reply stored in the variable (Java
+/// `ExchangeHelper.setVariableFromMessageBodyAndHeaders`), unless the exchange failed.
+fn receive_in_variable(
+    exchange: &mut Exchange,
+    name: Option<&str>,
+    original: Option<camel_api::message::Message>,
+) {
+    let (Some(name), Some(original)) = (name, original) else {
+        return;
+    };
+    if camel_support::exchange_helper::should_set_variable_result(exchange, Some(name)) {
+        let reply = exchange.message().clone();
+        camel_support::exchange_helper::set_variable_from_message_body_and_headers(
+            exchange, name, &reply,
+        );
+        *exchange.message_mut() = original;
+    }
 }
 
 impl EnrichProcessor {
@@ -52,7 +73,16 @@ impl EnrichProcessor {
             aggregate_on_exception,
             ignore_invalid_endpoint,
             cache: Arc::new(ProducerCache::default()),
+            variable_send: None,
+            variable_receive: None,
         }
+    }
+
+    /// With the variable sent as the body, and the variable receiving the reply.
+    pub fn with_variables(mut self, send: Option<String>, receive: Option<String>) -> Self {
+        self.variable_send = send;
+        self.variable_receive = receive;
+        self
     }
 
     async fn run(&self, exchange: &mut Exchange) -> CamelResult<()> {
@@ -62,6 +92,14 @@ impl EnrichProcessor {
         };
         let mut resource = create_correlated_copy(exchange);
         resource.set_pattern(ExchangePattern::InOut);
+        if let Some(name) = &self.variable_send {
+            let value = exchange.variable(name).cloned().unwrap_or_default();
+            resource.message_mut().set_body(value);
+        }
+        let original = self
+            .variable_receive
+            .as_ref()
+            .map(|_| exchange.message().clone());
         match self.cache.acquire(&resource, &uri).await {
             Ok(target) => crate::dynamic::send_to(&target, None, &mut resource).await,
             Err(e) if self.ignore_invalid_endpoint => {
@@ -83,6 +121,7 @@ impl EnrichProcessor {
                     Err(e) => exchange.set_exception(Some(aggregation_error(exchange, e))),
                 },
             }
+            receive_in_variable(exchange, self.variable_receive.as_deref(), original);
         }
         resource.handover_completions(exchange);
         Ok(())
@@ -110,6 +149,7 @@ pub struct PollEnrichProcessor {
     strategy: Option<SharedAggregationStrategy>,
     aggregate_on_exception: bool,
     ignore_invalid_endpoint: bool,
+    variable_receive: Option<String>,
 }
 
 impl PollEnrichProcessor {
@@ -127,7 +167,14 @@ impl PollEnrichProcessor {
             strategy,
             aggregate_on_exception,
             ignore_invalid_endpoint,
+            variable_receive: None,
         }
+    }
+
+    /// With the variable receiving the polled message.
+    pub fn with_variable_receive(mut self, name: Option<String>) -> Self {
+        self.variable_receive = name;
+        self
     }
 
     async fn poll(
@@ -158,6 +205,10 @@ impl PollEnrichProcessor {
             Some(u) => u,
             None => return Ok(()),
         };
+        let original = self
+            .variable_receive
+            .as_ref()
+            .map(|_| exchange.message().clone());
         let (endpoint_uri, mut resource) = match self.poll(exchange, &uri).await {
             Ok(r) => r,
             Err(e) if self.ignore_invalid_endpoint => {
@@ -200,6 +251,7 @@ impl PollEnrichProcessor {
                     }
                 },
             }
+            receive_in_variable(exchange, self.variable_receive.as_deref(), original);
             if let Some(r) = resource.as_mut() {
                 r.handover_completions(exchange);
             }

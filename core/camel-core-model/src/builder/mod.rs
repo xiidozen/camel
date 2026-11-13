@@ -551,6 +551,8 @@ pub trait Dsl: Sized {
             strategy: None,
             aggregate_on_exception: false,
             ignore_invalid_endpoint: false,
+            variable_send: None,
+            variable_receive: None,
         })
     }
 
@@ -564,6 +566,7 @@ pub trait Dsl: Sized {
             strategy: None,
             aggregate_on_exception: false,
             ignore_invalid_endpoint: false,
+            variable_receive: None,
         })
     }
 
@@ -581,6 +584,33 @@ pub trait Dsl: Sized {
             uri: ExpressionDefinition::language("simple", uri),
             timeout,
         })
+    }
+
+    /// The last enrich sends the variable as the body instead of the message body (Java
+    /// `variableSend`).
+    fn variable_send(mut self, name: &str) -> Self {
+        if let Some(Eip::Enrich { variable_send, .. }) = self.last_mut().map(|l| &mut l.eip) {
+            *variable_send = Some(name.to_string());
+        }
+        self
+    }
+
+    /// The last enrich or pollEnrich stores the reply (its body, and its headers as the
+    /// variables `header:name.key`) in the variable, keeping the message (Java
+    /// `variableReceive`).
+    fn variable_receive(mut self, name: &str) -> Self {
+        if let Some(
+            Eip::Enrich {
+                variable_receive, ..
+            }
+            | Eip::PollEnrich {
+                variable_receive, ..
+            },
+        ) = self.last_mut().map(|l| &mut l.eip)
+        {
+            *variable_receive = Some(name.to_string());
+        }
+        self
     }
 
     /// Whether the last enrich or pollEnrich merges a failed reply too (Java

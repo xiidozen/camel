@@ -13,6 +13,7 @@ mod dead_letter_channel_redelivery_test;
 mod dead_letter_channel_use_original_in_body_test;
 mod default_error_handler_redelivery_test;
 mod delayer_test;
+mod enrich_variable_test;
 mod enricher;
 mod filter_test;
 mod idempotent_consumer_test;

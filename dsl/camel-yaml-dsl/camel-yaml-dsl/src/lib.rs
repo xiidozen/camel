@@ -692,6 +692,12 @@ fn step(
             if node.bool("ignoreInvalidEndpoint")? == Some(true) {
                 s = s.ignore_invalid_endpoints();
             }
+            if let Some(v) = node.text("variableSend") {
+                s = s.variable_send(&v);
+            }
+            if let Some(v) = node.text("variableReceive") {
+                s = s.variable_receive(&v);
+            }
             one(s)
         }
         "poll" => {

@@ -708,6 +708,10 @@ pub enum Eip {
         aggregate_on_exception: bool,
         /// Whether an invalid endpoint uri is ignored.
         ignore_invalid_endpoint: bool,
+        /// The variable sent as the body instead of the message body (`variableSend`).
+        variable_send: Option<String>,
+        /// The variable receiving the reply instead of the message (`variableReceive`).
+        variable_receive: Option<String>,
     },
     /// Polls a message from the endpoint and merges it (`pollEnrich`).
     PollEnrich {
@@ -721,6 +725,9 @@ pub enum Eip {
         aggregate_on_exception: bool,
         /// Whether an invalid endpoint uri is ignored.
         ignore_invalid_endpoint: bool,
+        /// The variable receiving the polled message instead of the message
+        /// (`variableReceive`).
+        variable_receive: Option<String>,
     },
     /// Polls a message from the endpoint as the new message (`poll`, Java `PollDefinition`).
     Poll {
