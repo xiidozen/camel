@@ -907,3 +907,169 @@ async fn test_jsonpath_transform_result_type() {
         );
     }
 }
+
+/// `JsonPathCharsetTest`: UTF-16 detected, ISO-8859-1 from the header.
+#[tokio::test]
+async fn test_jsonpath_charset() {
+    let c = context(|r: &mut Routes| {
+        r.add(
+            from("direct:start")
+                .transform(jp("$.store.book[*].title"))
+                .to("mock:authors"),
+        );
+    })
+    .await;
+    let t = c.create_producer_template();
+    for (f, encoding, titles) in [
+        (
+            "booksUTF16BE.json",
+            None,
+            ["Sayings of the Century", "Sword of Honour"],
+        ),
+        (
+            "booksUTF16LE.json",
+            None,
+            ["Sayings of the Century", "Sword of Honour"],
+        ),
+        (
+            "germanbooks-iso-8859-1.json",
+            Some("ISO-8859-1"),
+            ["Joseph und seine Brüder", "Götzendämmerung"],
+        ),
+    ] {
+        let m = mock(&c, "mock:authors");
+        m.reset();
+        m.expected_message_count(1);
+        match encoding {
+            Some(enc) => t
+                .send_body_and_header(
+                    "direct:start",
+                    file(f),
+                    camel_jsonpath::HEADER_JSON_ENCODING,
+                    enc,
+                )
+                .await
+                .unwrap(),
+            None => t.send_body("direct:start", file(f)).await.unwrap(),
+        };
+        m.assert_is_satisfied().await;
+        let Value::List(l) = m.received_exchanges()[0].message().body().clone() else {
+            panic!("a list")
+        };
+        assert_eq!(Value::from(titles[0]), l[0], "{f}");
+        assert_eq!(Value::from(titles[1]), l[1], "{f}");
+    }
+}
+
+/// `JsonPathSourceTest`: files consumed with their charset.
+#[tokio::test]
+async fn test_jsonpath_source_file_charset() {
+    for (f, charset) in [
+        ("germanbooks-utf8.json", "UTF-8"),
+        ("germanbooks-iso-8859-1.json", "ISO-8859-1"),
+    ] {
+        let c = context(move |r: &mut Routes| {
+            r.add(
+                from(&format!(
+                    "file:tests/resources?fileName={f}&noop=true&initialDelay=0&charset={charset}"
+                ))
+                .multicast(|m| {
+                    m.pipeline(|p| {
+                        p.transform(jsonpath("$.store.book[0].title").result_type("String"))
+                            .to("mock:title0")
+                    })
+                    .pipeline(|p| {
+                        p.transform(jsonpath("$.store.book[1].title").result_type("String"))
+                            .to("mock:title1")
+                    })
+                }),
+            );
+        })
+        .await;
+        mock(&c, "mock:title0").expected_bodies_received(["Joseph und seine Br\u{00fc}der"]);
+        mock(&c, "mock:title1").expected_bodies_received(["G\u{00f6}tzend\u{00e4}mmerung"]);
+        mock(&c, "mock:title0").assert_is_satisfied().await;
+        mock(&c, "mock:title1").assert_is_satisfied().await;
+        c.stop().await.unwrap();
+    }
+}
+
+/// `JsonPathSimpleInitBlockTest`, `JsonPathSimpleInitBlockFunctionTest` and
+/// `JsonPathSimpleTransformTwoTest`.
+#[tokio::test]
+async fn test_jsonpath_simple_init_block() {
+    let mapping = "$init{\n  $id := ${jsonpath($.id)};\n  $type := ${header.type};\n  $price := ${jsonpath($.amount)};\n  $level := ${iif(${jsonpath($.amount)} > 100,HIGH,LOW)};\n}init$\n{\n  \"id\": \"$id\",\n  \"type\": \"$type\",\n  \"amount\": $price,\n  \"status\": \"$level\"\n}\n";
+    let mapping2 = "$init{\n  $id := ${jsonpath($.id)};\n  $type := ${header.type};\n  $price := ${jsonpath($.amount)};\n  $level := ${iif(${jsonpath($.amount)} > 100,HIGH,LOW)};\n}init$\n{\n  \"id\": \"$id\",\n  \"type\": \"$type\",\n  \"amount\": ${jsonpath($.amount)},\n  \"status\": \"${lowercase($level)}\"\n}\n";
+    let mapping3 = "$init{\n  $id := ${jsonpath($.id)};\n  $type := ${header.type};\n  $price := ${jsonpath($.amount)};\n  $level ~:= ${body > 100 ? 'HIGH' : 'LOW'};\n  $newStatus ~:= ${sum(${body},50)};\n}init$\n{\n  \"id\": \"$id\",\n  \"type\": \"$type\",\n  \"amount\": $price,\n  \"oldStatus\": $price ~> $level() ~> ${safeQuote()}\n  \"status\": ${newStatus($price)} ~> $level() ~> ${safeQuote()}\n}\n";
+    let c = context(move |r: &mut Routes| {
+        r.add(
+            from("direct:start")
+                .transform(simple(mapping))
+                .log("${body}")
+                .to("mock:order"),
+        );
+        r.add(
+            from("direct:start2")
+                .transform(simple(mapping2))
+                .log("${body}")
+                .to("mock:order2"),
+        );
+        r.add(
+            from("direct:start3")
+                .transform(simple(mapping3))
+                .log("${body}")
+                .to("mock:order3"),
+        );
+        r.add(
+            from("direct:two")
+                .transform(simple("${jsonpath($.id)}"))
+                .to("mock:result"),
+        );
+    })
+    .await;
+    let t = c.create_producer_template();
+    for (uri, m, body, header, expected) in [
+        ("direct:start", "mock:order", "{\n  \"id\": 123,\n  \"amount\": 44\n}\n", "silver", "{\n  \"id\": \"123\",\n  \"type\": \"silver\",\n  \"amount\": 44,\n  \"status\": \"LOW\"\n}"),
+        ("direct:start2", "mock:order2", "{\n  \"id\": 456,\n  \"amount\": 888\n}\n", "gold", "{\n  \"id\": \"456\",\n  \"type\": \"gold\",\n  \"amount\": 888,\n  \"status\": \"high\"\n}"),
+        ("direct:start3", "mock:order3", "{\n  \"id\": 123,\n  \"amount\": 78\n}\n", "silver", "{\n  \"id\": \"123\",\n  \"type\": \"silver\",\n  \"amount\": 78,\n  \"oldStatus\": \"LOW\"\n  \"status\": \"HIGH\"\n}"),
+    ] {
+        let e = mock(&c, m);
+        e.expected_bodies_received([expected]);
+        t.send_body_and_header(uri, body, "type", header).await.unwrap();
+        e.assert_is_satisfied().await;
+    }
+    let r = mock(&c, "mock:result");
+    r.expected_bodies_received(["123"]);
+    t.send_body("direct:two", "{\"id\": 123}").await.unwrap();
+    r.assert_is_satisfied().await;
+}
+
+/// `JsonPathTransformHeaderNameTest`.
+#[tokio::test]
+async fn test_jsonpath_transform_header_name() {
+    let c = context(|r: &mut Routes| {
+        r.add(
+            from("direct:start")
+                .transform(jsonpath("$.store.book[*].author").source("header:myHeader"))
+                .to("mock:authors"),
+        );
+    })
+    .await;
+    let m = mock(&c, "mock:authors");
+    m.expected_message_count(1);
+    c.create_producer_template()
+        .send_body_and_header(
+            "direct:start",
+            "Hello World",
+            "myHeader",
+            file("books.json"),
+        )
+        .await
+        .unwrap();
+    m.assert_is_satisfied().await;
+    let Value::List(l) = m.received_exchanges()[0].message().body().clone() else {
+        panic!("a list")
+    };
+    assert_eq!(Value::from("Nigel Rees"), l[0]);
+    assert_eq!(Value::from("Evelyn Waugh"), l[1]);
+}
