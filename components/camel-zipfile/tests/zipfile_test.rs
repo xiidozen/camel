@@ -741,3 +741,291 @@ async fn test_zip_aggregation_strategy_split_empty_body() {
     result.assert_is_satisfied().await;
     split.assert_is_satisfied().await;
 }
+
+/// `ZipFileSplitOneFileTest`: an archive of one file, consumed and split.
+#[tokio::test]
+async fn test_zip_file_split_one_file() {
+    let dir = test_dir("split-one");
+    std::fs::write(
+        format!("{dir}/test.zip"),
+        camel_zipfile::zip_entries([("test.txt", &b"Hello World"[..])]).unwrap(),
+    )
+    .unwrap();
+    let d = dir.clone();
+    let c = context(move |r: &mut Routes| {
+        r.add(
+            from(&format!(
+                "file://{d}?noop=true&include=.*zip&initialDelay=0&delay=10"
+            ))
+            .to("mock:input")
+            .unmarshal(df(ZipFileDataFormat::new().with_using_iterator(true)))
+            .split(body(), |s| s.convert_body_to("String").to("mock:end"))
+            .streaming(),
+        );
+    })
+    .await;
+    let input = MockEndpoint::resolve(c.as_ref(), "mock:input").unwrap();
+    input.expected_header_received(
+        camel_core::api::exchange_constants::FILE_NAME_ONLY,
+        "test.zip",
+    );
+    let end = MockEndpoint::resolve(c.as_ref(), "mock:end").unwrap();
+    end.expected_bodies_received(["Hello World"]);
+    input.assert_is_satisfied().await;
+    end.assert_is_satisfied().await;
+    c.stop().await.unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `ZipFileSplitAndDeleteTest`: the consumed archive is deleted after the split, with the
+/// data format and with the splitter.
+#[tokio::test]
+async fn test_zip_file_split_and_delete() {
+    for with_data_format in [true, false] {
+        let dir = test_dir("split-delete");
+        let d = dir.clone();
+        let c = context(move |r: &mut Routes| {
+            let route = from(&format!("file://{d}?initialDelay=0&delay=10&delete=true"));
+            let route = if with_data_format {
+                route
+                    .unmarshal(df(ZipFileDataFormat::new().with_using_iterator(true)))
+                    .split(body(), |s| s.convert_body_to("String").to("mock:end"))
+            } else {
+                route.split(
+                    ExpressionDefinition::Expression(zip_splitter(
+                        DEFAULT_MAXIMUM_DECOMPRESSED_SIZE,
+                    )),
+                    |s| s.convert_body_to("String").to("mock:end"),
+                )
+            };
+            r.add(route.streaming());
+        })
+        .await;
+        let end = MockEndpoint::resolve(c.as_ref(), "mock:end").unwrap();
+        end.expected_message_count(2);
+        std::fs::copy("tests/resources/data.zip", format!("{dir}/data.zip")).unwrap();
+        end.assert_is_satisfied().await;
+        let file = std::path::PathBuf::from(format!("{dir}/data.zip"));
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        while file.exists() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "File should been deleted"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        c.stop().await.unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// `SpringZipSplitterRouteTest`: the Spring XML route in the XML DSL, the splitter a bean
+/// referred by the ref language.
+#[tokio::test]
+async fn test_spring_zip_splitter_route() {
+    let xml = r#"<routes xmlns="http://camel.apache.org/schema/xml-io">
+  <route>
+    <from uri="file:tests/resources/org/apache/camel/dataformat/zipfile/data?initialDelay=0&amp;delay=1000&amp;noop=true"/>
+    <split streaming="true">
+      <ref>zipSplitter</ref>
+      <convertBodyTo type="java.lang.String" charset="UTF-8"/>
+      <to uri="mock:processZipEntry"/>
+    </split>
+  </route>
+</routes>"#;
+    let context = camel_core::default_context();
+    camel_zipfile::register(&context);
+    context
+        .registry()
+        .unwrap()
+        .bind(
+            "zipSplitter",
+            camel_core::api::processor::expression_value(zip_splitter(
+                DEFAULT_MAXIMUM_DECOMPRESSED_SIZE,
+            )),
+        )
+        .unwrap();
+    context
+        .add_routes(camel_xml_io_dsl::XmlRoutes::parse(xml).unwrap())
+        .await
+        .unwrap();
+    context.start().await.unwrap();
+    let mock = MockEndpoint::resolve(context.as_ref(), "mock:processZipEntry").unwrap();
+    mock.expected_bodies_received_in_any_order([
+        "chau",
+        "hi",
+        "hola",
+        "another_chiau",
+        "another_hi",
+    ]);
+    mock.assert_is_satisfied().await;
+    context.stop().await.unwrap();
+}
+
+/// `ZipAggregationStrategyRepositoryTest` (the repository storing copies; the optimistic
+/// locking of the memory repository is not ported).
+#[tokio::test]
+async fn test_zip_aggregation_strategy_repository() {
+    use camel_core::api::spi::aggregation_repository::AggregationRepository;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    #[derive(Default)]
+    struct CopyingRepository(Mutex<HashMap<String, Exchange>>);
+    impl AggregationRepository for CopyingRepository {
+        fn add(&self, key: &str, exchange: Exchange) -> Option<Exchange> {
+            self.0
+                .lock()
+                .unwrap()
+                .insert(key.to_string(), exchange.clone())
+        }
+        fn get(&self, key: &str) -> Option<Exchange> {
+            self.0.lock().unwrap().get(key).cloned()
+        }
+        fn remove(&self, key: &str, _: &Exchange) {
+            self.0.lock().unwrap().remove(key);
+        }
+        fn confirm(&self, _: &str) {}
+        fn keys(&self) -> Vec<String> {
+            self.0.lock().unwrap().keys().cloned().collect()
+        }
+    }
+    let out = test_dir("aggregate-repository");
+    let o = out.clone();
+    let c = context(move |r: &mut Routes| {
+        r.add(
+            from("direct:copies")
+                .aggregate(
+                    constant(true),
+                    Arc::new(camel_zipfile::ZipAggregationStrategy::default()),
+                    |a| a.to(&format!("file:{o}")).to("mock:copies"),
+                )
+                .aggregation_repository(Arc::new(CopyingRepository::default()))
+                .completion_size(3),
+        );
+    })
+    .await;
+    let t = c.create_producer_template();
+    for b in ["Hello", "Hello again", "Bye"] {
+        t.send_body("direct:copies", b).await.unwrap();
+    }
+    let mock = MockEndpoint::resolve(c.as_ref(), "mock:copies").unwrap();
+    mock.expected_message_count(1);
+    mock.assert_is_satisfied().await;
+    assert_eq!(3, zip_in_dir(&out).len());
+    c.stop().await.unwrap();
+    let _ = std::fs::remove_dir_all(&out);
+}
+
+/// `ZipSplitAggregateTransactedIssueTest` and its streaming variant (without the Spring
+/// transaction): all the entries of a base64 archive are split and aggregated.
+#[tokio::test]
+async fn test_zip_split_aggregate() {
+    const ZIP: &str = "UEsDBBQAAAAIAFlrtFDFAfecUAAAAB4BAAALAAAAT3JkZXJzMS54bWyzyS9KSS0qtuPl4oQwQSxOm8wUOxMb/cwUCK+gKD+lNLkEzOG0yUvMTbWDCik42uiD+WB1+kgKbfThxqEZbEqUwU6kG2xGlMHOhA2GsortAFBLAwQUAAAACABBW9hQgBf0tVgAAAAqAQAACwAAAE9yZGVyczIueG1ss8kvSkktKrbj5eKEMEEsTpvMFDtDQ0Mb/cwUCL+gKD+lNLkEzOG0yUvMTbWDCimA1YFFwCr1kZTa6MONRDPcyMiIKMPB6kg13NjYmCjDweoIGQ5lFdsBAFBLAQIfABQAAAAIAFlrtFDFAfecUAAAAB4BAAALACQAAAAAAAAAIAAAAAAAAABPcmRlcnMxLnhtbAoAIAAAAAAAAQAYAAD57I2ZLtYBg97kuHn02gEA+eyNmS7WAVBLAQIfABQAAAAIAEFb2FCAF/S1WAAAACoBAAALACQAAAAAAAAAIAAAAHkAAABPcmRlcnMyLnhtbAoAIAAAAAAAAQAYAAAxPXoJStYBjn3iuHn02gEAMT16CUrWAVBLBQYAAAAAAgACALoAAAD6AAAAAAA=";
+    struct Last;
+    impl camel_core::api::processor::AggregationStrategy for Last {
+        fn aggregate(
+            &self,
+            old: Option<Exchange>,
+            new: Option<Exchange>,
+        ) -> CamelResult<Option<Exchange>> {
+            Ok(new.or(old))
+        }
+    }
+    for streaming in [false, true] {
+        let c = camel_core::default_context();
+        camel_zipfile::register(&c);
+        camel_base64::register(&c);
+        c.registry()
+            .unwrap()
+            .bind(
+                "zipSplitter",
+                camel_core::api::processor::expression_value(zip_splitter(
+                    DEFAULT_MAXIMUM_DECOMPRESSED_SIZE,
+                )),
+            )
+            .unwrap();
+        c.add_routes(move |r: &mut Routes| {
+            let route = from("direct:start")
+                .set_body(constant(ZIP))
+                .unmarshal("base64")
+                .split(ExpressionDefinition::language("ref", "zipSplitter"), |s| {
+                    s.log("Splitting ${header.CamelFileName}")
+                })
+                .aggregation_strategy(Arc::new(Last));
+            let route = if streaming { route.streaming() } else { route };
+            r.add(route.to("mock:result"));
+        })
+        .await
+        .unwrap();
+        c.start().await.unwrap();
+        c.create_producer_template()
+            .send_body("direct:start", "")
+            .await
+            .unwrap();
+        let mock = MockEndpoint::resolve(c.as_ref(), "mock:result").unwrap();
+        mock.expected_message_count(1);
+        mock.assert_is_satisfied().await;
+        assert_eq!(
+            Some("Orders2.xml".to_string()),
+            mock.received_exchanges()[0]
+                .message()
+                .header(FILE_NAME)
+                .map(|v| v.to_string())
+        );
+    }
+}
+
+/// `ZipAggregationStrategySplitTest`: the messages of a batch grouped (Java
+/// `GroupedMessageAggregationStrategy`), then split and zipped by the strategy of the split.
+#[tokio::test]
+async fn test_zip_aggregation_strategy_split() {
+    struct Grouped;
+    impl camel_core::api::processor::AggregationStrategy for Grouped {
+        fn aggregate(
+            &self,
+            old: Option<Exchange>,
+            new: Option<Exchange>,
+        ) -> CamelResult<Option<Exchange>> {
+            let Some(new) = new else { return Ok(old) };
+            let message = Value::Object(camel_util::value::ObjectRef::new(new.message().clone()));
+            Ok(Some(match old {
+                None => {
+                    let mut e = new;
+                    e.message_mut().set_body(Value::List(vec![message]));
+                    e
+                }
+                Some(mut o) => {
+                    if let Value::List(l) = o.message().body().clone() {
+                        let mut l = l;
+                        l.push(message);
+                        o.message_mut().set_body(Value::List(l));
+                    }
+                    o
+                }
+            }))
+        }
+    }
+    let out = test_dir("aggregate-split");
+    let o = out.clone();
+    let c = context(move |r: &mut Routes| {
+        r.add(
+            from("file:tests/resources/org/apache/camel/aggregate/zipfile/data?initialDelay=0&delay=1000&noop=true")
+                .aggregate(constant(true), Arc::new(Grouped), |a| {
+                    a.split(body(), |s| s.process_fn(|_| Ok(())))
+                        .aggregation_strategy(Arc::new(camel_zipfile::ZipAggregationStrategy::new(true, true)))
+                        .streaming()
+                        .to(&format!("file:{o}"))
+                        .to("mock:aggregateToZipEntry")
+                })
+                .completion_from_batch_consumer()
+                .eager_check_completion(),
+        );
+    })
+    .await;
+    let mock = MockEndpoint::resolve(c.as_ref(), "mock:aggregateToZipEntry").unwrap();
+    mock.expected_message_count(1);
+    mock.assert_is_satisfied().await;
+    assert_eq!(3, zip_in_dir(&out).len());
+    c.stop().await.unwrap();
+    let _ = std::fs::remove_dir_all(&out);
+}

@@ -13,6 +13,7 @@
 #![deny(missing_docs)]
 #![deny(rustdoc::broken_intra_doc_links)]
 
+pub mod ref_language;
 pub mod simple;
 
 use camel_api::error::CamelResult;
@@ -104,6 +105,7 @@ pub fn core_languages() -> Vec<LanguageEntry> {
         ("exchangeProperty", || Arc::new(ExchangePropertyLanguage)),
         ("variable", || Arc::new(VariableLanguage)),
         ("tokenize", || Arc::new(TokenizeLanguage)),
+        ("ref", || Arc::new(ref_language::RefLanguage::default())),
     ]
 }
 

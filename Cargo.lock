@@ -440,8 +440,10 @@ version = "4.23.0"
 dependencies = [
  "camel-api",
  "camel-base-engine",
+ "camel-base64",
  "camel-core",
  "camel-util",
+ "camel-xml-io-dsl",
  "log",
  "tokio",
  "zip",

@@ -1857,3 +1857,40 @@ async fn test_dead_letter_channel_not_handle_new_exception() {
         crate::support::cause_of(&e).message()
     );
 }
+
+/// Port of `SplitRefCustomExpressionTest`: the split expression is a bean of the registry.
+#[tokio::test]
+async fn test_split_ref_custom_expression() {
+    let t = ContextTestSupport::new();
+    let exp = camel_core::api::processor::expression_value(std::sync::Arc::new(
+        camel_core::api::processor::expression_fn(|e: &Exchange| {
+            Ok(Value::List(
+                e.message()
+                    .body()
+                    .to_string()
+                    .split(',')
+                    .map(Value::from)
+                    .collect(),
+            ))
+        }),
+    ));
+    t.context
+        .registry()
+        .unwrap()
+        .bind("myCustomExpression", exp)
+        .unwrap();
+    t.context
+        .add_routes(|r: &mut Routes| {
+            r.add(from("direct:start").split(
+                ExpressionDefinition::language("ref", "myCustomExpression"),
+                |s| s.to("mock:split"),
+            ));
+        })
+        .await
+        .unwrap();
+    t.context.start().await.unwrap();
+    t.mock("mock:split")
+        .expected_bodies_received(["A", "B", "C"]);
+    t.template.send_body("direct:start", "A,B,C").await.unwrap();
+    t.assert_mock_endpoints_satisfied().await;
+}

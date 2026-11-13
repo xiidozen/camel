@@ -295,6 +295,26 @@ pub trait Predicate: Send + Sync {
 /// A shared predicate.
 pub type SharedPredicate = Arc<dyn Predicate>;
 
+/// The expression as a value, to bind it in the registry (for the `ref` language).
+pub fn expression_value(expression: SharedExpression) -> Value {
+    Value::Object(camel_util::value::ObjectRef::new(expression))
+}
+
+/// The expression held by a value of the registry (see [`expression_value`]).
+pub fn expression_of(value: &Value) -> Option<SharedExpression> {
+    value.downcast_ref::<SharedExpression>().cloned()
+}
+
+/// The predicate as a value, to bind it in the registry (for the `ref` language).
+pub fn predicate_value(predicate: SharedPredicate) -> Value {
+    Value::Object(camel_util::value::ObjectRef::new(predicate))
+}
+
+/// The predicate held by a value of the registry (see [`predicate_value`]).
+pub fn predicate_of(value: &Value) -> Option<SharedPredicate> {
+    value.downcast_ref::<SharedPredicate>().cloned()
+}
+
 /// A predicate from a closure.
 pub struct FnPredicate<F>(F);
 

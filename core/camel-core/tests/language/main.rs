@@ -7,6 +7,7 @@ mod support;
 mod bean_function_factory_test;
 mod bean_test;
 mod date_function_factory_test;
+mod ref_test;
 mod simple_custom_function_test;
 mod simple_init_block_test;
 mod simple_misc_test;

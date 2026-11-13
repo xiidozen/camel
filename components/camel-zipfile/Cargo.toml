@@ -15,5 +15,7 @@ log = "0.4"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
+camel-base64 = { workspace = true }
 camel-core = { workspace = true }
+camel-xml-io-dsl = { workspace = true }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }
