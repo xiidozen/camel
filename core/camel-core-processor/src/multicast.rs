@@ -464,7 +464,11 @@ impl Processor for SplitProcessor {
                 .map(|(i, item)| {
                     let mut sub = create_correlated_copy(exchange);
                     sub.set_out(None);
-                    sub.message_mut().set_body(item);
+                    // a message part is the message of the part (Java Splitter)
+                    match item.downcast_ref::<camel_api::message::Message>() {
+                        Some(m) => *sub.message_mut() = m.clone(),
+                        None => sub.message_mut().set_body(item),
+                    }
                     sub.set_property(SPLIT_INDEX, i as i64);
                     // when streaming, the size is only known (and set) on the last part
                     if !streaming || i + 1 == size {

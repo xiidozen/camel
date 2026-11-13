@@ -1,0 +1,19 @@
+[package]
+name = "camel-zipfile"
+description = "Camel :: Zip File — compression and decompression using java.util.zip.ZipStream (port of components/camel-zipfile)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+camel-api = { workspace = true }
+camel-base-engine = { workspace = true }
+camel-util = { workspace = true }
+log = "0.4"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+camel-core = { workspace = true }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }
