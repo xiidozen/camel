@@ -4,6 +4,42 @@
 use camel_api::error::{CamelError, CamelResult};
 use camel_util::value::{Value, ValueMap};
 
+/// Whether the text is a JSON object or array, by its first and last characters (Java
+/// `JsonPayloadHelper.isJsonText`: the text is not parsed).
+///
+/// # Examples
+///
+/// ```
+/// use camel_support::json::is_json_text;
+///
+/// assert!(is_json_text("  {\"a\": 1}\n"));
+/// assert!(is_json_text("[1]"));
+/// assert!(!is_json_text("{not closed"));
+/// assert!(!is_json_text("hello"));
+/// ```
+pub fn is_json_text(text: &str) -> bool {
+    let t = text.trim();
+    t.len() >= 2
+        && ((t.starts_with('{') && t.ends_with('}')) || (t.starts_with('[') && t.ends_with(']')))
+}
+
+/// Writes a body that already is JSON as it is (Java `JsonPayloadHelper.writeIfAlreadyJson`):
+/// bytes, and a text that is a JSON object or array; `false` for the other bodies, which the
+/// JSON data formats then serialize.
+pub fn write_if_already_json(body: &Value, out: &mut Vec<u8>) -> bool {
+    match body {
+        Value::Bytes(b) => {
+            out.extend_from_slice(b);
+            true
+        }
+        Value::Text(t) if is_json_text(t) => {
+            out.extend_from_slice(t.as_bytes());
+            true
+        }
+        _ => false,
+    }
+}
+
 /// The value of the JSON value.
 pub fn from_json(json: serde_json::Value) -> Value {
     match json {

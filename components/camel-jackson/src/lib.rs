@@ -110,13 +110,6 @@ pub fn jackson_pretty(value: &Value) -> String {
     out
 }
 
-/// Whether the text is a JSON object or array.
-fn is_json_text(text: &str) -> bool {
-    let t = text.trim();
-    ((t.starts_with('{') && t.ends_with('}')) || (t.starts_with('[') && t.ends_with(']')))
-        && serde_json::from_str::<serde_json::Value>(t).is_ok()
-}
-
 impl JacksonDataFormat {
     /// The data format with the default options.
     pub fn new() -> Self {
@@ -200,10 +193,9 @@ impl DataFormat for JacksonDataFormat {
         graph: &Value,
         out: &mut Vec<u8>,
     ) -> CamelResult<()> {
+        // the JSON text and bytes as is (Java JsonPayloadHelper.writeIfAlreadyJson)
         match graph {
-            // the JSON text and bytes as is
-            Value::Text(t) if is_json_text(t) => out.extend(t.as_bytes()),
-            Value::Bytes(b) => out.extend(b),
+            g if camel_support::json::write_if_already_json(g, out) => {}
             other => {
                 let v = if self.include_non_null {
                     without_nulls(other)

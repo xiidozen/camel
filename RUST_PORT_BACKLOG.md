@@ -348,7 +348,7 @@ progress and what is still to do. Update it in the same commit as each port.
 | `components/camel-grok` | 2 | 6 | todo | |
 | `components/camel-groovy` | 14 | 37 | todo | |
 | `components/camel-grpc` | 30 | 20 | todo | |
-| `components/camel-gson` | 2 | 17 | todo | |
+| `components/camel-gson` | 2 | 17 | wip | Rust crate `camel-gson`: `json` (the lenient Gson reader: unquoted and single quoted names and strings, `=`/`=>`, `;`, comments, omitted array values, numbers as doubles; the Gson writer: HTML safe escapes, null map entries left out unless serializeNulls, the Gson pretty printing), `GsonDataFormat` (unmarshalType and the `CamelGsonUnmarshalType` header as Object/Map/List/String, prettyPrint, serializeNulls, longSerializationPolicy, contentTypeHeader; JSON text and bytes written as is), `register(context)`. Core: `camel_support::json::is_json_text`/`write_if_already_json` (Java `JsonPayloadHelper`, also used by camel-jackson), the `json` data format of a `library` (Gson, Jackson, Fastjson, Jsonb). Tests: GsonMarshalTest, GsonMarshalJsonTextTest, GsonDataFormatTest, GsonJsonDataFormatTest, GsonConcurrentTest (maps for the POJOs; Java removed). Kept: the POJO, exclusion, field naming and date tests. |
 | `components/camel-hashicorp-vault` | 9 | 11 | todo | |
 | `components/camel-hazelcast` | 66 | 59 | todo | |
 | `components/camel-hivemq` | 12 | 21 | todo | |

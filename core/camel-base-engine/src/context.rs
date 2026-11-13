@@ -908,6 +908,28 @@ impl CamelContext for DefaultCamelContext {
                 return Ok(df);
             }
         }
+        // the json data format of a library (Java JsonDataFormat.getDataFormatName)
+        if name == "json" {
+            if let Some((_, library)) = options.iter().find(|(k, _)| k == "library") {
+                let target = match library.trim().to_ascii_lowercase().as_str() {
+                    "jackson" => "json",
+                    "gson" => "gson",
+                    "fastjson" => "fastjson",
+                    "jsonb" => "jsonb",
+                    other => {
+                        return Err(CamelError::illegal_argument(format!(
+                            "Unknown json library: {other}"
+                        )))
+                    }
+                };
+                let rest: Vec<(String, String)> = options
+                    .iter()
+                    .filter(|(k, _)| k != "library")
+                    .cloned()
+                    .collect();
+                return self.resolve_data_format(target, &rest);
+            }
+        }
         // a factory of the registry (Java ResolverHelper.lookupDataFormatFactoryInRegistryWithFallback)
         let suffixed = format!(
             "{name}{}",
