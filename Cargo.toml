@@ -31,6 +31,8 @@ members = [
     "components/camel-lzf",
     "components/camel-toon",
     "components/camel-gson",
+    "components/camel-jsonb",
+    "components/camel-fastjson",
     "components/camel-tarfile",
     "components/camel-jackson",
     "components/camel-jsonpath",
@@ -80,6 +82,8 @@ camel-csv = { path = "components/camel-csv" }
 camel-lzf = { path = "components/camel-lzf" }
 camel-toon = { path = "components/camel-toon" }
 camel-gson = { path = "components/camel-gson" }
+camel-jsonb = { path = "components/camel-jsonb" }
+camel-fastjson = { path = "components/camel-fastjson" }
 camel-tarfile = { path = "components/camel-tarfile" }
 camel-jackson = { path = "components/camel-jackson" }
 camel-jsonpath = { path = "components/camel-jsonpath" }

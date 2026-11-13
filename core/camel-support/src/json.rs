@@ -40,6 +40,22 @@ pub fn write_if_already_json(body: &Value, out: &mut Vec<u8>) -> bool {
     }
 }
 
+/// The value without its null map entries, at all the levels (Jackson `NON_NULL`, Gson and
+/// Fastjson without serializing the nulls, JSON-B `skipNull`); the nulls of the lists are
+/// kept.
+pub fn without_null_entries(value: &Value) -> Value {
+    match value {
+        Value::Map(m) => Value::Map(
+            m.iter()
+                .filter(|(_, v)| !v.is_null())
+                .map(|(k, v)| (k.clone(), without_null_entries(v)))
+                .collect(),
+        ),
+        Value::List(l) => Value::List(l.iter().map(without_null_entries).collect()),
+        other => other.clone(),
+    }
+}
+
 /// The value of the JSON value.
 pub fn from_json(json: serde_json::Value) -> Value {
     match json {

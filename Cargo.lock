@@ -270,6 +270,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "camel-fastjson"
+version = "4.23.0"
+dependencies = [
+ "camel-api",
+ "camel-base-engine",
+ "camel-core",
+ "camel-support",
+ "camel-util",
+ "tokio",
+]
+
+[[package]]
 name = "camel-file"
 version = "4.23.0"
 dependencies = [
@@ -307,6 +319,18 @@ dependencies = [
  "camel-util",
  "camel-xml-io-dsl",
  "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "camel-jsonb"
+version = "4.23.0"
+dependencies = [
+ "camel-api",
+ "camel-base-engine",
+ "camel-core",
+ "camel-support",
+ "camel-util",
  "tokio",
 ]
 

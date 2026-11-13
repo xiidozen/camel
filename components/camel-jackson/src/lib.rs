@@ -57,20 +57,6 @@ impl Default for JacksonDataFormat {
     }
 }
 
-/// Removes the null values of the maps (Jackson `Include.NON_NULL`).
-fn without_nulls(value: &Value) -> Value {
-    match value {
-        Value::Map(m) => Value::Map(
-            m.iter()
-                .filter(|(_, v)| !v.is_null())
-                .map(|(k, v)| (k.clone(), without_nulls(v)))
-                .collect(),
-        ),
-        Value::List(l) => Value::List(l.iter().map(without_nulls).collect()),
-        other => other.clone(),
-    }
-}
-
 /// Writes the value as Jackson's `DefaultPrettyPrinter` does: an object per line indented by
 /// two spaces with ` : ` separators, arrays on one line (`[ 1, 2 ]`), empty ones as `{ }` and
 /// `[ ]`.
@@ -198,7 +184,7 @@ impl DataFormat for JacksonDataFormat {
             g if camel_support::json::write_if_already_json(g, out) => {}
             other => {
                 let v = if self.include_non_null {
-                    without_nulls(other)
+                    camel_support::json::without_null_entries(other)
                 } else {
                     other.clone()
                 };
