@@ -724,3 +724,186 @@ async fn test_jsonpath_simple() {
     assert!(matches!(h.get("vip"), Some(Value::Bool(true))));
     assert!(matches!(h.get("age"), Some(Value::Int(42))));
 }
+
+/// `JsonPathSplitMultipleListTest` and `JsonPathSplitSingleListOptionTest`.
+#[tokio::test]
+async fn test_jsonpath_split_lists() {
+    let always_list = camel_jsonpath::path::PathOptions {
+        always_return_list: true,
+        ..Default::default()
+    };
+    let c = context(move |r: &mut Routes| {
+        r.add(from("direct:start2").split(
+            jsonpath("$.store.book").result_type("java.util.List"),
+            |s| s.to("mock:authors2").convert_body_to("String"),
+        ));
+        r.add(from("direct:start3").split(
+            jsonpath("$.store.book[*]").result_type("java.util.List"),
+            |s| s.to("mock:authors3").convert_body_to("String"),
+        ));
+        r.add(
+            from("direct:option")
+                .split(jsonpath("$.store.book[0]").path_options(always_list), |s| {
+                    s.to("mock:authors").convert_body_to("String")
+                }),
+        );
+    })
+    .await;
+    let t = c.create_producer_template();
+    mock(&c, "mock:authors2").expected_message_count(3);
+    mock(&c, "mock:authors3").expected_message_count(3);
+    mock(&c, "mock:authors").expected_message_count(1);
+    for uri in ["direct:start2", "direct:start3", "direct:option"] {
+        t.send_body(uri, file("books.json")).await.unwrap();
+    }
+    for m in ["mock:authors2", "mock:authors3", "mock:authors"] {
+        mock(&c, m).assert_is_satisfied().await;
+    }
+    let Value::Map(row) = mock(&c, "mock:authors").received_exchanges()[0]
+        .message()
+        .body()
+        .clone()
+    else {
+        panic!("a map")
+    };
+    assert_eq!(Some(&Value::from("Nigel Rees")), row.get("author"));
+}
+
+/// `JsonPathSplitWriteAsStringTest`, `JsonPathSplitWriteAsStringMapTest`,
+/// `JsonPathSplitWriteAsStringResultTypeStringTest` and `JsonPathWriteAsStringObjectTest`.
+#[tokio::test]
+async fn test_jsonpath_write_as_string() {
+    let httpbin = "{\n  \"args\": {\n    \"age\": 30,\n    \"name\": \"Alice\"\n  },\n  \"headers\": {\n    \"Host\": \"httpbin.org\",\n    \"Accept\": \"application/json\"\n  },\n  \"origin\": \"178.227.111.11\",\n  \"url\": \"https://httpbin.org/get?name=Alice&age=30\"\n}\n";
+    let c = context(|r: &mut Routes| {
+        r.add(
+            from("direct:start").split(jsonpath("$.content").write_as_string(true), |s| {
+                s.to("mock:line").to("log:line")
+            }),
+        );
+        r.add(
+            from("direct:map").split(jsonpath("$.content.*").write_as_string(true), |s| {
+                s.to("mock:lineMap")
+            }),
+        );
+        r.add(
+            from("direct:one")
+                .set_body(
+                    jsonpath("$.content[?(@.id == 456)]")
+                        .write_as_string(true)
+                        .result_type("String"),
+                )
+                .to("mock:result"),
+        );
+        r.add(
+            from("direct:header")
+                .set_header("NewBody", jsonpath("$.args").write_as_string(true))
+                .to("mock:header"),
+        );
+        r.add(
+            from("direct:body")
+                .set_body(jsonpath("$.args").write_as_string(true))
+                .to("mock:body"),
+        );
+        r.add(
+            from("direct:nested")
+                .set_body(jsonpath("$.headers").write_as_string(true))
+                .to("mock:nested"),
+        );
+    })
+    .await;
+    let t = c.create_producer_template();
+    let lines = [
+        "{\"action\":\"CU\",\"id\":123,\"modifiedTime\":\"2015-07-28T11:40:09.520+02:00\"}",
+        "{\"action\":\"CU\",\"id\":456,\"modifiedTime\":\"2015-07-28T11:42:29.510+02:00\"}",
+    ];
+    for (uri, m, f) in [
+        ("direct:start", "mock:line", "content.json"),
+        ("direct:map", "mock:lineMap", "content-map.json"),
+    ] {
+        let e = mock(&c, m);
+        e.expected_bodies_received(lines);
+        t.send_body(uri, file(f)).await.unwrap();
+        e.assert_is_satisfied().await;
+    }
+    let result = mock(&c, "mock:result");
+    result.expected_bodies_received([lines[1]]);
+    t.send_body("direct:one", file("content.json"))
+        .await
+        .unwrap();
+    result.assert_is_satisfied().await;
+    let json = |text: &str| camel_support_parse(text);
+    t.send_body("direct:header", httpbin).await.unwrap();
+    let header = mock(&c, "mock:header").received_exchanges()[0]
+        .message()
+        .header("NewBody")
+        .unwrap()
+        .to_string();
+    assert_eq!(json("{\"age\":30,\"name\":\"Alice\"}"), json(&header));
+    t.send_body("direct:body", httpbin).await.unwrap();
+    let body = mock(&c, "mock:body").received_exchanges()[0]
+        .message()
+        .body()
+        .to_string();
+    assert_eq!(json("{\"age\":30,\"name\":\"Alice\"}"), json(&body));
+    assert!(
+        body.starts_with('{') && body.ends_with('}') && !body.contains('='),
+        "{body}"
+    );
+    t.send_body("direct:nested", httpbin).await.unwrap();
+    let nested = mock(&c, "mock:nested").received_exchanges()[0]
+        .message()
+        .body()
+        .to_string();
+    assert_eq!(
+        json("{\"Host\":\"httpbin.org\",\"Accept\":\"application/json\"}"),
+        json(&nested)
+    );
+}
+
+fn camel_support_parse(text: &str) -> Value {
+    let lan = camel_jsonpath::JsonPathLanguage::new();
+    let e = Exchange::new(camel_core::api::context::StandaloneContext::shared());
+    let mut e = e;
+    e.message_mut().set_body(text);
+    camel_core::api::spi::language::Language::create_expression(&lan, "$")
+        .unwrap()
+        .evaluate(&e)
+        .unwrap()
+}
+
+/// `JsonPathTransformResultTypeTest` (Rust has one floating point type).
+#[tokio::test]
+async fn test_jsonpath_transform_result_type() {
+    let c = context(|r: &mut Routes| {
+        r.add(
+            from("direct:start")
+                .transform(jsonpath("$.store.book[0].price").result_type("Float"))
+                .to("mock:price"),
+        );
+        r.add(
+            from("direct:second")
+                .transform(jsonpath("$.store.book[0].price").result_type("Double"))
+                .to("mock:price"),
+        );
+    })
+    .await;
+    let t = c.create_producer_template();
+    let m = mock(&c, "mock:price");
+    m.expected_message_count(4);
+    for uri in [
+        "direct:start",
+        "direct:second",
+        "direct:start",
+        "direct:second",
+    ] {
+        t.send_body(uri, file("books.json")).await.unwrap();
+    }
+    m.assert_is_satisfied().await;
+    for e in m.received_exchanges() {
+        assert!(
+            matches!(e.message().body(), Value::Float(f) if (*f - 8.95).abs() < 1e-6),
+            "{}",
+            e.message().body()
+        );
+    }
+}
