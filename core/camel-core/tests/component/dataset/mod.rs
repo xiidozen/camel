@@ -546,3 +546,108 @@ async fn test_route_performance() {
     endpoint.set_result_wait_time(30_000);
     t.assert_mock_endpoints_satisfied().await;
 }
+
+/// `DataSetTestEndpointTest`: the expected bodies polled (event driven) from an endpoint whose
+/// consumer sends one message when started.
+#[tokio::test]
+async fn test_data_set_test_endpoint() {
+    use camel_core::api::context::{CamelContext, StandaloneContext};
+    use camel_core::api::endpoint::{
+        Component, Consumer, Endpoint, SharedConsumer, SharedEndpoint, SharedProducer,
+    };
+    use camel_core::api::processor::{BoxFuture, SharedProcessor};
+    use camel_core::api::service::Service;
+    use std::sync::Weak;
+
+    struct MyComponent;
+    impl Service for MyComponent {}
+    impl Component for MyComponent {
+        fn create_endpoint(
+            &self,
+            context: &Arc<dyn CamelContext>,
+            uri: &str,
+            _: &str,
+            _: &mut camel_util::uri_support::Parameters,
+        ) -> CamelResult<SharedEndpoint> {
+            Ok(Arc::new(MyEndpoint {
+                uri: uri.to_string(),
+                context: Arc::downgrade(context),
+            }))
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+    struct MyEndpoint {
+        uri: String,
+        context: Weak<dyn CamelContext>,
+    }
+    impl Service for MyEndpoint {}
+    impl Endpoint for MyEndpoint {
+        fn endpoint_uri(&self) -> &str {
+            &self.uri
+        }
+        fn camel_context(&self) -> Arc<dyn CamelContext> {
+            self.context
+                .upgrade()
+                .unwrap_or_else(StandaloneContext::shared)
+        }
+        fn create_producer(self: Arc<Self>) -> CamelResult<SharedProducer> {
+            Err(CamelError::runtime("no producer"))
+        }
+        fn create_consumer(
+            self: Arc<Self>,
+            processor: SharedProcessor,
+        ) -> CamelResult<SharedConsumer> {
+            Ok(Arc::new(MyConsumer {
+                endpoint: self,
+                processor,
+            }))
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+    struct MyConsumer {
+        endpoint: Arc<MyEndpoint>,
+        processor: SharedProcessor,
+    }
+    impl Service for MyConsumer {
+        fn start(&self) -> BoxFuture<'_, CamelResult<()>> {
+            Box::pin(async move {
+                let mut e = self.endpoint.create_exchange();
+                e.message_mut().set_body("Hello World");
+                self.processor.process(&mut e).await
+            })
+        }
+    }
+    impl Consumer for MyConsumer {
+        fn endpoint(&self) -> SharedEndpoint {
+            self.endpoint.clone()
+        }
+        fn processor(&self) -> SharedProcessor {
+            self.processor.clone()
+        }
+    }
+
+    let t = ContextTestSupport::new();
+    t.context
+        .add_component("my", Arc::new(MyComponent))
+        .unwrap();
+    t.context
+        .add_routes(|r: &mut Routes| {
+            r.add(from("seda:foo").to("dataset-test:my:foo?timeout=0"));
+        })
+        .await
+        .unwrap();
+    t.context.start().await.unwrap();
+    t.template
+        .send_body("seda:foo", "Hello World")
+        .await
+        .unwrap();
+    t.assert_mock_endpoints_satisfied().await;
+    assert_eq!(
+        1,
+        t.mock("dataset-test:my:foo?timeout=0").received_counter()
+    );
+}

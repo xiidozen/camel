@@ -17,6 +17,7 @@ pub mod idempotent;
 pub mod message_helper;
 pub mod object_helper;
 pub mod pattern_helper;
+pub mod polling_consumer;
 pub mod resource_helper;
 pub mod route_policy_support;
 pub mod scheduled_poll;

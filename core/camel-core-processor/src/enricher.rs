@@ -183,7 +183,7 @@ impl PollEnrichProcessor {
         uri: &str,
     ) -> CamelResult<(String, Option<Exchange>)> {
         let endpoint = exchange.context().endpoint(uri)?;
-        let consumer = endpoint.clone().create_polling_consumer()?;
+        let consumer = camel_support::polling_consumer::polling_consumer_of(endpoint.clone())?;
         consumer.start().await?;
         let result = if self.timeout < 0 {
             consumer.receive().await

@@ -221,6 +221,13 @@ pub trait MockExtension: Send + Sync {
         let _ = endpoint;
     }
 
+    /// Called when a producer of the endpoint starts (Java `doStart` of the endpoint), awaited
+    /// by the route starting it.
+    fn on_start_producer<'a>(&'a self, endpoint: &'a MockEndpoint) -> BoxFuture<'a, ()> {
+        let _ = endpoint;
+        Box::pin(std::future::ready(()))
+    }
+
     /// Creates the consumer of the endpoint, if it can be consumed from (Java
     /// `createConsumer`).
     fn create_consumer(
@@ -1262,7 +1269,16 @@ struct MockProducer {
     endpoint: MockEndpoint,
 }
 
-impl Service for MockProducer {}
+impl Service for MockProducer {
+    fn start(&self) -> BoxFuture<'_, CamelResult<()>> {
+        Box::pin(async move {
+            if let Some(e) = self.endpoint.inner.extension.clone() {
+                e.on_start_producer(&self.endpoint).await;
+            }
+            Ok(())
+        })
+    }
+}
 
 impl Processor for MockProducer {
     fn process<'a>(&'a self, exchange: &'a mut Exchange) -> BoxFuture<'a, CamelResult<()>> {

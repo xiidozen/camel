@@ -12,7 +12,7 @@ use camel_support::component_support::get_and_remove_parameter;
 use camel_util::uri_support::Parameters;
 use camel_util::value::Value;
 use std::any::Any;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::OnceCell;
 
@@ -68,7 +68,6 @@ impl Component for DataSetTestComponent {
             split,
             delimiter,
             expected: Arc::new(OnceCell::new()),
-            task: Mutex::new(None),
         });
         let mock = MockEndpoint::with_extension(uri, remaining, Arc::downgrade(context), extension);
         if let Some(log) = log {
@@ -95,7 +94,6 @@ pub struct DataSetTestExtension {
     split: bool,
     delimiter: regex::Regex,
     expected: Arc<OnceCell<Vec<Value>>>,
-    task: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl DataSetTestExtension {
@@ -110,7 +108,9 @@ impl DataSetTestExtension {
     /// gets nothing within the timeout.
     async fn poll(&self) -> Vec<Value> {
         let mut bodies = Vec::new();
-        let consumer = match self.expected_endpoint.clone().create_polling_consumer() {
+        let consumer = match camel_support::polling_consumer::polling_consumer_of(
+            self.expected_endpoint.clone(),
+        ) {
             Ok(c) => c,
             Err(e) => {
                 log::warn!(
@@ -169,25 +169,15 @@ impl DataSetTestExtension {
 }
 
 impl MockExtension for DataSetTestExtension {
-    fn on_create_producer(&self, _endpoint: &MockEndpoint) {
-        let mut task = self.task.lock().unwrap();
-        if task.is_some() || tokio::runtime::Handle::try_current().is_err() {
-            return;
-        }
-        // Java polls when the endpoint starts; here when the first producer is created
-        let this = DataSetTestExtension {
-            expected_endpoint: self.expected_endpoint.clone(),
-            timeout: self.timeout,
-            any_order: self.any_order,
-            split: self.split,
-            delimiter: self.delimiter.clone(),
-            expected: self.expected.clone(),
-            task: Mutex::new(None),
-        };
-        *task = Some(tokio::spawn(async move {
-            let bodies = this.poll().await;
-            let _ = this.expected.set(bodies);
-        }));
+    fn on_start_producer<'a>(&'a self, endpoint: &'a MockEndpoint) -> BoxFuture<'a, ()> {
+        // Java polls when the endpoint starts; here when its producer starts
+        Box::pin(async move {
+            if !self.expected.initialized() {
+                let bodies = self.poll().await;
+                self.set_expectations(endpoint, &bodies);
+                let _ = self.expected.set(bodies);
+            }
+        })
     }
 
     fn before_exchange<'a>(
@@ -196,10 +186,10 @@ impl MockExtension for DataSetTestExtension {
         _exchange: &'a mut Exchange,
     ) -> BoxFuture<'a, ()> {
         Box::pin(async move {
-            let first = !self.expected.initialized();
-            let bodies = self.expected.get_or_init(|| self.poll()).await;
-            if first || endpoint.received_counter() == 0 {
-                self.set_expectations(endpoint, bodies);
+            if !self.expected.initialized() {
+                let bodies = self.poll().await;
+                self.set_expectations(endpoint, &bodies);
+                let _ = self.expected.set(bodies);
             }
         })
     }

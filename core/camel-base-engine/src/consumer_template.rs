@@ -38,7 +38,7 @@ impl ConsumerTemplate {
         if let Some(c) = self.consumers.lock().unwrap().get(&key) {
             return Ok(c.clone());
         }
-        let consumer = endpoint.create_polling_consumer()?;
+        let consumer = camel_support::polling_consumer::polling_consumer_of(endpoint)?;
         consumer.start().await?;
         self.consumers.lock().unwrap().insert(key, consumer.clone());
         Ok(consumer)
