@@ -7,6 +7,7 @@ mod support;
 mod bean;
 mod browse;
 mod file;
+mod language;
 mod log;
 mod properties;
 mod r#ref;

@@ -19,6 +19,7 @@ members = [
     "components/camel-stub",
     "components/camel-ref",
     "components/camel-browse",
+    "components/camel-language",
     "components/camel-bean",
     "components/camel-timer",
     "dsl/camel-yaml-dsl/camel-yaml-dsl",
@@ -53,6 +54,7 @@ camel-seda = { path = "components/camel-seda" }
 camel-stub = { path = "components/camel-stub" }
 camel-ref = { path = "components/camel-ref" }
 camel-browse = { path = "components/camel-browse" }
+camel-language = { path = "components/camel-language" }
 camel-bean = { path = "components/camel-bean" }
 camel-timer = { path = "components/camel-timer" }
 camel-yaml-dsl = { path = "dsl/camel-yaml-dsl/camel-yaml-dsl" }

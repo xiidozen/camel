@@ -1,0 +1,14 @@
+[package]
+name = "camel-language"
+description = "Camel :: Language — execute scripts in any of the languages supported by Camel (port of components/camel-language)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+camel-api = { workspace = true }
+camel-support = { workspace = true }
+camel-util = { workspace = true }
+log = "0.4"

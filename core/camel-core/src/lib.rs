@@ -93,6 +93,10 @@ pub fn register_core_components(context: &DefaultCamelContext) {
         Arc::new(|| Arc::new(camel_browse::BrowseComponent::new()) as SharedComponent),
     );
     context.register_component_factory(
+        "language",
+        Arc::new(|| Arc::new(camel_language::LanguageComponent::new()) as SharedComponent),
+    );
+    context.register_component_factory(
         "ref",
         Arc::new(|| Arc::new(camel_ref::RefComponent::new()) as SharedComponent),
     );

@@ -97,6 +97,7 @@ dependencies = [
  "camel-core-reifier",
  "camel-direct",
  "camel-file",
+ "camel-language",
  "camel-log",
  "camel-mock",
  "camel-ref",
@@ -194,6 +195,16 @@ dependencies = [
  "sha1",
  "sha2",
  "tokio",
+]
+
+[[package]]
+name = "camel-language"
+version = "4.23.0"
+dependencies = [
+ "camel-api",
+ "camel-support",
+ "camel-util",
+ "log",
 ]
 
 [[package]]
