@@ -66,6 +66,7 @@ dependencies = [
  "camel-base-engine",
  "camel-core",
  "camel-util",
+ "camel-xml-io-dsl",
  "tokio",
 ]
 

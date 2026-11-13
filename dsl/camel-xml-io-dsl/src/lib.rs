@@ -138,7 +138,12 @@ fn eip(node: Node<'_, '_>) -> CamelResult<Yaml> {
     let mut steps = Vec::new();
     for c in elements(node) {
         let name = c.tag_name().name();
-        if LANGUAGES.contains(&name) {
+        if matches!(node.tag_name().name(), "marshal" | "unmarshal") {
+            // the data format element: its attributes are its options
+            let mut options = Mapping::new();
+            attributes(c, &mut options);
+            map.insert(key(name), Yaml::Mapping(options));
+        } else if LANGUAGES.contains(&name) {
             map.insert(key(name), language(c));
         } else if name == "exception" {
             push_list(&mut map, name, Yaml::String(text_of(c)));
@@ -248,6 +253,19 @@ impl XmlRoutes {
                             for r in elements(c).filter(|r| r.tag_name().name() == "route") {
                                 items.push(route(r)?);
                             }
+                        }
+                        "dataFormats" => {
+                            let mut formats = Vec::new();
+                            for f in elements(c) {
+                                let mut options = Mapping::new();
+                                attributes(f, &mut options);
+                                let mut m = Mapping::new();
+                                m.insert(key(f.tag_name().name()), Yaml::Mapping(options));
+                                formats.push(Yaml::Mapping(m));
+                            }
+                            let mut m = Mapping::new();
+                            m.insert(key("dataFormats"), Yaml::Sequence(formats));
+                            items.push(Yaml::Mapping(m));
                         }
                         "onException"
                         | "intercept"

@@ -39,6 +39,7 @@
 use camel_api::context::CamelContext;
 use camel_api::error::{CamelError, CamelResult};
 use camel_api::processor::BoxFuture;
+use camel_api::spi::registry::Registry;
 use camel_base_engine::context::DefaultCamelContext;
 use camel_base_engine::route::RouteSpec;
 use camel_core_model::builder::RouteBuilder;
@@ -83,6 +84,17 @@ impl ModelCamelContext for DefaultCamelContext {
     ) -> BoxFuture<'_, CamelResult<Vec<String>>> {
         Box::pin(async move {
             let context: std::sync::Arc<dyn CamelContext> = self.as_shared();
+            // the data formats of the route builders, bound by id (Java <dataFormats>)
+            for def in &definitions {
+                for (id, df) in &def.builder_data_formats {
+                    let registry = self.simple_registry();
+                    if registry.lookup_by_name(id).is_none() {
+                        let created = camel_core_reifier::resolve_data_format(&context, df)?;
+                        registry
+                            .bind(id, camel_api::spi::data_format::data_format_value(created))?;
+                    }
+                }
+            }
             let mut ids = Vec::new();
             for def in definitions {
                 let (id, generated) = match &def.id {

@@ -1,7 +1,8 @@
 //! Ports of the camel-base64 tests: `Base64DataFormatDefaultsTest`,
 //! `Base64DataFormatDSLDefaultsTest`, `Base64DataFormatLineLengthTest`,
 //! `Base64DataFormatLineEndingsTest`, `SimpleBase64Test`, `Base64PropertiesFunctionTest`,
-//! `Base64PropertiesFunctionDecodeTest` and `Base64PropertiesFunctionOptionalTest`.
+//! `Base64PropertiesFunctionDecodeTest`, `Base64PropertiesFunctionOptionalTest` and the
+//! `SpringBase64DataFormat*Test` (their Spring XML in the XML DSL).
 
 use camel_base64::Base64DataFormat;
 use camel_core::api::spi::data_format::SharedDataFormat;
@@ -208,5 +209,59 @@ async fn test_properties_function() {
             .await
             .unwrap();
         assert_eq!(expected, out.to_string(), "{exp}");
+    }
+}
+
+/// The routes of the Spring XML tests, with the data format element.
+fn spring_xml(data_formats: &str, data_format: &str) -> String {
+    format!(
+        r#"<camel xmlns="http://camel.apache.org/schema/xml-io">
+  {data_formats}
+  <route><from uri="direct:startEncode"/><marshal>{data_format}</marshal><to uri="mock:result"/></route>
+  <route><from uri="direct:startDecode"/><unmarshal>{data_format}</unmarshal><to uri="mock:result"/></route>
+</camel>"#
+    )
+}
+
+/// The Spring XML tests: defaults, line endings and line length.
+#[tokio::test]
+async fn test_spring_xml() {
+    for (data_formats, data_format, encoded) in [
+        ("", "<base64/>", ENCODED_DEFAULTS),
+        (
+            r#"<dataFormats><base64 lineSeparator="&#10;" id="base64"/></dataFormats>"#,
+            r#"<custom ref="base64"/>"#,
+            ENCODED_LINE_ENDINGS,
+        ),
+        (
+            r#"<dataFormats><base64 lineLength="64" id="base64"/></dataFormats>"#,
+            r#"<custom ref="base64"/>"#,
+            ENCODED_LINE_LENGTH_64,
+        ),
+    ] {
+        let routes =
+            camel_xml_io_dsl::XmlRoutes::parse(&spring_xml(data_formats, data_format)).unwrap();
+        let context = camel_core::default_context();
+        camel_base64::register(&context);
+        context.add_routes(routes).await.unwrap();
+        context.start().await.unwrap();
+        let template = context.create_producer_template();
+        let out = template
+            .request_body("direct:startEncode", Value::Bytes(DECODED.to_vec()))
+            .await
+            .unwrap();
+        assert_eq!(
+            encoded,
+            String::from_utf8(bytes(&out)).unwrap(),
+            "{data_formats}"
+        );
+        let out = template
+            .request_body(
+                "direct:startDecode",
+                Value::Bytes(encoded.as_bytes().to_vec()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(DECODED, &bytes(&out)[..]);
     }
 }

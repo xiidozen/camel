@@ -1991,9 +1991,22 @@ pub struct Routes {
     intercepts: Vec<InterceptDefinition>,
     intercept_froms: Vec<InterceptFromDefinition>,
     intercept_send_to_endpoints: Vec<InterceptSendToEndpointDefinition>,
+    data_formats: Vec<(String, crate::processor::DataFormatDefinition)>,
 }
 
 impl Routes {
+    /// Defines a data format with an id, for the `custom` data format of `marshal` and
+    /// `unmarshal` (Java `<dataFormats>`): created and bound in the registry when the routes
+    /// are added.
+    pub fn data_format(
+        &mut self,
+        id: &str,
+        definition: impl Into<crate::processor::DataFormatDefinition>,
+    ) -> &mut Self {
+        self.data_formats.push((id.to_string(), definition.into()));
+        self
+    }
+
     /// Adds the route.
     pub fn add(&mut self, route: impl Into<RouteDefinition>) -> &mut Self {
         self.definitions.push(route.into());
@@ -2097,6 +2110,7 @@ impl Routes {
                 }
                 d.builder_on_exceptions = on_exceptions.clone();
                 d.builder_on_completions = on_completions.clone();
+                d.builder_data_formats = self.data_formats.clone();
                 d.builder_intercepts = intercepts.clone();
                 d.builder_intercept_froms = intercept_froms.clone();
                 d.builder_intercept_send_to_endpoints = intercept_send_to_endpoints.clone();

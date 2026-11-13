@@ -499,6 +499,55 @@ fn step(
         "removeVariable" => {
             one(d.remove_variable(&text(value).map_or_else(|| node.required("name", eip), Ok)?))
         }
+        "marshal" | "unmarshal" => {
+            // the data format: one key (such as `base64: {lineLength: 64}` or
+            // `custom: {ref: myDF}`) besides the options of the EIP
+            const OPTIONS: [&str; 6] = [
+                "variableSend",
+                "variableReceive",
+                "allowNullBody",
+                "id",
+                "description",
+                "disabled",
+            ];
+            let formats: Vec<&(String, Yaml)> = node
+                .entries
+                .iter()
+                .filter(|(k, _)| !OPTIONS.contains(&k.as_str()))
+                .collect();
+            let [(name, options)] = formats.as_slice() else {
+                return Err(error(format!("{eip}: exactly one data format is required")));
+            };
+            let options = Node::of(options);
+            let df = if name == "custom" {
+                let r = text(&node.entries.iter().find(|(k, _)| k == "custom").unwrap().1)
+                    .map_or_else(|| options.required("ref", eip), Ok)?;
+                camel_core_model::builder::custom_data_format(&r)
+            } else {
+                let mut df = camel_core_model::builder::data_format(name);
+                for (k, v) in &options.entries {
+                    if let Some(v) = text(v) {
+                        df = df.option(k, v);
+                    }
+                }
+                df
+            };
+            let mut d = if eip == "marshal" {
+                d.marshal(df)
+            } else {
+                d.unmarshal(df)
+            };
+            if let Some(v) = node.text("variableSend") {
+                d = d.variable_send(&v);
+            }
+            if let Some(v) = node.text("variableReceive") {
+                d = d.variable_receive(&v);
+            }
+            if node.bool("allowNullBody")? == Some(true) {
+                d = d.allow_null_body();
+            }
+            one(d)
+        }
         "convertBodyTo" => {
             let type_name = text(value).map_or_else(|| node.required("type", eip), Ok)?;
             if let Some(charset) = node.text("charset") {
@@ -1088,6 +1137,7 @@ fn bean_of_type(type_name: &str) -> CamelResult<camel_util::value::Value> {
 /// One element of the top level list.
 enum Element {
     Beans(Vec<BeanDefinition>),
+    DataFormats(Vec<(String, camel_core_model::processor::DataFormatDefinition)>),
     Route(Box<RouteDefinition>),
     ErrorHandler(ErrorHandlerDefinition),
     OnException(Box<OnExceptionDefinition>),
@@ -1184,6 +1234,30 @@ impl YamlRoutes {
                     }
                     Element::Beans(beans)
                 }
+                "dataFormats" => {
+                    // a list of `{name: {id: .., options..}}` (Java <dataFormats>)
+                    let mut formats = Vec::new();
+                    if let Yaml::Sequence(l) = value {
+                        for f in l {
+                            let n = Node::of(f);
+                            let [(name, options)] = n.entries.as_slice() else {
+                                return Err(error("dataFormats: one data format per item"));
+                            };
+                            let o = Node::of(options);
+                            let id = o.required("id", "dataFormats")?;
+                            let mut df = camel_core_model::builder::data_format(name);
+                            for (k, v) in &o.entries {
+                                if k != "id" {
+                                    if let Some(v) = text(v) {
+                                        df = df.option(k, v);
+                                    }
+                                }
+                            }
+                            formats.push((id, df));
+                        }
+                    }
+                    Element::DataFormats(formats)
+                }
                 "errorHandler" => Element::ErrorHandler(error_handler(value)?),
                 "onException" => Element::OnException(Box::new(on_exception_definition(value)?)),
                 "intercept" => {
@@ -1260,6 +1334,11 @@ impl RouteBuilder for YamlRoutes {
         for e in &self.elements {
             match e {
                 Element::Beans(_) => {}
+                Element::DataFormats(formats) => {
+                    for (id, df) in formats {
+                        routes.data_format(id, df.clone());
+                    }
+                }
                 Element::Route(r) => {
                     routes.add((**r).clone());
                 }

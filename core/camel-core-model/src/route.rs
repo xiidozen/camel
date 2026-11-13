@@ -39,6 +39,8 @@ pub struct RouteDefinition {
     pub builder_on_exceptions: Vec<OnExceptionDefinition>,
     /// The `onCompletion`s of the route builder (they apply to its routes without their own).
     pub builder_on_completions: Vec<OnCompletionDefinition>,
+    /// The data formats of the route builder by id (Java `<dataFormats>`), for `custom` refs.
+    pub builder_data_formats: Vec<(String, crate::processor::DataFormatDefinition)>,
     /// The `intercept`s of the route builder.
     pub builder_intercepts: Vec<InterceptDefinition>,
     /// The `interceptFrom`s of the route builder.
@@ -84,6 +86,7 @@ impl RouteDefinition {
             on_exceptions: Vec::new(),
             builder_on_exceptions: Vec::new(),
             builder_on_completions: Vec::new(),
+            builder_data_formats: Vec::new(),
             builder_intercepts: Vec::new(),
             builder_intercept_froms: Vec::new(),
             builder_intercept_send_to_endpoints: Vec::new(),
