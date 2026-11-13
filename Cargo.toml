@@ -17,6 +17,7 @@ members = [
     "components/camel-log",
     "components/camel-seda",
     "components/camel-stub",
+    "components/camel-ref",
     "components/camel-bean",
     "components/camel-timer",
     "dsl/camel-yaml-dsl/camel-yaml-dsl",
@@ -49,6 +50,7 @@ camel-mock = { path = "components/camel-mock" }
 camel-log = { path = "components/camel-log" }
 camel-seda = { path = "components/camel-seda" }
 camel-stub = { path = "components/camel-stub" }
+camel-ref = { path = "components/camel-ref" }
 camel-bean = { path = "components/camel-bean" }
 camel-timer = { path = "components/camel-timer" }
 camel-yaml-dsl = { path = "dsl/camel-yaml-dsl/camel-yaml-dsl" }

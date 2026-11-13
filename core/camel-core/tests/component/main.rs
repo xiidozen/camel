@@ -8,6 +8,7 @@ mod bean;
 mod file;
 mod log;
 mod properties;
+mod r#ref;
 mod seda;
 mod stub;
 mod timer;

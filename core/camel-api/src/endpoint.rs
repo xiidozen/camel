@@ -8,6 +8,7 @@ use crate::exchange::Exchange;
 use crate::processor::{BoxFuture, Processor, SharedProcessor};
 use crate::service::Service;
 use camel_util::uri_support::Parameters;
+use camel_util::value::{ObjectRef, Value};
 use std::any::Any;
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,6 +21,20 @@ pub type SharedProducer = Arc<dyn Producer>;
 pub type SharedConsumer = Arc<dyn Consumer>;
 /// A shared component.
 pub type SharedComponent = Arc<dyn Component>;
+
+/// The value holding the endpoint, to bind it in the registry (such as for the `ref`
+/// component).
+pub fn endpoint_value(endpoint: SharedEndpoint) -> Value {
+    Value::Object(ObjectRef::new(endpoint))
+}
+
+/// The endpoint held by a value of the registry (see [`endpoint_value`]).
+pub fn endpoint_of(value: &Value) -> Option<SharedEndpoint> {
+    match value {
+        Value::Object(o) => o.downcast_ref::<SharedEndpoint>().cloned(),
+        _ => None,
+    }
+}
 
 /// An endpoint: a named destination messages are sent to (by a [`Producer`]) or received from
 /// (by a [`Consumer`]), identified by its uri such as `seda:orders?size=100`.

@@ -87,6 +87,7 @@ dependencies = [
  "camel-file",
  "camel-log",
  "camel-mock",
+ "camel-ref",
  "camel-seda",
  "camel-stub",
  "camel-support",
@@ -219,6 +220,14 @@ dependencies = [
  "camel-util",
  "log",
  "tokio",
+]
+
+[[package]]
+name = "camel-ref"
+version = "4.23.0"
+dependencies = [
+ "camel-api",
+ "camel-util",
 ]
 
 [[package]]

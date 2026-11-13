@@ -366,7 +366,8 @@ impl DefaultCamelContext {
                     if e.is(ErrorKind::ResolveEndpointFailed) || e.is(ErrorKind::NoSuchEndpoint) {
                         e
                     } else {
-                        CamelError::resolve_endpoint_failed(uri, e)
+                        // the normalized uri, as Java
+                        CamelError::resolve_endpoint_failed(&normalized, e)
                     }
                 })?;
         if endpoint.is_singleton() {
