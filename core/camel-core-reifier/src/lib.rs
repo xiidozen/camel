@@ -15,7 +15,7 @@ use camel_api::processor::{
     ExpressionPredicate, Processor, SharedAggregationStrategy, SharedExpression, SharedPredicate,
     SharedProcessor,
 };
-use camel_api::spi::registry::lookup_bean;
+use camel_api::spi::registry::{find_beans_by_type, lookup_bean};
 use camel_core_model::errorhandler::{
     ErrorHandlerDefinition, ErrorHandlerKind, RedeliveryPolicyDefinition,
 };
@@ -1316,6 +1316,16 @@ pub fn resolve_process_ref(
 ) -> CamelResult<SharedProcessor> {
     match r {
         ProcessRef::Processor(p) => Ok(p.clone()),
+        ProcessRef::Ref(name) if name.starts_with("#type:") => {
+            // the single processor bean of the registry (Java `#type:`)
+            let not_found = || CamelError::no_such_bean_of_type(None, "org.apache.camel.Processor");
+            let registry = context.registry().ok_or_else(not_found)?;
+            let mut found = find_beans_by_type::<Arc<dyn Processor>>(registry.as_ref());
+            if found.len() != 1 {
+                return Err(not_found());
+            }
+            Ok((*found.remove(0).1).clone())
+        }
         ProcessRef::Ref(name) => {
             // a bean reference (Java mandatoryLookup: `#bean:name` or `#name`)
             let name = name

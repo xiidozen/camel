@@ -1597,3 +1597,55 @@ async fn test_log_custom_language() {
         last.0.lock().unwrap().clone()
     );
 }
+
+/// Port of `ProcessRefBeanTypeTest`: `#type:` refers to the single processor bean.
+#[tokio::test]
+async fn test_process_ref_bean_type() {
+    let t = ContextTestSupport::new();
+    let echo = camel_bean::processor_value(std::sync::Arc::new(
+        camel_core::api::processor::processor_fn(|e: &mut Exchange| {
+            let body = e.message().body().to_string();
+            e.message_mut().set_body(format!("{body}{body}"));
+            Ok(())
+        }),
+    ));
+    t.context.registry().unwrap().bind("myEcho", echo).unwrap();
+    t.context
+        .add_routes(|r: &mut Routes| {
+            r.add(
+                from("direct:start")
+                    .process_ref("#type:org.apache.camel.Processor")
+                    .to("mock:result"),
+            );
+        })
+        .await
+        .unwrap();
+    t.context.start().await.unwrap();
+    t.mock("mock:result")
+        .expected_bodies_received(["CamelCamel"]);
+    t.template.send_body("direct:start", "Camel").await.unwrap();
+    t.assert_mock_endpoints_satisfied().await;
+}
+
+/// Port of `LanguageBuilderTest`.
+#[tokio::test]
+async fn test_language_builder() {
+    let t = ContextTestSupport::with_routes(|r: &mut Routes| {
+        r.add(from("direct:start").filter(
+            ExpressionDefinition::language("simple", "${body} contains 'Camel'"),
+            |f| f.to("mock:camel"),
+        ));
+    })
+    .await;
+    t.mock("mock:camel")
+        .expected_bodies_received(["Hello Camel"]);
+    t.template
+        .send_body("direct:start", "Hello World")
+        .await
+        .unwrap();
+    t.template
+        .send_body("direct:start", "Hello Camel")
+        .await
+        .unwrap();
+    t.assert_mock_endpoints_satisfied().await;
+}
