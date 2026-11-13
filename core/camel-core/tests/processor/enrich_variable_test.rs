@@ -215,3 +215,44 @@ async fn test_poll_enrich_variable() {
         t.assert_mock_endpoints_satisfied().await;
     }
 }
+
+/// Port of `PollEnrichVariableErrorTest`: a polled failed, stopped or rolled back exchange is
+/// not stored in the variable.
+#[tokio::test]
+async fn test_poll_enrich_variable_error() {
+    for case in ["throw", "stop", "rollbackOnly"] {
+        let t = ContextTestSupport::with_routes(|r: &mut Routes| {
+            r.add(
+                from("direct:receive")
+                    .poll_enrich("seda:foo", 1000)
+                    .variable_receive("bye")
+                    .to("mock:result"),
+            );
+        })
+        .await;
+        let mut ex = t
+            .template
+            .create_exchange("seda:foo", ExchangePattern::InOnly)
+            .unwrap();
+        ex.message_mut().set_body("Bye World");
+        match case {
+            "throw" => ex.set_exception(Some(CamelError::illegal_argument(""))),
+            "stop" => ex.set_route_stop(true),
+            _ => ex.set_rollback_only(true),
+        }
+        let endpoint = t.context.endpoint("seda:foo").unwrap();
+        let seda = endpoint
+            .as_any()
+            .downcast_ref::<camel_seda::SedaEndpoint>()
+            .unwrap();
+        seda.queue().add(ex).unwrap();
+        t.mock("mock:result").expected_message_count(0);
+        let out = request(&t).await;
+        assert_eq!(case == "throw", out.is_failed(), "{case}");
+        assert!(out.variables().is_empty(), "{case}");
+        assert_eq!(case == "stop", out.is_route_stop(), "{case}");
+        assert_eq!(case == "rollbackOnly", out.is_rollback_only(), "{case}");
+        assert_eq!("Bye World", out.message().body().to_string(), "{case}");
+        t.assert_mock_endpoints_satisfied().await;
+    }
+}

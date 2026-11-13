@@ -102,6 +102,20 @@ impl SedaQueue {
         self.consumers.load(Ordering::SeqCst)
     }
 
+    /// Adds the exchange to the queue as is (Java `getQueue().add(exchange)`).
+    ///
+    /// # Errors
+    ///
+    /// The queue is full.
+    pub fn add(&self, exchange: Exchange) -> CamelResult<()> {
+        let item = Item {
+            exchange: Box::new(exchange),
+            reply: None,
+        };
+        self.try_offer(item)
+            .map_err(|_| CamelError::illegal_state("Queue full"))
+    }
+
     fn try_offer(&self, item: Item) -> Result<(), Item> {
         let mut items = self.items.lock().unwrap();
         if items.len() >= self.capacity {
